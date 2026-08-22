@@ -626,22 +626,26 @@ function computeWindowGlowProbeSH(wPositions, probeOrigin, lightColor, perPointW
     return coeffs;
 }
 
-// v169: プロムナードライト等（丸い照明カバー、shapeAspectが高いクラスタ）を
+// v169: プロムナードライト等（丸い照明カバー、shapeAspectが高いメッシュ）を
 // 個別の小型PointLightとして配置する。窓明かり(windowGlowLights)側の
 // 「少数灯+SHプローブで底上げ」という設計は、面として連続する舷窓には合うが、
 // Olympicの「球」オブジェクト群（153個、天井の間隔照明）のように「多数の
 // 独立した点状の光源が等間隔で並ぶ」パターンには向かない
-// （少数灯に集約すると個々の光源の存在がほぼ消えてしまう。詳細はv169の
-// buildWindowGlowLights側コメント参照）。そこで、こちらは1個体=1灯を維持しつつ、
-// 影なし・短い到達距離にすることでコストと「あり得ない範囲まで貫通する光漏れ」
-// の両方を抑える。
+// （少数灯に集約すると個々の光源の存在がほぼ消えてしまう）。
+//
+// v169-fix: 初版は1個体=1灯（上限なし）で実装したが、153灯規模になると
+// 影なしでもuniform転送・ライトループのコストが無視できず、実機で
+// 「今までになく重い」という回帰を招いた。ここをクラスタ化して上限を
+// 設ける（窓明かり側と同じ「船の全長方向にバケツ分割」方式を使うが、
+// 上限は窓側より緩め（24灯）にする——等間隔で多数並ぶプロムナードライトは
+// 窓ほど極端に少数化すると「その場を照らす」効果が失われやすいため）。
 //
 // 到達距離(distance)の決め方：
 // 「本来照らされるはずのない範囲（天井を貫通して煙突まで届く等）を避けたい」
-// という要件から、distanceは各クラスタの実寸(extent)を基準に、ごく近傍
-// （すぐ真下の床・すぐ上の天井程度）だけをカバーするよう保守的に短くする。
-// 影を計算しない（castShadow=false）ため、幾何学的な遮蔽再現はできず、
-// 「距離を短く絞る」ことだけが貫通を防ぐ唯一の手段になる点に注意。
+// という要件から、distanceは各バケツ内のクラスタ実寸(extent)を基準に、
+// ごく近傍（すぐ真下の床・すぐ上の天井程度）だけをカバーするよう保守的に
+// 短くする。影を計算しない（castShadow=false）ため、幾何学的な遮蔽再現は
+// できず、「距離を短く絞る」ことだけが貫通を防ぐ唯一の手段になる点に注意。
 function buildPromenadeLights(modelRoot, roundLightPositions) {
     if (roundLightPositions.length === 0) return;
 
@@ -658,27 +662,75 @@ function buildPromenadeLights(modelRoot, roundLightPositions) {
         ? new THREE.Color(1.0, 0.82, 0.55) // 電球色
         : new THREE.Color(avgR, avgG, avgB);
 
-    // v169: 全クラスタの実寸(extent)の中央値を基準にdistanceを決める。
-    // extentはclusterMeshWindowPositions()で「クラスタ重心から最も遠い頂点までの
-    // 距離」として計算済み＝照明オブジェクト自体のおおよその半径に相当する。
-    // 「すぐ近くの床・天井には届くが、次のデッキや遠くの構造物までは
-    // 届かない」を狙い、半径の6倍程度・上限4ユニットでクランプする
-    // （Olympic実データでの球間隔の中央値が約3.4ユニットだったことを踏まえ、
-    // 隣の照明の担当範囲を大きく侵食しない値として設定。天井高さの目安
-    // （デッキ間隔）は多くの客船モデルで3〜4ユニット程度になることが多いため、
-    // 上限4は「1デッキ分は照らせるが、2デッキ分は貫通しない」を意図している）。
-    const extents = roundLightPositions.map(p => p._extent || 0.1).sort((a, b) => a - b);
-    const medianExtent = extents[Math.floor(extents.length / 2)] || 0.1;
-    const distance = THREE.MathUtils.clamp(medianExtent * 6, 0.5, 4.0);
+    // v169-fix: 船の全長方向・左右舷でバケツ分割する（窓明かり側と同じ考え方）。
+    // ここでは既存のsplitByYBand/allocateLightBudget等の共通関数は再利用せず、
+    // プロムナードライト専用のシンプルな等分割にする——窓明かり側の関数群は
+    // 「クラスタ数の少ない窓」を想定したチューニング（デッキ帯分割の閾値等）が
+    // 入っているため、150個規模の均質な点群にそのまま適用すると意図しない
+    // 挙動になるリスクがあるため。
+    const bbox = new THREE.Box3();
+    roundLightPositions.forEach(p => bbox.expandByPoint(p));
+    const bsize = bbox.getSize(new THREE.Vector3());
+    const useX = bsize.x >= bsize.z;
+    const sortAxis = useX ? 'x' : 'z';
+    const sideAxis = useX ? 'z' : 'x';
+    const shipWidth = useX ? bsize.z : bsize.x;
+    const sideEps = shipWidth * 0.02;
 
-    promenadeLights = roundLightPositions.map((wp) => {
-        const localPos = modelRoot.worldToLocal(wp.clone());
+    // 上限灯数：窓明かり(最大6灯)より緩めにする。150個規模でも1グループあたり
+    // 6〜7個程度に収まる24を上限とし、それ未満の個数ならクラスタ化せず
+    // そのまま1個体=1灯にする（少数の船でわざわざ間引く必要はないため）。
+    const MAX_PROMENADE_LIGHTS = 24;
+    const targetLightCount = Math.min(MAX_PROMENADE_LIGHTS, roundLightPositions.length);
+
+    const posSide = roundLightPositions.filter(p => p[sideAxis] > sideEps);
+    const negSide = roundLightPositions.filter(p => p[sideAxis] < -sideEps);
+    const zeroSide = roundLightPositions.filter(p => Math.abs(p[sideAxis]) <= sideEps);
+    zeroSide.forEach((p, i) => (i % 2 === 0 ? posSide : negSide).push(p));
+    const [numPos, numNeg] = allocateLightBudget([posSide.length, negSide.length], targetLightCount);
+
+    const buildBuckets = (sidePositions, numBuckets) => {
+        if (sidePositions.length === 0 || numBuckets <= 0) return [];
+        const sorted = sidePositions.slice().sort((a, b) => a[sortAxis] - b[sortAxis]);
+        const nPos = sorted.length;
+        const out = [];
+        for (let i = 0; i < numBuckets; i++) {
+            const startIdx = Math.floor(i * nPos / numBuckets);
+            const endIdx = Math.max(startIdx + 1, Math.floor((i + 1) * nPos / numBuckets));
+            const slice = sorted.slice(startIdx, endIdx);
+            if (slice.length === 0) continue;
+            const centroid = new THREE.Vector3();
+            slice.forEach(p => centroid.add(p));
+            centroid.divideScalar(slice.length);
+            // このバケツ内の広がり（重心から最遠点までの距離）を、
+            // distanceクランプの基準に使う（複数個体を1灯に集約した場合、
+            // 個々のextentだけでなくバケツの広がり自体も考慮する必要があるため）
+            let bucketReach = 0;
+            slice.forEach(p => { bucketReach = Math.max(bucketReach, centroid.distanceTo(p)); });
+            const extents = slice.map(p => p._extent || 0.1);
+            const avgExtent = extents.reduce((a, b) => a + b, 0) / extents.length;
+            out.push({ centroid, bucketReach, avgExtent, count: slice.length });
+        }
+        return out;
+    };
+
+    const buckets = [...buildBuckets(posSide, numPos), ...buildBuckets(negSide, numNeg)];
+
+    promenadeLights = buckets.map(({ centroid, bucketReach, avgExtent }) => {
+        const localPos = modelRoot.worldToLocal(centroid.clone());
+        // distanceは「個体の実寸」と「バケツ内の広がり」の大きい方を基準にする
+        // （複数個体を1灯に集約した場合、集約前の個々の照明が担当していた
+        // 範囲をカバーできるよう、広がりの分だけ多少余裕を持たせる）。
+        // 実データでの球間隔の中央値(約3.4ユニット)を踏まえ、
+        // 基準値の6倍・上限4ユニットのクランプは維持する。
+        const baseSize = Math.max(avgExtent, bucketReach * 0.5);
+        const distance = THREE.MathUtils.clamp(baseSize * 6, 0.5, 4.0);
         // decayはPointLightのデフォルト(2、物理的な逆二乗則)のままにする。
         // 窓明かりPointLight(decay=1.5)と違い、こちらは「近距離でしっかり
         // 减衰させて遠くまで漏れないようにする」ことが目的なので、緩めない。
         const pl = new THREE.PointLight(lightColor.getHex(), 0, distance, 2);
         pl.position.copy(localPos);
-        pl.castShadow = false; // v169: 影は計算しない（153個規模で影ありは重すぎる上、今回は距離クランプで貫通を防ぐ方針のため不要）
+        pl.castShadow = false; // v169: 影は計算しない（多数灯規模では重すぎる上、距離クランプで貫通を防ぐ方針のため不要）
         pl.userData.isPromenadeLight = true;
         pl.userData.wgBaseIntensity = 2.5; // v169: 窓明かりPointLight(18.0)より大幅に低め。1灯あたりのカバー範囲が狭い分、多灯合計での見た目の明るさで帳尻を合わせる
         modelRoot.add(pl);
@@ -840,20 +892,27 @@ function buildWindowGlowLights() {
 
     // v168: PointLightはライトプローブと役割分担する形に変更。プローブが
     // 「船内全体の底上げ・ムラの解消」を担うため、PointLightは「窓際の
-    // 明るいアクセント・軽いシャドウディテール」だけに絞り、本数を
-    // 大幅に削減する（8→3）。これによりcastShadowのコスト
-    // （立方体マップ6面×灯数）も8→3灯分に減り、v147比でもまだ増加は
-    // 残るが、v148以降と比べれば大幅に軽くなる。
+    // 明るいアクセント・軽いシャドウディテール」だけに絞る。
     // 長さ4単位ごとに1灯、最大8灯（v147-fix2で4→8に引き上げ）。
     // v151で「デッキ帯分割により1帯あたりが薄まる」ことを懸念して8→12に
     // 引き上げたが、実機（Xperia 5 III、非力な端末ではない）で影ON品質帯
     // （low以上）が壊滅的に重くなる回帰を招いたため、v152で8に戻す。
     // PointLightの影は立方体マップ6面ぶんのコストがあり、12灯稼働時は
     // 8灯稼働時の1.5倍（6面×1024^2の深度テクスチャがさらに4灯ぶん増える）
-    // というのは、モバイルGPUには軽視できない増分だった。デッキ帯を分けた
-    // ことによる「各帯が薄くなる」こと自体は、正しい高さにライトが置かれる
-    // という主目的に対しては副次的な問題なので、パフォーマンスを優先する。
-    const numLightsTotal = Math.min(3, Math.max(1, Math.round(span / 10)));
+    // というのは、モバイルGPUには軽視できない増分だった。
+    //
+    // v168で「プローブが底上げを担うから」という理由で8→3に大幅削減したが、
+    // v169で「特定の舷に照明が偏る」という回帰が発生した。原因は
+    // allocateLightBudget()の設計にある：予算がグループ数（デッキ帯数×左右2舷）
+    // 以下になると「クラスタ数が多い方の舷を優先し、少ない方は0灯」という
+    // 縮退配分になる（下記allocateLightBudget参照）。3灯という予算は、
+    // デッキ帯が複数（2〜3帯）ある船では簡単にこの縮退を起こしてしまう
+    // ため、実質的に片舷が完全に消えるケースが頻発していた。
+    // v169-fix: 6に引き上げる（v147の8よりは少ないが、2〜3デッキ帯×左右2舷を
+    // 賄うにはこの程度が最低ライン。プローブによる底上げ効果自体は維持しつつ、
+    // PointLightの偏り問題を解消することを優先する）。
+    const numLightsTotal = Math.min(6, Math.max(1, Math.round(span / 7)));
+
 
     // v148-fix2: v147-fix2はX軸（船の全長方向）だけでソート→バケツ分割しており、
     // 左右両舷（useX時はZ軸の符号）の区別を一切していなかった。Mauretania2.glbの
