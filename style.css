@@ -1,0 +1,661 @@
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #050b14;
+            font-family: 'Courier New', Courier, monospace;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            height: 100dvh;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        #menu-toggle {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 15;
+            background: rgba(10, 30, 60, 0.9);
+            border: 1px solid #ffffff;
+            color: #ffffff;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 14px;
+            cursor: pointer;
+            pointer-events: auto;
+            box-shadow: 0 0 10px rgba(255,255,255,0.2);
+            transition: background 0.2s;
+        }
+        #menu-toggle:active { background: rgba(255, 255, 255, 0.3); }
+        #ui-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 10;
+            color: #ffffff;
+            text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
+            pointer-events: none;
+            font-size: 13px;
+            background: rgba(10, 25, 50, 0.95);
+            padding: 20px;
+            padding-top: 70px;
+            box-shadow: 5px 0 25px rgba(0,0,0,0.6);
+            width: 280px;
+            height: 100vh;
+            height: 100dvh;
+            box-sizing: border-box;
+            overflow-y: auto;
+            transform: translateX(-100%);
+            transition: transform 0.3s ease-in-out;
+            border-right: 1px solid rgba(255,255,255,0.2);
+        }
+        #ui-container.open {
+            transform: translateX(0);
+            pointer-events: auto;
+        }
+        .interactive-ui { pointer-events: auto; }
+
+        /* ── HUD一括非表示（画面ダブルタップ / スクショ撮影時） ── */
+        /* z-index:100の#settings-panelも含め、HUD系要素は全てこのクラスで畳む。
+           #canvas-container(z-index:1)は対象外なので3Dビューはそのまま見える。 */
+        body.hud-hidden #menu-toggle,
+        body.hud-hidden #settings-toggle,
+        body.hud-hidden #camera-mode-toggle,
+        body.hud-hidden #viewpoint-toggle,
+        body.hud-hidden #screenshot-toggle,
+        body.hud-hidden #viewpoint-menu,
+        body.hud-hidden #ui-container,
+        body.hud-hidden #settings-panel,
+        body.hud-hidden .control-btn,
+        body.hud-hidden #instructions {
+            display: none !important;
+        }
+        
+        .control-btn {
+            position: absolute;
+            z-index: 10;
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid #ffffff;
+            color: #ffffff;
+            border-radius: 50%;
+            width: 70px;
+            height: 70px;
+            font-weight: bold;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 0 15px rgba(255,255,255,0.2);
+            touch-action: none;
+            pointer-events: auto;
+            transition: left 0.3s ease-in-out, background 0.2s, box-shadow 0.2s;
+        }
+        .control-btn:active {
+            background: rgba(255, 255, 255, 0.6);
+            color: #020b14;
+            box-shadow: 0 0 25px rgba(255,255,255,0.6);
+        }
+        
+        #btn-faster { bottom: calc(120px + env(safe-area-inset-bottom)); left: 30px; }
+        #btn-slower { bottom: calc(30px + env(safe-area-inset-bottom)); left: 30px; }
+        #btn-left   { bottom: calc(60px + env(safe-area-inset-bottom)); right: 120px; }
+        #btn-right  { bottom: calc(60px + env(safe-area-inset-bottom)); right: 30px; }
+
+        body.menu-open #btn-faster { left: 310px; }
+        body.menu-open #btn-slower { left: 310px; }
+
+        #instructions {
+            position: absolute;
+            bottom: calc(15px + env(safe-area-inset-bottom));
+            width: 100%;
+            text-align: center;
+            color: #ffffff;
+            z-index: 5;
+            font-size: 11px;
+            pointer-events: none;
+            text-shadow: 1px 1px 2px black;
+        }
+        .section-title {
+            font-weight: bold;
+            border-bottom: 1px solid #ffffff;
+            padding-bottom: 4px;
+            margin-top: 15px;
+            margin-bottom: 10px;
+            font-size: 12px;
+            color: #00ffcc;
+        }
+
+        .param-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 8px;
+            font-size: 11px;
+        }
+        .param-inputs {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+        }
+        .adjust-btn {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid #ffffff;
+            color: #ffffff;
+            width: 22px;
+            height: 22px;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            user-select: none;
+        }
+        .adjust-btn:active {
+            background: rgba(255, 255, 255, 0.5);
+        }
+        .param-num-input {
+            width: 55px;
+            background: rgba(0, 0, 0, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            color: #00ffcc;
+            text-align: center;
+            font-size: 11px;
+            font-family: monospace;
+            border-radius: 4px;
+            padding: 2px 0;
+            -moz-appearance: textfield;
+        }
+        .param-num-input::-webkit-outer-spin-button,
+        .param-num-input::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        .param-slider {
+            width: 100%;
+            margin-top: 4px;
+            margin-bottom: 8px;
+            cursor: pointer;
+        }
+
+        /* ===== SHIP SETTINGS PANEL ===== */
+        #settings-toggle {
+            position: absolute;
+            top: 10px;
+            left: 120px;
+            z-index: 15;
+            background: rgba(10, 30, 60, 0.9);
+            border: 1px solid #ffaa00;
+            color: #ffaa00;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 14px;
+            cursor: pointer;
+            pointer-events: auto;
+            box-shadow: 0 0 10px rgba(255,170,0,0.2);
+            transition: background 0.2s;
+        }
+        #settings-toggle:active { background: rgba(255,170,0,0.3); }
+
+        #camera-mode-toggle {
+            position: absolute;
+            top: 10px;
+            left: 230px;
+            z-index: 15;
+            background: rgba(10, 30, 60, 0.9);
+            border: 1px solid #00ffcc;
+            color: #00ffcc;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 14px;
+            cursor: pointer;
+            pointer-events: auto;
+            box-shadow: 0 0 10px rgba(0,255,204,0.2);
+            transition: background 0.2s;
+        }
+        #camera-mode-toggle:active { background: rgba(0,255,204,0.3); }
+
+        #viewpoint-toggle {
+            position: absolute;
+            top: 10px;
+            left: 340px;
+            z-index: 15;
+            background: rgba(10, 30, 60, 0.9);
+            border: 1px solid #ffdd55;
+            color: #ffdd55;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 14px;
+            cursor: pointer;
+            pointer-events: auto;
+            box-shadow: 0 0 10px rgba(255,221,85,0.2);
+            transition: background 0.2s;
+        }
+        #viewpoint-toggle:active { background: rgba(255,221,85,0.3); }
+
+        #screenshot-toggle {
+            position: absolute;
+            top: 10px;
+            left: 450px;
+            z-index: 15;
+            background: rgba(10, 30, 60, 0.9);
+            border: 1px solid #ff88cc;
+            color: #ff88cc;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 14px;
+            cursor: pointer;
+            pointer-events: auto;
+            box-shadow: 0 0 10px rgba(255,136,204,0.2);
+            transition: background 0.2s;
+        }
+        #screenshot-toggle:active { background: rgba(255,136,204,0.3); }
+
+        /* 撮影の瞬間だけ画面全体を白く点滅させ、シャッター的な視覚フィードバックにする。
+           HUDが#hud-hidden化してボタン自体は見えなくなっているタイミングで発火するため、
+           フィードバックはボタンではなくこの独立した全画面オーバーレイで行う。 */
+        #screenshot-flash {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 200;
+            background: #ffffff;
+            opacity: 0;
+            pointer-events: none;
+        }
+        #screenshot-flash.active {
+            opacity: 0.85;
+            transition: opacity 0.35s ease-out;
+        }
+
+        #viewpoint-menu {
+            position: absolute;
+            top: 54px;
+            left: 340px;
+            z-index: 16;
+            display: none;
+            flex-direction: column;
+            gap: 4px;
+            background: rgba(10, 20, 35, 0.95);
+            border: 1px solid #ffdd55;
+            border-radius: 8px;
+            padding: 8px;
+            min-width: 200px;
+            max-height: 60vh;
+            overflow-y: auto;
+            pointer-events: auto;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.6);
+        }
+        .vp-menu-item {
+            background: rgba(255,221,85,0.08);
+            border: 1px solid #997d22;
+            color: #ffdd55;
+            padding: 7px 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            text-align: left;
+            cursor: pointer;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        .vp-menu-item:active { background: rgba(255,221,85,0.3); }
+        .vp-menu-item.active { background: rgba(255,221,85,0.35); border-color: #ffdd55; color: #fff; }
+
+        @media (max-width: 768px) {
+            #viewpoint-toggle { left: auto; right: 10px; top: 56px; }
+            #viewpoint-menu { left: auto; right: 10px; top: 100px; }
+            #screenshot-toggle { left: auto; right: 10px; top: 102px; }
+        }
+
+        #settings-panel {
+            position: absolute;
+            top: 10px; right: 10px;
+            width: 380px; height: calc(100vh - 20px);
+            z-index: 100;
+            background: rgba(10, 20, 35, 0.85);
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
+            border: 1px solid rgba(255,170,0,0.4);
+            border-radius: 8px;
+            box-shadow: -5px 5px 25px rgba(0,0,0,0.7);
+            display: none;
+            flex-direction: column;
+            font-family: 'Courier New', Courier, monospace;
+            color: #fff;
+            overflow: hidden;
+            pointer-events: auto;
+        }
+        #settings-panel.open { display: flex; }
+
+        @media (max-width: 768px) {
+            #settings-panel {
+                width: 100vw;
+                height: 55vh;
+                height: 55dvh;
+                top: auto; bottom: 0; right: 0;
+                border-radius: 12px 12px 0 0;
+                border-bottom: none;
+                border-right: none; border-left: none;
+                padding-bottom: env(safe-area-inset-bottom);
+            }
+        }
+
+        #settings-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 20px 10px;
+            border-bottom: 1px solid rgba(255,170,0,0.35);
+            flex-shrink: 0;
+        }
+        #settings-header h1 {
+            margin: 0;
+            font-size: 16px;
+            color: #ffaa00;
+            letter-spacing: 2px;
+        }
+        #settings-close {
+            background: rgba(255,170,0,0.15);
+            border: 1px solid #ffaa00;
+            color: #ffaa00;
+            padding: 7px 16px;
+            border-radius: 5px;
+            font-size: 13px;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: bold;
+        }
+        #settings-close:active { background: rgba(255,170,0,0.4); }
+
+        #settings-tabs {
+            display: flex;
+            gap: 4px;
+            padding: 10px 16px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            flex-shrink: 0;
+            flex-wrap: wrap;
+        }
+        .settings-tab {
+            padding: 7px 10px;
+            border-radius: 6px 6px 0 0;
+            border: 1px solid rgba(255,255,255,0.2);
+            border-bottom: none;
+            background: rgba(255,255,255,0.05);
+            color: #aaa;
+            cursor: pointer;
+            font-size: 11px;
+            font-family: inherit;
+            font-weight: bold;
+            transition: all 0.15s;
+        }
+        .settings-tab.active {
+            background: rgba(0,255,204,0.12);
+            color: #00ffcc;
+            border-color: #00ffcc;
+        }
+
+        #axisview-bar {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            flex-shrink: 0;
+            flex-wrap: wrap;
+        }
+        .axisview-label { font-size: 10px; color: #777; font-weight: bold; letter-spacing: 1px; margin-right: 2px; text-transform: uppercase; }
+        .sp-axisview-btn {
+            padding: 5px 10px;
+            border-radius: 5px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.05);
+            color: #aaa;
+            cursor: pointer;
+            font-size: 11px;
+            font-family: inherit;
+            font-weight: bold;
+            transition: all 0.15s;
+        }
+        .sp-axisview-btn.active {
+            background: rgba(0,255,204,0.12);
+            color: #00ffcc;
+            border-color: #00ffcc;
+        }
+
+        #settings-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 20px calc(30px + env(safe-area-inset-bottom));
+        }
+        .settings-page { display: none; }
+        .settings-page.active { display: block; }
+
+        .sp-section {
+            margin-bottom: 22px;
+        }
+        .sp-section-title {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            font-weight: bold;
+            color: #ffaa00;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            border-bottom: 1px solid rgba(255,170,0,0.3);
+            padding-bottom: 5px;
+            margin-bottom: 12px;
+        }
+
+        .sp-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+        .sp-label { font-size: 11px; color: #aaa; min-width: 90px; }
+        .sp-label.accent { color: #00ffcc; }
+
+        .sp-num-input {
+            width: 55px;
+            background: rgba(0,0,0,0.6);
+            border: 1px solid rgba(255,255,255,0.3);
+            color: #00ffcc;
+            text-align: center;
+            font-size: 11px;
+            font-family: monospace;
+            border-radius: 4px;
+            padding: 3px 0;
+            -moz-appearance: textfield;
+        }
+        .sp-num-input::-webkit-outer-spin-button,
+        .sp-num-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+        .sp-slider {
+            flex: 1;
+            min-width: 90px;
+            cursor: pointer;
+            accent-color: #00ffcc;
+        }
+        .sp-btn {
+            background: rgba(255,255,255,0.12);
+            border: 1px solid #888;
+            color: #fff;
+            width: 22px; height: 22px;
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 4px;
+            display: flex; align-items: center; justify-content: center;
+            flex-shrink: 0;
+        }
+        .sp-btn:active { background: rgba(255,255,255,0.4); }
+
+        /* 微調整用ミニボタン（自動付与） */
+        .sp-mini-btn {
+            background: rgba(255,255,255,0.10);
+            border: 1px solid rgba(255,255,255,0.4);
+            color: #fff;
+            width: 16px; height: 16px;
+            min-width: 16px;
+            font-size: 10px;
+            line-height: 1;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 3px;
+            display: flex; align-items: center; justify-content: center;
+            flex-shrink: 0;
+            padding: 0;
+        }
+        .sp-mini-btn:active { background: rgba(255,255,255,0.4); }
+        .sp-xyz-wrap {
+            display: flex;
+            align-items: center;
+            gap: 1px;
+            width: 100%;
+        }
+        .sp-xyz-wrap .sp-xyz-input { min-width: 0; flex: 1; }
+        .sp-xyz-wrap .sp-mini-btn { width: 14px; height: 14px; min-width: 14px; font-size: 9px; }
+        .sp-num-wrap {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+        }
+
+        .sp-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 11px;
+            cursor: pointer;
+            user-select: none;
+        }
+        .sp-toggle input[type=checkbox] {
+            width: 14px; height: 14px;
+            accent-color: #00ffcc;
+        }
+
+        .sp-card {
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 6px;
+            padding: 10px;
+            position: relative;
+        }
+        .sp-card-title {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 10px;
+            color: #ffcc55;
+            font-weight: bold;
+            margin-bottom: 8px;
+            letter-spacing: 1px;
+        }
+
+        .sp-add-btn, .sp-remove-btn, .sp-gizmo-btn {
+            padding: 5px 12px;
+            border-radius: 5px;
+            font-size: 11px;
+            font-family: inherit;
+            font-weight: bold;
+            cursor: pointer;
+            border: 1px solid;
+            transition: background 0.1s;
+        }
+        .sp-add-btn { background: rgba(0,255,204,0.1); border-color: #00ffcc; color: #00ffcc; }
+        .sp-add-btn:active { background: rgba(0,255,204,0.3); }
+        .sp-remove-btn { background: rgba(255,80,80,0.1); border-color: #ff5555; color: #ff5555; }
+        .sp-remove-btn:active { background: rgba(255,80,80,0.3); }
+        
+        .sp-gizmo-btn { background: rgba(200,100,255,0.15); border-color: #d488ff; color: #eebbff; padding: 3px 8px; font-size: 10px; }
+        .sp-gizmo-btn:active, .sp-gizmo-btn.active { background: rgba(200,100,255,0.5); color: #fff; }
+
+        .sp-propulsion-list, .sp-funnel-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .sp-item-card {
+            background: rgba(0,0,0,0.3);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 6px;
+            padding: 10px;
+        }
+        .sp-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .sp-item-title { font-size: 11px; font-weight: bold; color: #aaddff; display: flex; align-items: center; gap: 8px;}
+        .sp-xyz-row {
+            display: grid;
+            grid-template-columns: 14px 1fr 14px 1fr 14px 1fr;
+            gap: 4px;
+            align-items: center;
+            font-size: 10px;
+            margin-bottom: 6px;
+        }
+        .sp-axis-label { color: #888; font-size: 10px; padding-right: 2px; }
+        .sp-xyz-input {
+            width: 100%;
+            background: rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: #00ffcc;
+            text-align: center;
+            font-size: 10px;
+            font-family: monospace;
+            border-radius: 3px;
+            padding: 2px 0;
+            -moz-appearance: textfield;
+        }
+        .sp-xyz-input::-webkit-outer-spin-button,
+        .sp-xyz-input::-webkit-inner-spin-button { -webkit-appearance: none; }
+
+        .navlight-preview {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+            vertical-align: middle;
+        }
+        .navlight-port { background: #ff4444; box-shadow: 0 0 6px #ff4444; }
+        .navlight-stbd { background: #44ff88; box-shadow: 0 0 6px #44ff88; }
+        .navlight-mast { background: #ffffff; box-shadow: 0 0 6px #ffffff; }
+        .navlight-stern { background: #ffffaa; box-shadow: 0 0 6px #ffffaa; }
+
+        @keyframes smokeRise {
+            0%   { transform: translateY(0) scale(1); opacity: 0.7; }
+            100% { transform: translateY(-28px) scale(2.5); opacity: 0; }
+        }
+        .smoke-preview {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: #aaa;
+            display: inline-block;
+            animation: smokeRise 1.5s ease-out infinite;
+            margin-right: 5px;
+            vertical-align: middle;
+        }
+
+        /* 軸選択オーバーレイ ボタンアクティブ状態 */
+        #gizmo-axis-overlay button.active {
+            filter: brightness(1.8);
+            box-shadow: 0 0 8px currentColor;
+            font-weight: bold;
+        }
