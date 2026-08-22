@@ -1,0 +1,14 @@
+{
+  "name": "3D Relaxing Ship Simulator",
+  "short_name": "ShipSim",
+  "start_url": "./ship_game_v8.html",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0a1a2a",
+  "theme_color": "#0a1a2a",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

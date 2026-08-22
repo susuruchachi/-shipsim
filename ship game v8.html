@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0a1a2a">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <title>3D Relaxing Ship Simulator v2.15</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/MTLLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/lights/RectAreaLightUniformsLib.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/helpers/RectAreaLightHelper.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+</head>
+<body>
+
+<div id="canvas-container"></div>
+<div id="screenshot-flash"></div>
+<div id="menu-toggle" class="interactive-ui">☰ Menu</div>
+<button id="settings-toggle" onclick="toggleSettings()">⚙ 船体設定</button>
+<button id="camera-mode-toggle" onclick="cycleCameraMode()">📷 視点: 通常</button>
+<button id="viewpoint-toggle" onclick="toggleViewpointMenu()">🔭 見張り台</button>
+<button id="screenshot-toggle" onclick="captureScreenshot()">📷 スクショ</button>
+<div id="viewpoint-menu"></div>
+
+<div id="ui-container">
+    <div style="font-weight: bold; border-bottom: 1px solid #ffffff; padding-bottom: 4px; margin-bottom: 10px; text-align: center; font-size: 14px; color: #00ffcc;">=== TELEMETRY ===</div>
+    <div id="ui-telegraph">Telegraph: STOP</div>
+    <div id="ui-speed">Speed    : 0.0 kn</div>
+    <div id="ui-rudder">Rudder   : 0.0°</div>
+    <div id="ui-heading">Heading  : 0°</div>
+    <div id="ui-time">Time     : 12:00</div>
+    <div id="ui-roll" style="color: #aaddff;">Roll     : 0.0°</div>
+    <div id="ui-pitch" style="color: #aaddff;">Pitch    : 0.0°</div>
+
+    <div class="section-title">ENVIRONMENT & TIME</div>
+    
+    <div class="interactive-ui">
+        <div class="param-row">
+            <label style="color:#ffff00; font-weight:bold;">Time of Day (時間帯):</label>
+            <div class="param-inputs">
+                <button type="button" class="adjust-btn" id="time-dec">-</button>
+                <input type="number" id="time-num" min="0.0" max="24.0" step="0.1" value="12.0" class="param-num-input" style="color:#ffff00;">
+                <button type="button" class="adjust-btn" id="time-inc">+</button>
+            </div>
+        </div>
+        <input type="range" id="time-slider" min="0.0" max="24.0" step="0.1" value="12.0" class="param-slider" style="accent-color: #ffff00;">
+    </div>
+
+    <!-- 時間速度コントロール -->
+    <div class="interactive-ui" style="margin-bottom:8px;">
+        <div class="param-row" style="margin-bottom:4px;">
+            <label style="color:#ffcc44; font-weight:bold; font-size:11px;">Time Speed (時間速度):</label>
+            <span id="time-speed-label" style="color:#ffcc44; font-size:11px; min-width:40px; text-align:right;">×96</span>
+        </div>
+        <input type="range" id="time-speed-slider" min="0" max="4" step="1" value="2" class="param-slider" style="accent-color:#ffcc44;">
+        <div style="display:flex; gap:4px; margin-top:4px;">
+            <button type="button" id="time-freeze-btn" class="adjust-btn" style="width:100%; font-size:10px; padding:3px 0;">⏸ 固定</button>
+        </div>
+    </div>
+
+    <div class="interactive-ui">
+        <div class="param-row">
+            <label style="color:#aaddff; font-weight:bold;">Moon Phase (月齢):</label>
+            <div class="param-inputs">
+                <button type="button" class="adjust-btn" id="phase-dec">-</button>
+                <input type="number" id="phase-num" min="0.0" max="1.0" step="0.05" value="0.5" class="param-num-input" style="color:#aaddff;">
+                <button type="button" class="adjust-btn" id="phase-inc">+</button>
+            </div>
+        </div>
+        <input type="range" id="phase-slider" min="0.0" max="1.0" step="0.05" value="0.5" class="param-slider" style="accent-color: #aaddff;">
+    </div>
+
+    <div class="section-title">NAVIGATION LIGHTS</div>
+    <div class="interactive-ui" style="margin-bottom: 10px;">
+        <label style="display:flex; align-items:center; justify-content:space-between; color:#aaddff; font-weight:bold; cursor:pointer;">
+            <span>航行灯 ON/OFF</span>
+            <input type="checkbox" id="navlights-toggle" checked style="width:22px; height:22px; cursor:pointer; accent-color:#00ffcc;">
+        </label>
+    </div>
+    <div class="interactive-ui" style="margin-bottom: 10px;">
+        <div class="param-row">
+            <label style="color:#aaddff; font-weight:bold; font-size:11px;">光源 距離 (dist):</label>
+            <span id="navdist-label" style="color:#aaddff; font-size:11px; min-width:30px; text-align:right;">60</span>
+        </div>
+        <input type="range" id="navdist-slider" min="0.1" max="200" step="0.1" value="60" class="param-slider" style="accent-color: #aaddff;">
+    </div>
+
+    <div class="section-title">WIND & WEATHER</div>
+    <div class="interactive-ui">
+        <div class="param-row">
+            <label style="color:#aaddff; font-weight:bold;">Wind Dir (風向き):</label>
+            <div class="param-inputs">
+                <button type="button" class="adjust-btn" id="winddir-dec">-</button>
+                <input type="number" id="winddir-num" min="0" max="360" step="5" value="45" class="param-num-input" style="color:#aaddff;">
+                <button type="button" class="adjust-btn" id="winddir-inc">+</button>
+            </div>
+        </div>
+        <input type="range" id="winddir-slider" min="0" max="360" step="5" value="45" class="param-slider" style="accent-color: #aaddff;">
+    </div>
+    <div class="interactive-ui">
+        <div class="param-row">
+            <label style="color:#aaddff; font-weight:bold;">Wind Spd (風速):</label>
+            <div class="param-inputs">
+                <button type="button" class="adjust-btn" id="windspd-dec">-</button>
+                <input type="number" id="windspd-num" min="0" max="30" step="1" value="5" class="param-num-input" style="color:#aaddff;">
+                <button type="button" class="adjust-btn" id="windspd-inc">+</button>
+            </div>
+        </div>
+        <input type="range" id="windspd-slider" min="0" max="30" step="1" value="5" class="param-slider" style="accent-color: #aaddff;">
+    </div>
+
+    <div class="section-title">WAVES & PHYSICS</div>
+    
+    <div class="interactive-ui">
+        <div class="param-row">
+            <label style="color:#00ffcc; font-weight:bold;">復元力 GM倍率 (自動設定値 ×):</label>
+            <div class="param-inputs">
+                <button type="button" class="adjust-btn" id="buoyancy-dec">-</button>
+                <input type="number" id="buoyancy-num" min="0.50" max="2.00" step="0.05" value="1.00" class="param-num-input">
+                <button type="button" class="adjust-btn" id="buoyancy-inc">+</button>
+            </div>
+        </div>
+        <input type="range" id="buoyancy-slider" min="0.50" max="2.00" step="0.05" value="1.00" class="param-slider" style="accent-color: #00ffcc;">
+    </div>
+
+    <div class="interactive-ui">
+        <div class="param-row">
+            <label style="color:#ffaa66; font-weight:bold;">Draft (吃水深):</label>
+            <div class="param-inputs">
+                <button type="button" class="adjust-btn" id="draft-dec">-</button>
+                <input type="number" id="draft-num" min="-4.0" max="4.0" step="0.05" value="0.00" class="param-num-input" style="color:#ffaa66;">
+                <button type="button" class="adjust-btn" id="draft-inc">+</button>
+            </div>
+        </div>
+        <input type="range" id="draft-slider" min="-4.0" max="4.0" step="0.05" value="0.00" class="param-slider" style="accent-color: #ffaa66;">
+    </div>
+
+    <div class="interactive-ui">
+        <div class="param-row">
+            <label style="color:#ffcc00; font-weight:bold;">Wave Height (波高):</label>
+            <div class="param-inputs">
+                <button type="button" class="adjust-btn" id="roughness-dec">-</button>
+                <input type="number" id="roughness-num" min="0.0" max="10.0" step="0.05" value="1.00" class="param-num-input" style="color:#ffcc00;">
+                <button type="button" class="adjust-btn" id="roughness-inc">+</button>
+            </div>
+        </div>
+        <input type="range" id="roughness-slider" min="0.0" max="10.0" step="0.05" value="1.00" class="param-slider" style="accent-color: #ffcc00;">
+    </div>
+
+    <div class="interactive-ui">
+        <div class="param-row">
+            <label style="color:#00ffaa; font-weight:bold;">Wave Width (波の幅):</label>
+            <div class="param-inputs">
+                <button type="button" class="adjust-btn" id="wavewidth-dec">-</button>
+                <input type="number" id="wavewidth-num" min="0.2" max="3.0" step="0.05" value="1.00" class="param-num-input" style="color:#00ffaa;">
+                <button type="button" class="adjust-btn" id="wavewidth-inc">+</button>
+            </div>
+        </div>
+        <input type="range" id="wavewidth-slider" min="0.2" max="3.0" step="0.05" value="1.00" class="param-slider" style="accent-color: #00ffaa;">
+    </div>
+
+    <div class="interactive-ui">
+        <div class="param-row">
+            <label style="color:#88aaff; font-weight:bold;">Swell (長いうねり):</label>
+            <div class="param-inputs">
+                <button type="button" class="adjust-btn" id="swell-dec">-</button>
+                <input type="number" id="swell-num" min="0.0" max="3.0" step="0.05" value="1.00" class="param-num-input" style="color:#88aaff;">
+                <button type="button" class="adjust-btn" id="swell-inc">+</button>
+            </div>
+        </div>
+        <input type="range" id="swell-slider" min="0.0" max="3.0" step="0.05" value="1.00" class="param-slider" style="accent-color: #88aaff;">
+    </div>
+
+    <div class="interactive-ui">
+        <div class="param-row">
+            <label style="color:#ff9966; font-weight:bold;">Chop (急な波):</label>
+            <div class="param-inputs">
+                <button type="button" class="adjust-btn" id="chop-dec">-</button>
+                <input type="number" id="chop-num" min="0.0" max="3.0" step="0.05" value="1.00" class="param-num-input" style="color:#ff9966;">
+                <button type="button" class="adjust-btn" id="chop-inc">+</button>
+            </div>
+        </div>
+        <input type="range" id="chop-slider" min="0.0" max="3.0" step="0.05" value="1.00" class="param-slider" style="accent-color: #ff9966;">
+    </div>
+
+    <div class="interactive-ui">
+        <div class="param-row">
+            <label style="color:#00ffcc; font-weight:bold;">Turn Radius (旋回半径倍率):</label>
+            <div class="param-inputs">
+                <button type="button" class="adjust-btn" id="turnrad-dec">-</button>
+                <input type="number" id="turnrad-num" min="1.0" max="30.0" step="0.5" value="5.0" class="param-num-input">
+                <button type="button" class="adjust-btn" id="turnrad-inc">+</button>
+            </div>
+        </div>
+        <input type="range" id="turnrad-slider" min="1.0" max="30.0" step="0.5" value="5.0" class="param-slider" style="accent-color: #00ffcc;">
+    </div>
+
+    <div class="interactive-ui">
+        <div class="param-row">
+            <label style="color:#ff9933; font-weight:bold;">⏩ Sim Speed (物理早送り倍率):</label>
+            <div class="param-inputs">
+                <button type="button" class="adjust-btn" id="physspeed-dec">-</button>
+                <input type="number" id="physspeed-num" min="1.0" max="20.0" step="0.5" value="1.0" class="param-num-input" style="color:#ff9933;">
+                <button type="button" class="adjust-btn" id="physspeed-inc">+</button>
+            </div>
+        </div>
+        <input type="range" id="physspeed-slider" min="1.0" max="20.0" step="0.5" value="1.0" class="param-slider" style="accent-color: #ff9933;">
+        <div style="font-size:10px; color:#888; margin-top:3px;">加速・慣性・旋回の時間軸を早める（質量感はそのまま）</div>
+    </div>
+
+    <div class="section-title">3D MODEL IMPORT</div>
+    <div class="interactive-ui" style="margin-bottom: 10px;">
+        <input type="file" id="model-loader" accept=".gltf,.glb,.obj,.mtl" style="display: none;">
+        <button onclick="document.getElementById('model-loader').click()" style="width: 100%; padding: 8px; background: #00ffcc; color: #0a1932; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; margin-bottom: 6px;">Load .gltf / .glb / .obj</button>
+        <button onclick="document.getElementById('mtl-loader').click()" style="width: 100%; padding: 8px; background: #00aaff; color: #0a1932; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; margin-bottom: 6px;">Load .mtl (OBJ materials)</button>
+        <input type="file" id="mtl-loader" accept=".mtl,.obj,.gltf,.glb" style="display: none;">
+        <input type="file" id="texture-folder-loader" accept="image/*,.mtl,.bin,.gltf" webkitdirectory directory multiple style="display: none;">
+        <button onclick="document.getElementById('texture-folder-loader').click()" style="width: 100%; padding: 8px; background: #ffcc66; color: #0a1932; border: none; border-radius: 4px; font-weight: bold; cursor: pointer;">Load Texture Folder</button>
+        <div id="import-status" style="font-size: 10px; color: #aaa; margin-top: 4px; text-align: center;">Default: Custom OBJ Model<br>Blender: use .glb/.gltf, or .obj + .mtl + texture folder</div>
+        <div style="font-size:9px;color:#666;margin-top:6px;text-align:center;">
+          エリアライトを使いたい場合は
+          <span style="color:#ffcc55;cursor:pointer;text-decoration:underline;"
+            onclick="switchTab('lighting');setTimeout(()=>{const el=document.querySelector('#tab-lighting .sp-section-title[style*=ffcc55]');if(el)el.scrollIntoView({behavior:'smooth'});},100)">
+            ☀ 照明タブ → エリアライト取り込みガイド
+          </span>
+        </div>
+    </div>
+
+
+</div>
+
+<div class="control-btn" id="btn-faster">▲</div>
+<div class="control-btn" id="btn-slower">▼</div>
+<div class="control-btn" id="btn-left">◀</div>
+<div class="control-btn" id="btn-right">▶</div>
+
+<div id="settings-panel">
+  <div id="settings-header">
+    <h1>⚙ 船体設定パネル</h1>
+    <button id="settings-close" onclick="toggleSettings()">✕ 閉じる</button>
+  </div>
+  <div id="settings-tabs">
+    <button class="settings-tab active" data-tab="pivot" onclick="switchTab('pivot')">📐 基本/Pivot</button>
+    <button class="settings-tab" data-tab="propulsion" onclick="switchTab('propulsion')">⚙ 推進器</button>
+    <button class="settings-tab" data-tab="rudder" onclick="switchTab('rudder')">🔧 舵</button>
+    <button class="settings-tab" data-tab="navlights" onclick="switchTab('navlights')">💡 航行灯</button>
+    <button class="settings-tab" data-tab="lighting" onclick="switchTab('lighting')">☀ 照明</button>
+    <button class="settings-tab" data-tab="funnels" onclick="switchTab('funnels')">🏭 煙突</button>
+    <button class="settings-tab" data-tab="decklight" onclick="switchTab('decklight')">🔆 甲板照明</button>
+    <button class="settings-tab" data-tab="viewpoint" onclick="switchTab('viewpoint')">🔭 視点</button>
+    <button class="settings-tab" data-tab="save" onclick="switchTab('save')">💾 保存</button>
+    <button class="settings-tab" data-tab="perf" onclick="switchTab('perf')">⚡ 軽量化</button>
+  </div>
+  <div id="axisview-bar">
+    <span class="axisview-label">視点</span>
+    <button class="sp-axisview-btn active" id="axisview-free" onclick="setAxisView('free')">自由</button>
+    <button class="sp-axisview-btn" id="axisview-top" onclick="setAxisView('top')">上面 (Y軸)</button>
+    <button class="sp-axisview-btn" id="axisview-front" onclick="setAxisView('front')">正面 (Z軸)</button>
+    <button class="sp-axisview-btn" id="axisview-side" onclick="setAxisView('side')">側面 (X軸)</button>
+  </div>
+  <div id="settings-body">
+
+    <div class="settings-page active" id="tab-pivot">
+      <div class="sp-section">
+        <div class="sp-section-title">基本性能・サイズ</div>
+        <div class="sp-row"><span class="sp-label accent" style="color:#aa88ff;">全長 (Length)</span>
+            <button class="sp-btn" id="scale-dec">-</button>
+            <input type="number" id="scale-num" class="sp-num-input" style="color:#aa88ff;" min="10" max="1000" step="10" value="269">
+            <button class="sp-btn" id="scale-inc">+</button>
+            <input type="range" id="scale-slider" class="sp-slider" style="accent-color:#aa88ff;" min="10" max="1000" step="10" value="269">
+        </div>
+        <div class="sp-row"><span class="sp-label accent" style="color:#ff5555;">最大船速 (Max Speed)</span>
+            <button class="sp-btn" id="maxspeed-dec">-</button>
+            <input type="number" id="maxspeed-num" class="sp-num-input" style="color:#ff5555;" min="1" max="300" step="0.5" value="13.0">
+            <button class="sp-btn" id="maxspeed-inc">+</button>
+            <input type="range" id="maxspeed-slider" class="sp-slider" style="accent-color:#ff5555;" min="1" max="300" step="0.5" value="13.0">
+        </div>
+        <div class="sp-row"><span class="sp-label accent" style="color:#66ccff;">船首太さ (Bow Full)</span>
+            <button class="sp-btn" id="bowfull-dec">-</button>
+            <input type="number" id="bowfull-num" class="sp-num-input" style="color:#66ccff;" min="0.3" max="2.0" step="0.05" value="1.00">
+            <button class="sp-btn" id="bowfull-inc">+</button>
+            <input type="range" id="bowfull-slider" class="sp-slider" style="accent-color:#66ccff;" min="0.3" max="2.0" step="0.05" value="1.00">
+        </div>
+        <div class="sp-row"><span class="sp-label accent" style="color:#ff99cc;">船尾太さ (Stern Full)</span>
+            <button class="sp-btn" id="sternfull-dec">-</button>
+            <input type="number" id="sternfull-num" class="sp-num-input" style="color:#ff99cc;" min="0.3" max="2.0" step="0.05" value="1.00">
+            <button class="sp-btn" id="sternfull-inc">+</button>
+            <input type="range" id="sternfull-slider" class="sp-slider" style="accent-color:#ff99cc;" min="0.3" max="2.0" step="0.05" value="1.00">
+        </div>
+      </div>
+
+      <div class="sp-section">
+        <div class="sp-section-title">
+            PIVOT OFFSET (モデル位置合わせ)
+            <button class="sp-gizmo-btn" id="gizmo-pivot" onclick="toggleGizmo('pivot')">📍 ギズモ</button>
+        </div>
+        <div class="sp-row"><span class="sp-label accent">Offset X 左右</span>
+          <button class="sp-btn" onclick="spAdj('slider-offx','offx-num',-0.1)">-</button>
+          <input type="number" id="offx-num" class="sp-num-input" min="-30" max="30" step="0.1" value="0.0">
+          <button class="sp-btn" onclick="spAdj('slider-offx','offx-num',0.1)">+</button>
+          <input type="range" id="slider-offx" class="sp-slider" min="-30" max="30" step="0.1" value="0">
+        </div>
+        <div class="sp-row"><span class="sp-label accent">Offset Y 上下</span>
+          <button class="sp-btn" onclick="spAdj('slider-offy','offy-num',-0.1)">-</button>
+          <input type="number" id="offy-num" class="sp-num-input" min="-30" max="30" step="0.1" value="0.0">
+          <button class="sp-btn" onclick="spAdj('slider-offy','offy-num',0.1)">+</button>
+          <input type="range" id="slider-offy" class="sp-slider" min="-30" max="30" step="0.1" value="0">
+        </div>
+        <div class="sp-row"><span class="sp-label accent">Offset Z 前後</span>
+          <button class="sp-btn" onclick="spAdj('slider-offz','offz-num',-0.1)">-</button>
+          <input type="number" id="offz-num" class="sp-num-input" min="-50" max="50" step="0.1" value="0.0">
+          <button class="sp-btn" onclick="spAdj('slider-offz','offz-num',0.1)">+</button>
+          <input type="range" id="slider-offz" class="sp-slider" min="-50" max="50" step="0.1" value="0">
+        </div>
+        <div class="sp-row"><span class="sp-label accent">Rotate Y 船首</span>
+          <button class="sp-btn" onclick="spAdj('slider-roty','roty-num',-1)">-</button>
+          <input type="number" id="roty-num" class="sp-num-input" min="-180" max="180" step="1" value="0">
+          <button class="sp-btn" onclick="spAdj('slider-roty','roty-num',1)">+</button>
+          <input type="range" id="slider-roty" class="sp-slider" min="-180" max="180" step="1" value="0">
+        </div>
+        <div class="sp-row"><span class="sp-label accent">Model Scale</span>
+          <button class="sp-btn" onclick="spAdj('slider-mscale','mscale-num',-0.05)">-</button>
+          <input type="number" id="mscale-num" class="sp-num-input" min="0.1" max="10.0" step="0.05" value="1.0">
+          <button class="sp-btn" onclick="spAdj('slider-mscale','mscale-num',0.05)">+</button>
+          <input type="range" id="slider-mscale" class="sp-slider" min="0.1" max="10.0" step="0.05" value="1.0">
+        </div>
+      </div>
+
+      <div class="sp-section">
+        <div class="sp-section-title">
+            重心 (CG) オフセット
+            <button class="sp-gizmo-btn" id="gizmo-cg" onclick="toggleGizmo('cg')">📍 ギズモ</button>
+        </div>
+        <div class="sp-row"><span class="sp-label" style="color:#ff88ff;">CG X 左右</span>
+          <button class="sp-btn" onclick="spAdj('cgx-slider','cgx-num',-0.05)">-</button>
+          <input type="number" id="cgx-num" class="sp-num-input" style="color:#ff88ff;" min="-5" max="5" step="0.05" value="0.0">
+          <button class="sp-btn" onclick="spAdj('cgx-slider','cgx-num',0.05)">+</button>
+          <input type="range" id="cgx-slider" class="sp-slider" style="accent-color:#ff88ff;" min="-5" max="5" step="0.05" value="0.0">
+        </div>
+        <div class="sp-row"><span class="sp-label" style="color:#ff88ff;">CG Y 上下</span>
+          <button class="sp-btn" onclick="spAdj('cgy-slider','cgy-num',-0.05)">-</button>
+          <input type="number" id="cgy-num" class="sp-num-input" style="color:#ff88ff;" min="-5" max="5" step="0.05" value="-0.5">
+          <button class="sp-btn" onclick="spAdj('cgy-slider','cgy-num',0.05)">+</button>
+          <input type="range" id="cgy-slider" class="sp-slider" style="accent-color:#ff88ff;" min="-5" max="5" step="0.05" value="-0.5">
+        </div>
+        <div class="sp-row"><span class="sp-label" style="color:#ff88ff;">CG Z 前後</span>
+          <button class="sp-btn" onclick="spAdj('cgz-slider','cgz-num',-0.05)">-</button>
+          <input type="number" id="cgz-num" class="sp-num-input" style="color:#ff88ff;" min="-10" max="10" step="0.05" value="0.0">
+          <button class="sp-btn" onclick="spAdj('cgz-slider','cgz-num',0.05)">+</button>
+          <input type="range" id="cgz-slider" class="sp-slider" style="accent-color:#ff88ff;" min="-10" max="10" step="0.05" value="0.0">
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:6px;">
+          重心は船体内のどこに置いても構いません（船底近くやバラスト位置など）。喫水線の深さには影響しません — それは下の「喫水線基準点」で別に設定します。
+        </div>
+        <button style="width:100%;margin-top:8px;padding:7px;background:#0a3020;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px;" onclick="autoTuneCG()">⚖ 前後・左右の重心を自動バランス（高さは変更しません）</button>
+      </div>
+
+      <div class="sp-section">
+        <div class="sp-section-title">喫水線・質量・排水量</div>
+        <div class="sp-row"><span class="sp-label" style="color:#66ccff;">喫水線基準点 Y</span>
+          <button class="sp-btn" onclick="spAdj('waterlineY-slider','waterlineY-num',-0.05)">-</button>
+          <input type="number" id="waterlineY-num" class="sp-num-input" style="color:#66ccff;" min="-5" max="5" step="0.05" value="-0.5">
+          <button class="sp-btn" onclick="spAdj('waterlineY-slider','waterlineY-num',0.05)">+</button>
+          <input type="range" id="waterlineY-slider" class="sp-slider" style="accent-color:#66ccff;" min="-5" max="5" step="0.05" value="-0.5">
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:2px;margin-bottom:8px;">
+          船体のどの高さ（モデル原点基準のY）を「喫水ゼロ」にするか。重心(CG Y)とは別に設定でき、これが「喫水深(Draft)」スライダーと組み合わさって実際の没水深さを決めます。
+        </div>
+        <div class="sp-row"><span class="sp-label" style="color:#ffcc66;">質量（千トン）</span>
+          <button class="sp-btn" onclick="spAdj('mass-slider','mass-num',-0.1)">-</button>
+          <input type="number" id="mass-num" class="sp-num-input" style="color:#ffcc66;" min="0.05" max="500" step="0.1" value="1.5">
+          <button class="sp-btn" onclick="spAdj('mass-slider','mass-num',0.1)">+</button>
+          <input type="range" id="mass-slider" class="sp-slider" style="accent-color:#ffcc66;" min="0.05" max="500" step="0.1" value="1.5">
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:2px;">
+          船の重さ（慣性・揺れ方・加減速の重さに影響）。下のボタンで船体形状・現在の喫水から自動算出できます。
+        </div>
+        <button id="displacement-calc-btn" style="width:100%;margin-top:8px;padding:7px;background:#0a2a3a;color:#66ccff;border:1px solid #66ccff;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px;" onclick="applyDisplacementToMass()">⚖ 船体形状から重さを計算（排水量ベース）</button>
+        <button style="width:100%;margin-top:6px;padding:7px;background:#0a3020;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;font-weight:bold;cursor:pointer;font-size:11px;" onclick="autoTuneRestoration()">⚓ 船底・喫水から復元力を自動設定（GM計算）</button>
+        <div id="gm-readout" style="font-size:10px;color:#aef;margin-top:6px;padding:6px;background:#05131f;border-radius:4px;line-height:1.6;display:none;"></div>
+        <div id="displacement-readout" style="font-size:10px;color:#7af;margin-top:6px;text-align:center;">推定排水量: 未計算</div>
+      </div>
+    </div>
+
+    <div class="settings-page" id="tab-propulsion">
+      <div class="sp-section">
+        <div class="sp-section-title">推進器タイプ</div>
+        <div class="sp-row">
+          <span class="sp-label">種類:</span>
+          <select id="prop-type" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;" onchange="updatePropulsionType()">
+            <option value="screw">スクリュー (Screw)</option>
+            <option value="paddlewheel">外輪 (Paddle Wheel)</option>
+            <option value="azipod">アジポッド (Azipod)</option>
+          </select>
+        </div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="prop-symmetry" checked onchange="renderPropList();buildPropMeshes();"> シンメトリー (左右対称)</label>
+        </div>
+      </div>
+      <div class="sp-section">
+        <div class="sp-section-title">推進器リスト</div>
+        <div class="sp-propulsion-list" id="prop-list"></div>
+        <button class="sp-add-btn" onclick="addPropulsor()">＋ 追加</button>
+      </div>
+      <div class="sp-section">
+        <div class="sp-section-title">モデル内パーツ (スクリュー・外輪)</div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">
+          読み込んだモデルの中から、名前に "Screw"・"Paddle" などを含むパーツを検出し、個別に回転軸・回転方向を設定できます。<br>
+          船速に応じて自動でアニメーションします。逆方向に動く場合は「反転」ボタンを押してください。
+        </div>
+        <div class="sp-funnel-list" id="glb-propulsion-parts-list"></div>
+      </div>
+    </div>
+
+    <div class="settings-page" id="tab-rudder">
+      <div class="sp-section">
+        <div class="sp-section-title">舵 (Rudder) サイズ</div>
+        <div class="sp-row"><span class="sp-label accent">幅 (Width)</span>
+          <button class="sp-btn" onclick="spAdjDirect('rudder-width',-0.1,0.1,5)">-</button>
+          <input type="number" id="rudder-width" class="sp-num-input" min="0.1" max="5" step="0.1" value="1.0" oninput="updateRudder3D()">
+          <button class="sp-btn" onclick="spAdjDirect('rudder-width',0.1,0.1,5)">+</button>
+        </div>
+        <div class="sp-row"><span class="sp-label accent">高さ (Height)</span>
+          <button class="sp-btn" onclick="spAdjDirect('rudder-height',-0.1,0.1,5)">-</button>
+          <input type="number" id="rudder-height" class="sp-num-input" min="0.1" max="5" step="0.1" value="1.5" oninput="updateRudder3D()">
+          <button class="sp-btn" onclick="spAdjDirect('rudder-height',0.1,0.1,5)">+</button>
+        </div>
+        <div class="sp-row"><span class="sp-label accent">厚さ (Depth)</span>
+          <button class="sp-btn" onclick="spAdjDirect('rudder-depth',-0.05,0.05,1)">-</button>
+          <input type="number" id="rudder-depth" class="sp-num-input" min="0.05" max="1" step="0.05" value="0.15" oninput="updateRudder3D()">
+          <button class="sp-btn" onclick="spAdjDirect('rudder-depth',0.05,0.05,1)">+</button>
+        </div>
+      </div>
+      
+      <div class="sp-section">
+        <div class="sp-section-title">
+            舵取付位置 (Rudder offset)
+            <button class="sp-gizmo-btn" id="gizmo-rudder" onclick="toggleGizmo('rudder')">📍 ギズモ</button>
+        </div>
+        <div class="sp-row"><span class="sp-label" style="color:#00ffff;">Rudder X 左右</span>
+          <button class="sp-btn" onclick="spAdj('rudx-slider','rudx-num',-0.05)">-</button>
+          <input type="number" id="rudx-num" class="sp-num-input" style="color:#00ffff;" min="-3" max="3" step="0.05" value="0.0">
+          <button class="sp-btn" onclick="spAdj('rudx-slider','rudx-num',0.05)">+</button>
+          <input type="range" id="rudx-slider" class="sp-slider" style="accent-color:#00ffff;" min="-3" max="3" step="0.05" value="0.0">
+        </div>
+        <div class="sp-row"><span class="sp-label" style="color:#00ffff;">Rudder Y 上下</span>
+          <button class="sp-btn" onclick="spAdj('rudy-slider','rudy-num',-0.05)">-</button>
+          <input type="number" id="rudy-num" class="sp-num-input" style="color:#00ffff;" min="-3" max="3" step="0.05" value="-1.0">
+          <button class="sp-btn" onclick="spAdj('rudy-slider','rudy-num',0.05)">+</button>
+          <input type="range" id="rudy-slider" class="sp-slider" style="accent-color:#00ffff;" min="-3" max="3" step="0.05" value="-1.0">
+        </div>
+        <div class="sp-row"><span class="sp-label" style="color:#00ffff;">Rudder Z 前後</span>
+          <button class="sp-btn" onclick="spAdj('rudz-slider','rudz-num',-0.05)">-</button>
+          <input type="number" id="rudz-num" class="sp-num-input" style="color:#00ffff;" min="-10" max="10" step="0.05" value="-7.0">
+          <button class="sp-btn" onclick="spAdj('rudz-slider','rudz-num',0.05)">+</button>
+          <input type="range" id="rudz-slider" class="sp-slider" style="accent-color:#00ffff;" min="-10" max="10" step="0.05" value="-7.0">
+        </div>
+      </div>
+
+      <div class="sp-section">
+        <div class="sp-section-title">モデル内パーツ (舵)</div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">
+          読み込んだモデルの中から、名前に "Rudder"・"舵" を含むパーツを検出し、個別に回転軸・回転方向を設定できます。<br>
+          舵角に応じて自動でアニメーションします。逆方向に動く場合は「反転」ボタンを押してください。
+        </div>
+        <div class="sp-funnel-list" id="glb-rudder-parts-list"></div>
+      </div>
+    </div>
+
+    <div class="settings-page" id="tab-navlights">
+      <div class="sp-section">
+        <div class="sp-section-title">
+            右舷灯 / 左舷灯
+            <button class="sp-gizmo-btn" id="gizmo-nav_port" onclick="toggleGizmo('nav_port')">📍 ギズモで移動</button>
+        </div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="navlight-side-symmetry" checked onchange="updateNavLights3D()"> シンメトリー (左右対称)</label>
+        </div>
+
+        <div style="margin-bottom:8px;">
+          <div style="font-size:10px;color:#888;margin-bottom:6px;">
+            <span class="navlight-preview navlight-port"></span>左舷灯 (赤) &nbsp;|&nbsp;
+            <span class="navlight-preview navlight-stbd"></span>右舷灯 (緑)
+          </div>
+          <div class="sp-xyz-row">
+            <span class="sp-axis-label">X:</span><input type="number" id="navlight-side-x" class="sp-xyz-input" value="1.8" step="0.1" oninput="updateNavLights3D()">
+            <span class="sp-axis-label">Y:</span><input type="number" id="navlight-side-y" class="sp-xyz-input" value="2.5" step="0.1" oninput="updateNavLights3D()">
+            <span class="sp-axis-label">Z:</span><input type="number" id="navlight-side-z" class="sp-xyz-input" value="3.0" step="0.1" oninput="updateNavLights3D()">
+          </div>
+          <div class="sp-row" style="margin-top:4px;">
+            <span class="sp-label">光の強さ:</span>
+            <input type="range" id="navlight-side-intensity" class="sp-slider" min="0.1" max="5" step="0.1" value="1.5" oninput="updateNavLights3D()">
+            <input type="number" id="navlight-side-intensity-num" class="sp-num-input" min="0.1" max="5" step="0.1" value="1.5" oninput="updateNavLights3D()">
+          </div>
+          <div class="sp-row">
+            <span class="sp-label">照射角 (全体°/法定112.5°):</span>
+            <input type="range" id="navlight-side-angle" class="sp-slider" min="90" max="112.5" step="2.5" value="112.5" oninput="updateNavLights3D()">
+            <input type="number" id="navlight-side-angle-num" class="sp-num-input" min="90" max="112.5" step="2.5" value="112.5" oninput="updateNavLights3D()">
+          </div>
+          <div class="sp-row">
+            <span class="sp-label">灯火球の半径:</span>
+            <input type="range" id="navlight-sphere-radius" class="sp-slider" min="0" max="0.5" step="0.01" value="0.15" oninput="updateNavLights3D()">
+            <input type="number" id="navlight-sphere-radius-num" class="sp-num-input" min="0" max="0.5" step="0.01" value="0.15" oninput="updateNavLights3D()">
+          </div>
+        </div>
+      </div>
+
+      <div class="sp-section">
+        <div class="sp-section-title">マスト灯 (Mast Lights)</div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">
+          <span class="navlight-preview navlight-mast"></span>白・前部マスト灯 &nbsp;|&nbsp;
+          <span class="navlight-preview navlight-mast" style="opacity:0.6;"></span>白・後部マスト灯
+        </div>
+        <div class="sp-card" style="margin-bottom:8px;">
+          <div class="sp-card-title">
+            前部マスト灯
+            <button class="sp-gizmo-btn" id="gizmo-nav_mastFore" onclick="toggleGizmo('nav_mastFore')">📍 ギズモ</button>
+          </div>
+          <div class="sp-xyz-row">
+            <span class="sp-axis-label">X:</span><input type="number" id="mast-fore-x" class="sp-xyz-input" value="0" step="0.1" oninput="updateNavLights3D()">
+            <span class="sp-axis-label">Y:</span><input type="number" id="mast-fore-y" class="sp-xyz-input" value="8" step="0.1" oninput="updateNavLights3D()">
+            <span class="sp-axis-label">Z:</span><input type="number" id="mast-fore-z" class="sp-xyz-input" value="3.5" step="0.1" oninput="updateNavLights3D()">
+          </div>
+        </div>
+        <div class="sp-card">
+          <div class="sp-card-title">
+            後部マスト灯
+            <button class="sp-gizmo-btn" id="gizmo-nav_mastAft" onclick="toggleGizmo('nav_mastAft')">📍 ギズモ</button>
+          </div>
+          <div class="sp-xyz-row">
+            <span class="sp-axis-label">X:</span><input type="number" id="mast-aft-x" class="sp-xyz-input" value="0" step="0.1" oninput="updateNavLights3D()">
+            <span class="sp-axis-label">Y:</span><input type="number" id="mast-aft-y" class="sp-xyz-input" value="6.5" step="0.1" oninput="updateNavLights3D()">
+            <span class="sp-axis-label">Z:</span><input type="number" id="mast-aft-z" class="sp-xyz-input" value="-3.0" step="0.1" oninput="updateNavLights3D()">
+          </div>
+        </div>
+        <div class="sp-row" style="margin-top:8px;">
+          <span class="sp-label">マスト灯強さ:</span>
+          <input type="range" id="navlight-mast-intensity" class="sp-slider" min="0.1" max="5" step="0.1" value="2.0" oninput="updateNavLights3D()">
+          <input type="number" id="navlight-mast-intensity-num" class="sp-num-input" min="0.1" max="5" step="0.1" value="2.0" oninput="updateNavLights3D()">
+        </div>
+      </div>
+
+      <div class="sp-section">
+        <div class="sp-section-title">
+            船尾灯 (Stern Light)
+            <button class="sp-gizmo-btn" id="gizmo-nav_stern" onclick="toggleGizmo('nav_stern')">📍 ギズモ</button>
+        </div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">
+          <span class="navlight-preview navlight-stern"></span>黄白・船尾灯
+        </div>
+        <div class="sp-xyz-row">
+          <span class="sp-axis-label">X:</span><input type="number" id="sternlight-x" class="sp-xyz-input" value="0" step="0.1" oninput="updateNavLights3D()">
+          <span class="sp-axis-label">Y:</span><input type="number" id="sternlight-y" class="sp-xyz-input" value="2.0" step="0.1" oninput="updateNavLights3D()">
+          <span class="sp-axis-label">Z:</span><input type="number" id="sternlight-z" class="sp-xyz-input" value="-7.5" step="0.1" oninput="updateNavLights3D()">
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-page" id="tab-lighting">
+      <div class="sp-section">
+        <div class="sp-section-title">太陽光・環境光 (Sun / Ambient)</div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">
+          時間帯による自動調光に、ここで設定した倍率がかかります。
+        </div>
+        <div class="sp-row">
+          <span class="sp-label">太陽光の強さ:</span>
+          <input type="range" id="light-sun-mult" class="sp-slider" min="0" max="2" step="0.05" value="1.0" oninput="updateLightingSettings()">
+          <input type="number" id="light-sun-mult-num" class="sp-num-input" min="0" max="2" step="0.05" value="1.0" oninput="updateLightingSettings()">
+        </div>
+        <div class="sp-row">
+          <span class="sp-label">環境光 (Ambient):</span>
+          <input type="range" id="light-ambient-mult" class="sp-slider" min="0" max="2" step="0.05" value="1.0" oninput="updateLightingSettings()">
+          <input type="number" id="light-ambient-mult-num" class="sp-num-input" min="0" max="2" step="0.05" value="1.0" oninput="updateLightingSettings()">
+        </div>
+        <div class="sp-row">
+          <span class="sp-label">半球光 (Hemisphere):</span>
+          <input type="range" id="light-hemi-mult" class="sp-slider" min="0" max="2" step="0.05" value="1.0" oninput="updateLightingSettings()">
+          <input type="number" id="light-hemi-mult-num" class="sp-num-input" min="0" max="2" step="0.05" value="1.0" oninput="updateLightingSettings()">
+        </div>
+        <div class="sp-row">
+          <span class="sp-label">補助光 (面の凹み軽減):</span>
+          <input type="range" id="light-fill-mult" class="sp-slider" min="0" max="2" step="0.05" value="1.0" oninput="updateLightingSettings()">
+          <input type="number" id="light-fill-mult-num" class="sp-num-input" min="0" max="2" step="0.05" value="1.0" oninput="updateLightingSettings()">
+        </div>
+      </div>
+
+      <div class="sp-section">
+        <div class="sp-section-title">露出・霧 (Exposure / Fog)</div>
+        <div class="sp-row">
+          <span class="sp-label">露出 (Exposure):</span>
+          <input type="range" id="light-exposure" class="sp-slider" min="0.3" max="2.5" step="0.05" value="1.1" oninput="updateLightingSettings()">
+          <input type="number" id="light-exposure-num" class="sp-num-input" min="0.3" max="2.5" step="0.05" value="1.1" oninput="updateLightingSettings()">
+        </div>
+        <div class="sp-row">
+          <span class="sp-label">霧の濃さ:</span>
+          <input type="range" id="light-fog-mult" class="sp-slider" min="0" max="3" step="0.05" value="1.0" oninput="updateLightingSettings()">
+          <input type="number" id="light-fog-mult-num" class="sp-num-input" min="0" max="3" step="0.05" value="1.0" oninput="updateLightingSettings()">
+        </div>
+      </div>
+
+      <div class="sp-section" id="glb-lights-section-tab" style="display:none;">
+        <div class="sp-section-title">💡 GLBモデルのライト (Blenderライト)</div>
+        <div style="font-size:10px;color:#888;margin-bottom:8px;">
+          インポートしたモデルにライトが含まれる場合の全体設定です。
+        </div>
+        <!-- 全体明るさ -->
+        <div class="sp-row">
+          <span class="sp-label">全体明るさ:</span>
+          <input type="range" id="light-glb-master" class="sp-slider" min="0" max="3" step="0.05" value="1.0"
+            oninput="updateLightingSettings();const _s=$('glb-master-num');if(_s)_s.textContent=parseFloat(this.value).toFixed(2);">
+          <input type="number" id="light-glb-master-num" class="sp-num-input" min="0" max="3" step="0.05" value="1.0"
+            oninput="updateLightingSettings();">
+          <span id="glb-master-num" style="min-width:2.5em;text-align:right;font-size:0.85em;">1.00</span>
+        </div>
+        <!-- 昼間自動消灯 -->
+        <div class="sp-row" style="margin-top:6px;">
+          <label class="sp-toggle">
+            <input type="checkbox" id="glb-auto-toggle" checked onchange="setGlbAutoMode(this.checked)">
+            🌅 昼間は自動消灯 (航行灯以外)
+          </label>
+        </div>
+        <!-- 減衰距離 -->
+        <div class="sp-row" style="margin-top:6px;">
+          <span class="sp-label">📏 減衰距離:</span>
+          <input type="range" id="glb-dist-slider" class="sp-slider" min="0" max="100" step="0.5" value="0"
+            oninput="setGlbDistance(parseFloat(this.value));$('glb-dist-num').textContent=parseFloat(this.value)===0?'∞':parseFloat(this.value).toFixed(1);">
+          <span id="glb-dist-num" class="sp-num-input" style="min-width:28px;text-align:center;">∞</span>
+        </div>
+        <!-- 個別ライトリスト -->
+        <div id="glb-lights-list" style="font-size:11px;margin-top:10px;"></div>
+      </div>
+      <!-- GLBライトが無い場合のメッセージ -->
+      <div class="sp-section" id="glb-lights-empty-msg">
+        <div style="font-size:10px;color:#555;text-align:center;padding:6px 0;">
+          GLBモデルを読み込むとライト設定がここに表示されます
+        </div>
+      </div>
+
+      <div class="sp-section">
+        <div class="sp-section-title">🪟 窓・キャビンの発光</div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">
+          船体モデルの窓やキャビンなど、常時emissiveで光らせているマテリアルの発光強さです。夜間係数(消灯⇔点灯)に掛け算されます。
+        </div>
+        <div class="sp-row">
+          <span class="sp-label">発光の強さ:</span>
+          <input type="range" id="light-window-glow" class="sp-slider" min="0" max="3" step="0.05" value="1.0" oninput="updateLightingSettings()">
+          <input type="number" id="light-window-glow-num" class="sp-num-input" min="0" max="3" step="0.05" value="1.0" oninput="updateLightingSettings()">
+        </div>
+      </div>
+
+      <!-- ▭ エリアライト取り込みガイド -->
+      <div class="sp-section">
+        <div class="sp-section-title" style="color:#ffcc55;">▭ エリアライトをBlenderから取り込む</div>
+        <div style="font-size:10px;color:#aaa;margin-bottom:8px;line-height:1.6;">
+          glTF規格はエリアライトに対応していないため、<br>
+          <b style="color:#ffcc55;">Blenderのスクリプトで事前変換</b>してから出力する方法が使えます。
+        </div>
+
+        <!-- 手順ステップ -->
+        <div id="area-light-steps" style="font-size:10px;line-height:1.7;margin-bottom:10px;">
+          <div style="background:rgba(255,204,85,0.07);border:1px solid rgba(255,204,85,0.25);border-radius:6px;padding:8px;">
+            <div style="color:#ffcc55;font-weight:bold;margin-bottom:5px;">📋 手順</div>
+            <div><span style="color:#ffcc55;">①</span> Blenderでエリアライトを含むシーンを開く</div>
+            <div><span style="color:#ffcc55;">②</span> <b>Scripting</b>タブ → <b>New</b>でテキストを作成</div>
+            <div><span style="color:#ffcc55;">③</span> 下のスクリプトをコピーして貼り付け → <b>▶ Run Script</b></div>
+            <div><span style="color:#ffcc55;">④</span> エリアライトが空(Empty)オブジェクトに自動変換される</div>
+            <div><span style="color:#ffcc55;">⑤</span> <b>File → Export → glTF 2.0</b> で出力</div>
+            <div style="margin-top:4px;padding-top:4px;border-top:1px solid rgba(255,255,255,0.1);">
+              エクスポート設定: <b style="color:#00ffcc;">Include → Custom Properties ✓</b><br>
+              (これがないと変換データが出力されません)
+            </div>
+          </div>
+        </div>
+
+        <!-- スクリプト表示エリア -->
+        <div style="margin-bottom:6px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <span style="font-size:10px;color:#00ffcc;font-weight:bold;">🐍 Blender Python スクリプト</span>
+            <button class="sp-add-btn" onclick="copyAreaLightScript(this)" style="font-size:10px;padding:3px 8px;">📋 コピー</button>
+          </div>
+          <textarea id="area-light-script" readonly
+            style="width:100%;height:220px;background:#060f1e;border:1px solid rgba(0,255,204,0.3);
+                   color:#88ffdd;font-family:monospace;font-size:9px;line-height:1.5;
+                   padding:8px;border-radius:4px;resize:none;box-sizing:border-box;white-space:pre;"
+          ></textarea>
+        </div>
+
+        <!-- 補足 -->
+        <div style="font-size:9px;color:#666;line-height:1.6;margin-top:4px;">
+          ⚠ 変換後の空オブジェクトは元のエリアライトと<b>同じ位置・回転・サイズ・強度・色</b>を持ちます。<br>
+          スクリプトは元のエリアライトを削除せず、隣に空オブジェクトを生成します。<br>
+          元のエリアライトはGLBに出力されないため、手動削除またはコレクションで非表示にしてください。
+        </div>
+      </div>
+
+      <div class="sp-section">
+        <div class="sp-row" style="gap:8px;">
+          <button class="sp-add-btn" style="flex:1;" onclick="resetLightingSettings()">↺ 照明設定をリセット</button>
+        </div>
+      </div>
+
+      <div class="sp-section">
+        <div class="sp-section-title">✨ ブルーム (Bloom)</div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="bloom-toggle" checked onchange="setBloomEnabled(this.checked)"> ブルームを有効にする</label>
+        </div>
+        <div style="font-size:10px;color:#888;margin:4px 0 8px;">航行灯・甲板照明・発光マテリアルを滲ませます。夜間の見た目が大きく向上します。</div>
+        <div class="sp-row">
+          <span class="sp-label">強さ (Strength):</span>
+          <input type="range" id="bloom-strength" class="sp-slider" min="0" max="2" step="0.05" value="0.55" oninput="setBloomStrength(parseFloat(this.value));this.nextElementSibling.value=parseFloat(this.value).toFixed(2)">
+          <input type="number" id="bloom-strength-num" class="sp-num-input" min="0" max="2" step="0.05" value="0.55" oninput="setBloomStrength(parseFloat(this.value));document.getElementById('bloom-strength').value=this.value">
+        </div>
+        <div class="sp-row">
+          <span class="sp-label">広がり (Radius):</span>
+          <input type="range" id="bloom-radius" class="sp-slider" min="0" max="1" step="0.05" value="0.45" oninput="setBloomRadius(parseFloat(this.value));this.nextElementSibling.value=parseFloat(this.value).toFixed(2)">
+          <input type="number" id="bloom-radius-num" class="sp-num-input" min="0" max="1" step="0.05" value="0.45" oninput="setBloomRadius(parseFloat(this.value));document.getElementById('bloom-radius').value=this.value">
+        </div>
+        <div class="sp-row">
+          <span class="sp-label">閾値 (Threshold):</span>
+          <input type="range" id="bloom-threshold" class="sp-slider" min="0" max="1" step="0.02" value="0.72" oninput="setBloomThreshold(parseFloat(this.value));this.nextElementSibling.value=parseFloat(this.value).toFixed(2)">
+          <input type="number" id="bloom-threshold-num" class="sp-num-input" min="0" max="1" step="0.02" value="0.72" oninput="setBloomThreshold(parseFloat(this.value));document.getElementById('bloom-threshold').value=this.value">
+        </div>
+        <div style="font-size:10px;color:#555;margin-top:4px;">閾値を上げると光るオブジェクトが絞られます。下げすぎると全体が白飛びします。</div>
+      </div>
+    </div>
+
+    <div class="settings-page" id="tab-funnels">
+      <div class="sp-section">
+        <div class="sp-section-title">煙突リスト</div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="funnel-symmetry" onchange="renderFunnelList();buildFunnelMeshes();"> シンメトリー (左右対称)</label>
+        </div>
+        <div class="sp-funnel-list" id="funnel-list"></div>
+        <button class="sp-add-btn" onclick="addFunnel()">＋ 煙突を追加</button>
+      </div>
+      <div class="sp-section">
+        <div class="sp-section-title">🔆 煙突ライトアップ</div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="funnel-uplight-toggle" checked onchange="setFunnelUplightEnabled(this.checked)"> 煙突を下から照らし上げる（夜間自動点灯）</label>
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:4px;margin-bottom:8px;">
+          煙突の根元に SpotLight を配置し、夜間に煙突を照らし上げます。<br>
+          光の柱（コーン）も連動して表示されます。
+        </div>
+      </div>
+      <div class="sp-section">
+        <div class="sp-section-title">排煙設定</div>
+        <div class="sp-row"><span class="sp-label">煙の濃さ:</span>
+          <input type="range" id="smoke-density" class="sp-slider" min="0" max="1" step="0.05" value="0.6" oninput="document.getElementById('smoke-density-num').value=this.value;updateSmokeSettings()">
+          <input type="number" id="smoke-density-num" class="sp-num-input" min="0" max="1" step="0.05" value="0.6" oninput="document.getElementById('smoke-density').value=this.value;updateSmokeSettings()">
+        </div>
+        <div class="sp-row"><span class="sp-label">煙の速度:</span>
+          <input type="range" id="smoke-speed" class="sp-slider" min="0.1" max="3" step="0.1" value="1.0" oninput="document.getElementById('smoke-speed-num').value=this.value;updateSmokeSettings()">
+          <input type="number" id="smoke-speed-num" class="sp-num-input" min="0.1" max="3" step="0.1" value="1.0" oninput="document.getElementById('smoke-speed').value=this.value;updateSmokeSettings()">
+        </div>
+        <div class="sp-row"><span class="sp-label">煙の色:</span>
+          <select id="smoke-color" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;" onchange="updateSmokeSettings()">
+            <option value="gray">灰色 (石炭)</option>
+            <option value="black">黒煙 (重油)</option>
+            <option value="white">白煙 (蒸気)</option>
+            <option value="light">薄灰 (現代船)</option>
+          </select>
+        </div>
+        <div class="sp-row">
+          <span class="smoke-preview"></span>
+          <span style="font-size:10px;color:#888;">速度連動: 航行中のみ排煙</span>
+          <label class="sp-toggle" style="margin-left:auto;"><input type="checkbox" id="smoke-speed-linked" checked onchange="updateSmokeSettings()"> 速度連動</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-page" id="tab-save">
+      <div class="sp-section">
+        <div class="sp-section-title">船名登録 / ローカル保存</div>
+        <div class="sp-row">
+          <span class="sp-label" style="min-width:0;">船名:</span>
+          <input type="text" id="ship-name-input" placeholder="船名を入力" style="flex:1;background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:6px 8px;font-family:inherit;font-size:12px;">
+        </div>
+        <div class="sp-row" style="gap:8px;">
+          <button class="sp-add-btn" style="flex:1;" onclick="saveShipConfig()">💾 この船名で保存</button>
+        </div>
+        <div id="ship-save-status" style="font-size:10px;color:#888;margin-top:4px;"></div>
+      </div>
+      <div class="sp-section">
+        <div class="sp-section-title">保存済みの船</div>
+        <div class="sp-funnel-list" id="ship-save-list"></div>
+      </div>
+
+      <div class="sp-section">
+        <div class="sp-section-title">ファイルに保存 / 読み込み (複数デバイス用)</div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">
+          設定をファイル(.json)として書き出し、他のデバイスで読み込むことができます。
+        </div>
+        <div class="sp-row" style="gap:8px;">
+          <button class="sp-add-btn" style="flex:1;" onclick="exportShipConfigFile()">⬇ ファイルに保存 (.json)</button>
+          <button class="sp-add-btn" style="flex:1;" onclick="$('ship-file-input').click()">⬆ ファイルから読み込み</button>
+        </div>
+        <input type="file" id="ship-file-input" accept=".json,application/json" style="display:none;" onchange="importShipConfigFile(event)">
+        <div id="ship-file-status" style="font-size:10px;color:#888;margin-top:4px;"></div>
+      </div>
+    </div>
+
+    <div class="settings-page" id="tab-decklight">
+      <div class="sp-section">
+        <div class="sp-section-title">🔆 甲板照明 / プロムナードライト</div>
+        <div style="font-size:10px;color:#888;margin-bottom:10px;">
+          発光スポットは何個でも配置OK（見た目は常時点灯のemissive球）。<br>
+          実際に床・壁を照らす本物のライト（SpotLight）は、カメラに最も近い上位5個のみ（Android対策）。<br>
+          夜間だけ自動点灯します。照射は片方向（下向き等）のみ。
+        </div>
+
+        <!-- 全体設定：照射方向・明るさ -->
+        <div class="sp-section-title" style="margin-top:4px;">💡 照射設定（全スポット共通）</div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">
+          夜間のみ点灯。SpotLightが指定方向だけを照らします（天井側は照らしません）。
+        </div>
+        <div class="sp-row" style="gap:6px;margin-bottom:4px;align-items:center;">
+          <span class="sp-label" style="white-space:nowrap;">照射方向:</span>
+          <input type="range" id="dl-dir-angle-slider" min="0" max="359" step="15" value="270" style="flex:1;"
+            oninput="setDeckLightDirAngle(this.value);$('dl-dir-angle').value=this.value;$('dl-dir-angle-label').textContent=_deckDirLabel(this.value);">
+          <input type="number" id="dl-dir-angle" class="sp-xyz-input" value="270" step="15" min="0" max="359" style="width:46px;"
+            oninput="setDeckLightDirAngle(this.value);$('dl-dir-angle-slider').value=this.value;$('dl-dir-angle-label').textContent=_deckDirLabel(this.value);">
+        </div>
+        <div style="font-size:10px;color:#00ffcc;margin-bottom:8px;text-align:center;" id="dl-dir-angle-label">270° = 真下（デフォルト）</div>
+        <div class="sp-row" style="gap:6px;margin-bottom:4px;align-items:center;">
+          <span class="sp-label" style="white-space:nowrap;">明るさ:</span>
+          <input type="range" id="dl-intensity" min="0" max="5" step="0.05" value="1.0" style="flex:1;"
+            oninput="setDeckLightIntensity(this.value);$('dl-intensity-num').textContent=parseFloat(this.value).toFixed(2);">
+          <span id="dl-intensity-num" style="font-size:11px;color:#00ffcc;min-width:32px;">1.00</span>
+        </div>
+        <div style="font-size:10px;color:#555;margin-bottom:10px;">0=消灯 ／ 1=通常 ／ 5=最大（現在の明るさは1.0）</div>
+
+        <div class="sp-section-title" style="margin-top:8px;">プロムナードデッキ一括配置</div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">甲板の高さ・前後範囲・幅を指定してスポットを均等配置します。</div>
+
+        <div class="sp-xyz-row" style="margin-bottom:4px;">
+          <span class="sp-axis-label">Y高:</span>
+          <input type="number" id="dl-prom-y" class="sp-xyz-input" value="2.5" step="0.1">
+          <span class="sp-axis-label">Z前:</span>
+          <input type="number" id="dl-prom-zfrom" class="sp-xyz-input" value="6" step="0.5">
+          <span class="sp-axis-label">Z後:</span>
+          <input type="number" id="dl-prom-zto" class="sp-xyz-input" value="-6" step="0.5">
+        </div>
+        <div class="sp-row" style="gap:8px;margin-bottom:4px;">
+          <span class="sp-label">側X幅:</span>
+          <input type="number" id="dl-prom-x" class="sp-xyz-input" value="2.5" step="0.1">
+          <span class="sp-label">個数:</span>
+          <input type="number" id="dl-prom-count" class="sp-xyz-input" value="8" step="1" min="2" max="40">
+        </div>
+        <div class="sp-row" style="gap:8px;margin-bottom:6px;">
+          <span class="sp-label">色:</span>
+          <input type="color" id="dl-prom-color" value="#ffc870" style="width:38px;height:24px;border:1px solid #444;background:#0a1932;cursor:pointer;border-radius:3px;">
+        </div>
+        <div class="sp-row" style="gap:6px;margin-bottom:10px;">
+          <button class="sp-add-btn" style="flex:1;" onclick="applyPromenadeLights()">✚ プロムナード配置</button>
+          <button class="sp-remove-btn" style="flex:none;" onclick="clearDecorLights();updateDeckLightPoolStatus()">✕ 全消去</button>
+        </div>
+
+        <div class="sp-section-title">個別スポット追加</div>
+        <div class="sp-xyz-row" style="margin-bottom:4px;">
+          <span class="sp-axis-label">X:</span>
+          <input type="number" id="dl-spot-x" class="sp-xyz-input" value="0" step="0.2">
+          <span class="sp-axis-label">Y:</span>
+          <input type="number" id="dl-spot-y" class="sp-xyz-input" value="3" step="0.2">
+          <span class="sp-axis-label">Z:</span>
+          <input type="number" id="dl-spot-z" class="sp-xyz-input" value="0" step="0.2">
+        </div>
+        <div class="sp-row" style="gap:8px;margin-bottom:6px;">
+          <span class="sp-label">サイズ:</span>
+          <input type="number" id="dl-spot-size" class="sp-xyz-input" value="0.22" step="0.02" min="0.05" max="1.5">
+          <span class="sp-label">色:</span>
+          <input type="color" id="dl-spot-color" value="#ffd090" style="width:38px;height:24px;border:1px solid #444;background:#0a1932;cursor:pointer;border-radius:3px;">
+        </div>
+        <div class="sp-row" style="gap:6px;margin-bottom:10px;">
+          <button class="sp-add-btn" style="flex:1;" onclick="addSingleDecorLight()">✚ スポット追加</button>
+        </div>
+
+        <!-- スポットリスト＋ギズモ -->
+        <div class="sp-section-title">📋 配置済みスポット一覧</div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">
+          各スポットの座標・サイズを直接編集、または📍でギズモON（再クリックでOFF）。
+        </div>
+        <div id="dl-spot-list" style="margin-bottom:6px;"></div>
+
+        <div class="sp-section-title">ライトプール状態</div>
+        <div id="dl-pool-status" style="font-size:10px;color:#aaa;">配置数: 0 / プール予算: 5</div>
+        <div style="font-size:10px;color:#555;margin-top:4px;">
+          ※ 本物の光（床・壁を照らす）はカメラ最近傍5個のみ有効。SpotLightにより片側方向のみ照射。
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-page" id="tab-viewpoint">
+      <div class="sp-section">
+        <div class="sp-section-title">🔭 視点（見張り台）設定</div>
+        <div style="font-size:10px;color:#888;margin-bottom:10px;">
+          各見張り台の位置をギズモまたは座標入力で調整できます。位置は船の基準点(CG)から見た相対座標で、
+          船の移動・旋回・横揺れ/縦揺れに自動追従します。設定後、画面左上「🔭 見張り台」ボタンから視点を切り替えられます。
+          視点モード中はドラッグ（マウス/1本指）で自由に見回せます。
+        </div>
+
+        <div class="sp-section-title" style="margin-top:4px;">固定スロット（6箇所・手動設定）</div>
+        <div id="vp-fixed-list" style="margin-bottom:10px;"></div>
+
+        <div class="sp-section-title">見張り台（任意の数）</div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">追加したい位置のXYZを指定して追加してください。</div>
+        <div class="sp-xyz-row" style="margin-bottom:4px;">
+          <span class="sp-axis-label">X:</span>
+          <input type="number" id="vp-add-x" class="sp-xyz-input" value="0" step="0.5">
+          <span class="sp-axis-label">Y:</span>
+          <input type="number" id="vp-add-y" class="sp-xyz-input" value="6" step="0.5">
+          <span class="sp-axis-label">Z:</span>
+          <input type="number" id="vp-add-z" class="sp-xyz-input" value="0" step="0.5">
+        </div>
+        <div class="sp-row" style="gap:6px;margin-bottom:10px;">
+          <button class="sp-add-btn" style="flex:1;" onclick="addLookoutFromUI()">✚ 見張り台を追加</button>
+        </div>
+
+        <div class="sp-section-title">📋 配置済み見張り台一覧</div>
+        <div id="vp-lookout-list" style="margin-bottom:6px;"></div>
+      </div>
+    </div>
+
+    <div class="settings-page" id="tab-perf">
+      <div class="sp-section">
+        <div class="sp-section-title">グラフィック品質</div>
+        <div class="sp-row">
+          <span class="sp-label">品質:</span>
+          <select id="perf-quality" style="flex:1;background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;" onchange="applyPerfPreset(this.value)">
+            <option value="high">高 (High)</option>
+            <option value="medium" selected>中 (Medium・推奨)</option>
+            <option value="low">低 (Low)</option>
+            <option value="verylow">最低 (Very Low・最軽量)</option>
+            <option value="ultralow">超低 (Ultra Low・解像度ダウンスケール)</option>
+          </select>
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:6px;">
+          煙パーティクル数・航跡の長さ・画面解像度を一括調整します（海面の重さには影響しません）。
+        </div>
+      </div>
+
+      <div class="sp-section">
+        <div class="sp-section-title">海面リアリティー</div>
+        <div class="sp-row">
+          <span class="sp-label">海面:</span>
+          <select id="perf-water-quality" style="flex:1;background:#0a1932;color:#66ccff;border:1px solid #66ccff;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;" onchange="applyWaterQualityPreset(this.value)">
+            <option value="high">高 (High)</option>
+            <option value="medium" selected>中 (Medium・推奨)</option>
+            <option value="low">低 (Low)</option>
+            <option value="verylow">最低 (Very Low・最軽量)</option>
+          </select>
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:6px;">
+          海面の重さはグラフィック品質とは別枠です。水面メッシュの細かさ・反射の更新頻度・流体シミュ(SWE)を調整します。動作が重い場合はここを下げてください。
+        </div>
+      </div>
+
+      <div class="sp-section">
+        <div class="sp-section-title">表示設定</div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="water-visible-toggle" checked onchange="toggleWaterVisibility()"> 海面を表示する</label>
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:6px;">
+          船体の下部や内部構造を確認したい場合などに、海面を非表示にできます。最も重い場合はここをOFFにするのが最速です。
+        </div>
+      </div>
+    </div>
+
+  </div></div><div id="instructions">PC: [W/S] Telegraph | [A/D] Rudder<br>Drag/Swipe to rotate camera | Right-Drag/2-Fingers to pan</div>
+
+<script src="js/01-state-and-config.js"></script>
+<script src="js/02-utils-and-wave-physics.js"></script>
+<script src="js/03-particle-systems.js"></script>
+<script src="js/04-scene-and-water-init.js"></script>
+<script src="js/05-sky-dome.js"></script>
+<script src="js/06-input-controls.js"></script>
+<script src="js/07-glb-movable-parts.js"></script>
+<script src="js/08-model-loading-and-lighting.js"></script>
+<script src="js/09-ui-setup-and-import.js"></script>
+<script src="js/10-ship-editor-propulsors.js"></script>
+<script src="js/11-navlights-and-funnels.js"></script>
+<script src="js/12-bloom-and-deck-lighting-fx.js"></script>
+<script src="js/13-save-load-config.js"></script>
+<script src="js/14-finetune-buttons.js"></script>
+<script src="js/15-arealight-script-generator.js"></script>
+<script src="js/16-daynight-and-telegraph.js"></script>
+<script src="js/20-viewpoint-camera.js"></script>
+<script src="js/17-main-loop.js"></script>
+<script src="js/18-hull-wake-physics.js"></script>
+<script src="js/19-swe-fluid.js"></script>
+<script src="js/21-bow-stern-effects.js"></script>
+</body>
+</html>
