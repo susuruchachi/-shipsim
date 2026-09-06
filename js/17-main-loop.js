@@ -216,10 +216,19 @@ function animate() {
             const MASS_REF = 1.5;
             const massFactor = THREE.MathUtils.clamp(Math.sqrt(MASS_REF / physics.mass), 0.12, 1.0);
 
-            const _buoy = computeHullBuoyancyPhysics(
-                physics.cgWorldX, physics.cgWorldZ, rotY, physics.pitch,
-                physics.y, waterlineYScaled, physScale, len, t, cgZScaled
-            );
+            // v165-fix: このファイル(17)はindex.htmlで18-hull-wake-physics.jsより
+            // 先に読み込まれ、末尾で即座にanimate()を開始する。そのため最初の
+            // 数フレームは computeHullBuoyancyPhysics がまだ未定義で、ここが
+            // ReferenceErrorを投げ、animate()の残り（船体姿勢の更新やレンダリング
+            // 呼び出しを含む）がまるごと飛ばされていた。下の `_buoy ? ... : 既定値`
+            // というフォールバックが元々あるので、未定義のうちはnullを入れて
+            // そのフォールバックに乗せればよい。
+            const _buoy = (typeof computeHullBuoyancyPhysics === 'function')
+                ? computeHullBuoyancyPhysics(
+                    physics.cgWorldX, physics.cgWorldZ, rotY, physics.pitch,
+                    physics.y, waterlineYScaled, physScale, len, t, cgZScaled
+                  )
+                : null;
             const volSubmerged   = _buoy ? Math.max(0, _buoy.volSubmerged) : 0;
             const AwpReal        = _buoy ? Math.max(0.05, _buoy.Awp) : 1.0;
             const momentVolAboutCG = _buoy ? _buoy.momentVolAboutCG : 0;
@@ -344,7 +353,13 @@ function animate() {
             //  船中央（Stage 3）── ホギング/サギングの視覚的な船体曲げ
             //  剛体物理には影響させず、hogSagUniforms経由でシェーダーにのみ反映する。
             // ════════════════════════════════════════════════════════════
-            if (HOGSAG_ENABLED && typeof computeHogSagAmount === 'function') {
+            // v165-fix: HOGSAG_ENABLED は 21-bow-stern-effects.js のトップレベル
+            // const で、index.html上ではこのファイル(17)より後に読み込まれる。
+            // 17は末尾でanimate()を即開始するため、最初の数フレームはこの参照が
+            // ReferenceErrorになり、animate()の残り（レンダリング呼び出しを含む）が
+            // まるごと飛んでいた。08-model-loading-and-lighting.js:1732 の同じ参照は
+            // 既に typeof ガードを付けてあるので、ここも同じ形に揃える。
+            if (typeof HOGSAG_ENABLED !== 'undefined' && HOGSAG_ENABLED && typeof computeHogSagAmount === 'function') {
                 const hogSagWorld = computeHogSagAmount(physics.cgWorldX, physics.cgWorldZ, rotY, physScale, len, t, subDt);
                 if (typeof hogSagUniforms !== 'undefined' && hogSagUniforms) {
                     hogSagUniforms.amount.value = hogSagWorld / physScale; // world→船体ローカル単位
