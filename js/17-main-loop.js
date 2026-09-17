@@ -216,10 +216,19 @@ function animate() {
             const MASS_REF = 1.5;
             const massFactor = THREE.MathUtils.clamp(Math.sqrt(MASS_REF / physics.mass), 0.12, 1.0);
 
-            const _buoy = computeHullBuoyancyPhysics(
-                physics.cgWorldX, physics.cgWorldZ, rotY, physics.pitch,
-                physics.y, waterlineYScaled, physScale, len, t, cgZScaled
-            );
+            // v165-fix: このファイル(17)はindex.htmlで18-hull-wake-physics.jsより
+            // 先に読み込まれ、末尾で即座にanimate()を開始する。そのため最初の
+            // 数フレームは computeHullBuoyancyPhysics がまだ未定義で、ここが
+            // ReferenceErrorを投げ、animate()の残り（船体姿勢の更新やレンダリング
+            // 呼び出しを含む）がまるごと飛ばされていた。下の `_buoy ? ... : 既定値`
+            // というフォールバックが元々あるので、未定義のうちはnullを入れて
+            // そのフォールバックに乗せればよい。
+            const _buoy = (typeof computeHullBuoyancyPhysics === 'function')
+                ? computeHullBuoyancyPhysics(
+                    physics.cgWorldX, physics.cgWorldZ, rotY, physics.pitch,
+                    physics.y, waterlineYScaled, physScale, len, t, cgZScaled
+                  )
+                : null;
             const volSubmerged   = _buoy ? Math.max(0, _buoy.volSubmerged) : 0;
             const AwpReal        = _buoy ? Math.max(0.05, _buoy.Awp) : 1.0;
             const momentVolAboutCG = _buoy ? _buoy.momentVolAboutCG : 0;
@@ -344,7 +353,13 @@ function animate() {
             //  船中央（Stage 3）── ホギング/サギングの視覚的な船体曲げ
             //  剛体物理には影響させず、hogSagUniforms経由でシェーダーにのみ反映する。
             // ════════════════════════════════════════════════════════════
-            if (HOGSAG_ENABLED && typeof computeHogSagAmount === 'function') {
+            // v165-fix: HOGSAG_ENABLED は 21-bow-stern-effects.js のトップレベル
+            // const で、index.html上ではこのファイル(17)より後に読み込まれる。
+            // 17は末尾でanimate()を即開始するため、最初の数フレームはこの参照が
+            // ReferenceErrorになり、animate()の残り（レンダリング呼び出しを含む）が
+            // まるごと飛んでいた。08-model-loading-and-lighting.js:1732 の同じ参照は
+            // 既に typeof ガードを付けてあるので、ここも同じ形に揃える。
+            if (typeof HOGSAG_ENABLED !== 'undefined' && HOGSAG_ENABLED && typeof computeHogSagAmount === 'function') {
                 const hogSagWorld = computeHogSagAmount(physics.cgWorldX, physics.cgWorldZ, rotY, physScale, len, t, subDt);
                 if (typeof hogSagUniforms !== 'undefined' && hogSagUniforms) {
                     hogSagUniforms.amount.value = hogSagWorld / physScale; // world→船体ローカル単位
@@ -758,6 +773,9 @@ function updateSunShadowFollow() {
     }
 }
 
+// v166: 設計喫水での輪郭前後端を引くための共有スクラッチ（毎フレーム使う）
+const _mainLoopWlEnds = { k0:0, k1:0, f:0, sternAlong:0, bowAlong:0 };
+
 function updateWater(t) {
     if (waterMesh && !waterMesh.visible) return;
     if (!window._waterUniforms) return;
@@ -779,7 +797,33 @@ function updateWater(t) {
         const ps = physics.scale || 1;
         uni.hullHalfLenU.value = (hp && hp.ready ? hp.halfLen : 6.0) * ps;
         const dst = uni.hullWidthsU.value;
-        if (hp && hp.ready && hp.slices && hp.slices.length > 0) {
+        // v166: 船体マスクの幅テーブルも、実測形状(hp.shape)の設計喫水断面から
+        // 作る。従来は24等分スライスの半幅＋頂点密度から推定した先端位置を
+        // 渡していたため、GPU側のマスクだけが実際の喫水線輪郭（CPU側の泡帯）と
+        // 食い違い、船首尾で引き波の泡が船体からはみ出す/内側に食い込む原因に
+        // なっていた。ここを同じ出所に揃えると両者が必ず一致する。
+        if (hp && hp.ready && hp.shape && hp.shape.ready && typeof hullShapeHalfWidthAtAlong === 'function') {
+            const sh = hp.shape;
+            const halfLen = Math.max(hp.halfLen, 1e-6);
+            // 設計喫水はレベル格子の途中に来るので、レベル配列の生値ではなく
+            // 補間済みの前後端を使う。生値だと格子とのわずかなズレで、両端の
+            // サンプルが輪郭の外（幅0）に落ちることがある。
+            const de = hullShapeEndsAtY(sh, sh.designWaterlineY, _mainLoopWlEnds);
+            const sternA = de.sternAlong, bowA = de.bowAlong;
+            const n = dst.length;
+            for (let i = 0; i < n; i++) {
+                const a = sternA + (bowA - sternA) * (i / (n - 1));
+                dst[i] = hullShapeHalfWidthAtAlong(sh, sh.designWaterlineY, a) * ps;
+            }
+            uni.hullSliceCountU.value = n;
+            uni.hullSliceAlongMinU.value = sternA / halfLen;
+            uni.hullSliceAlongMaxU.value = bowA / halfLen;
+            // 実測輪郭の前後端がそのまま先端。幅は端のstation値（先細りの結果）。
+            uni.bowTipAlongNormU.value   = bowA / halfLen;
+            uni.bowTipWidthU.value       = dst[n - 1];
+            uni.sternTipAlongNormU.value = sternA / halfLen;
+            uni.sternTipWidthU.value     = dst[0];
+        } else if (hp && hp.ready && hp.slices && hp.slices.length > 0) {
             const n = Math.min(hp.slices.length, dst.length);
             for (let i = 0; i < n; i++) dst[i] = hp.slices[i].halfWidth * ps;
             uni.hullSliceCountU.value = n;
