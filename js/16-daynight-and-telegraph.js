@@ -123,7 +123,16 @@ function updateDayNightCycle(dayProgress) {
     // v170: 天候による減光。時刻で決まる明るさに掛け算することで、
     // 「曇りの朝」「快晴の夕方」が自然に両立する（どちらか一方が
     // もう一方を上書きしてしまわない）。
-    const wxMul = window.weatherLightMul || { sun: 1, ambient: 1, hemi: 1, fog: 1 };
+    const wxMul = window.weatherLightMul || { sun: 1, ambient: 1, hemi: 1, fog: 1, grey: 0, waterDark: 1 };
+    // 曇天・雨・霧では、空と霧の色を灰色へ寄せ、少し暗くする（青空の色のまま
+    // 暗くなるだけだと、どんよりした天気に見えないため）
+    if (wxMul.grey > 0.001) {
+        const g = wxMul.grey;
+        for (const c of [fogColor, background]) {
+            const l = (c.r * 0.3 + c.g * 0.55 + c.b * 0.15) * (1 - g * 0.35);
+            c.setRGB(c.r + (l - c.r) * g, c.g + (l - c.g) * g, c.b + (l * 1.04 - c.b) * g);
+        }
+    }
     sunLight.intensity += (lightIntensity * lightSettings.sunMult * wxMul.sun - sunLight.intensity) * 0.05;
     sunLight.color.lerp(lightColor, 0.05);
     scene.background.lerp(background, 0.05);
@@ -163,6 +172,13 @@ function updateDayNightCycle(dayProgress) {
             u.deepColor.value.setRGB(b * 0.5, b * 0.8, b * 2.0);
             u.shallowColor.value.setRGB(b * 1.0, b * 2.0, b * 4.5);
             u.foamColor.value.setRGB(0.3 + moonPhaseFactor * 0.3, 0.35 + moonPhaseFactor * 0.35, 0.4 + moonPhaseFactor * 0.4);
+        }
+        // 曇天・荒天では海の色も暗く沈む
+        const wd = (typeof wxMul.waterDark === 'number') ? wxMul.waterDark : 1;
+        if (wd < 0.999) {
+            u.deepColor.value.multiplyScalar(wd);
+            u.shallowColor.value.multiplyScalar(wd);
+            u.foamColor.value.multiplyScalar(0.55 + 0.45 * wd);
         }
     }
     if (skyMesh && skyMesh.material.uniforms) {

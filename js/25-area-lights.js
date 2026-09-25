@@ -48,9 +48,9 @@
 
 // 画質ごとの枠の数と、そのうち影を落とす枠の数・影の解像度
 const AREA_LIGHT_BUDGET = {
-    high:     { active: 6, shadows: 3, mapSize: 1024 },
-    medium:   { active: 5, shadows: 2, mapSize: 1024 },
-    low:      { active: 4, shadows: 1, mapSize: 512 },
+    high:     { active: 10, shadows: 3, mapSize: 1024 },
+    medium:   { active: 7,  shadows: 2, mapSize: 1024 },
+    low:      { active: 5,  shadows: 1, mapSize: 512 },
     verylow:  { active: 3, shadows: 0, mapSize: 512 },
     ultralow: { active: 2, shadows: 0, mapSize: 512 },
 };

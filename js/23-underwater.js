@@ -6,14 +6,16 @@
 //   ・画面周辺が暗く落ちる（ビネット）
 //   ・空ドームを隠す（水中から空がそのまま見えていると台無しになる）
 //
-// 【設計方針】状態を保存・復元しない
+// 【設計方針】描画の直前に上書きし、描画の直後に元へ戻す
 //   霧の色/濃さ・環境光・空の背景色は、16-daynight-and-telegraph.js の
-//   updateDayNightCycle() が毎フレーム時刻に応じて目標値へ寄せている。
-//   ここで値を退避して戻す方式にすると、両者が同じ変数を奪い合って
-//   「浮上した瞬間だけ色が飛ぶ」「日の出の色が出ない」といった競合が起きる。
-//   そこで updateUnderwater() は必ず updateDayNightCycle() の**後**に呼び、
-//   その時点の「水上での正しい値」を入力として受け取り、水中ぶんを
-//   上書きするだけにする。浮上すれば何もしないので自然に元へ戻る。
+//   updateDayNightCycle() が毎フレーム「今の値から目標値へ少しずつ寄せる」
+//   形で更新している。水中の値を書き込んだままにすると、昼夜処理はその
+//   水中の値から寄せ直すことになり、浮上してもなかなか元に戻らない
+//   （しかも光の強さは毎フレーム掛け算が積み重なって、船が真っ黒になる）。
+//   そこで updateUnderwater() は描画の直前に「水上での正しい値」を退避して
+//   から水中の値を書き込み、描画が終わったら restoreUnderwaterOverrides() で
+//   退避した値へ戻す。昼夜処理は常に水上の値だけを見るので、浮上した瞬間に
+//   元どおりの見た目になる。
 //
 // 【ワールドスケールについて】
 //   このアプリのワールド1単位はおおよそ1メートル（船の全長12単位 ×
@@ -39,6 +41,8 @@ const UW_LIGHT_AT_DEPTH   = 0.12;
 
 let _uwOverlay = null;      // ビネット/色かぶり用のDOM要素
 let _uwActive  = false;
+// 描画の直前に退避した「水上での値」（restoreUnderwaterOverrides で戻す）
+let _uwSaved = null;
 
 // 現在の水没度（0=完全に空中, 1=完全に水中）。他モジュールからも参照できるよう公開する。
 window.underwaterAmount = 0;
@@ -75,6 +79,7 @@ function _uwEnsureOverlay() {
 
 // 毎フレーム呼ぶ。updateDayNightCycle() より後、描画より前。
 function updateUnderwater(t) {
+    _uwSaved = null;
     if (typeof scene === 'undefined' || !scene || typeof camera === 'undefined' || !camera) return;
 
     const cam = camera;
@@ -84,8 +89,13 @@ function updateUnderwater(t) {
         : 0;
     const depth = surfaceY - cam.position.y;   // 正なら水中
 
+    // 船体設定（設定パネルを開いている間）は、船底を下から確認することが
+    // あるので水中表現を出さない。
+    const panel = document.getElementById('settings-panel');
+    const designMode = !!(panel && panel.classList.contains('open'));
+
     // 水面をまたぐ所をぼかす。波で±数cm出入りしても点滅しない。
-    const amount = _uwSmoothstep(-UW_SURFACE_BLEND, UW_SURFACE_BLEND, depth);
+    const amount = designMode ? 0 : _uwSmoothstep(-UW_SURFACE_BLEND, UW_SURFACE_BLEND, depth);
     window.underwaterAmount = amount;
     window.underwaterDepth  = Math.max(0, depth);
 
@@ -105,6 +115,17 @@ function updateUnderwater(t) {
         return;
     }
     _uwActive = true;
+
+    // ── 水上での値を退避（描画後に restoreUnderwaterOverrides で戻す）──
+    _uwSaved = {
+        fogDensity: scene.fog ? scene.fog.density : null,
+        fogColor: scene.fog ? scene.fog.color.clone() : null,
+        background: (scene.background && scene.background.isColor) ? scene.background.clone() : null,
+        sun:     (typeof sunLight !== 'undefined' && sunLight) ? sunLight.intensity : null,
+        ambient: (typeof ambientLight !== 'undefined' && ambientLight) ? ambientLight.intensity : null,
+        hemi:    (typeof hemiLight !== 'undefined' && hemiLight) ? hemiLight.intensity : null,
+        fill:    (typeof fillLight !== 'undefined' && fillLight) ? fillLight.intensity : null,
+    };
 
     // 深度の正規化（0=水面直下, 1=UW_DEPTH_FULL以深）
     const dn = _uwSmoothstep(0, UW_DEPTH_FULL, Math.max(0, depth));
@@ -173,4 +194,18 @@ function updateUnderwater(t) {
     // ── ビネット ──
     const el = _uwEnsureOverlay();
     el.style.opacity = String((0.45 + 0.45 * dn) * amount);
+}
+
+// 描画の直後に呼ぶ（17-main-loop.js）。updateUnderwater() が描画のために
+// 書き換えた霧・背景・光の強さを、水上での値へ戻す。
+function restoreUnderwaterOverrides() {
+    const sv = _uwSaved;
+    if (!sv) return;
+    _uwSaved = null;
+    if (scene.fog && sv.fogColor) { scene.fog.density = sv.fogDensity; scene.fog.color.copy(sv.fogColor); }
+    if (sv.background && scene.background && scene.background.isColor) scene.background.copy(sv.background);
+    if (sv.sun !== null)     sunLight.intensity = sv.sun;
+    if (sv.ambient !== null) ambientLight.intensity = sv.ambient;
+    if (sv.hemi !== null)    hemiLight.intensity = sv.hemi;
+    if (sv.fill !== null)    fillLight.intensity = sv.fill;
 }

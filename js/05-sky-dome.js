@@ -17,7 +17,13 @@ function createSkyDome() {
             // v170: 雲量(0=快晴〜1=どんより)。24-weather.js が毎フレーム書き込む。
             // 従来は雲の出方が固定しきい値だったため、天候が変わっても空だけが
             // いつも同じ雲だった。
-            cloudAmount: { value: 0.35 }
+            cloudAmount: { value: 0.35 },
+            // 天候の見た目（24-weather.js / 29-weather-fx.js が毎フレーム書き込む）
+            overcast: { value: 0.0 },                        // どんより暗い空（0〜1）
+            fogVeil: { value: 0.0 },                         // 霧・雨で空が霞む割合（0〜1）
+            fogTintColor: { value: new THREE.Color(0.5, 0.55, 0.6) }, // 霞の色（＝霧の色）
+            lightningFlash: { value: 0.0 },                  // 雷の閃光（0〜数）
+            lightningDir: { value: new THREE.Vector3(0, 0.3, 1).normalize() } // 雷の方向
         },
         vertexShader: `
             varying vec3 vWorldPosition;
@@ -40,6 +46,11 @@ function createSkyDome() {
             uniform float auroraStrength;
             uniform float skyExposure;
             uniform float cloudAmount;
+            uniform float overcast;
+            uniform float fogVeil;
+            uniform vec3  fogTintColor;
+            uniform float lightningFlash;
+            uniform vec3  lightningDir;
 
             float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
             float hash3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
@@ -111,6 +122,9 @@ function createSkyDome() {
                     cloud *= smoothstep(0.02, 0.12, h); 
                     vec3 cloudLit  = mix(vec3(0.55, 0.60, 0.70), vec3(1.0, 0.97, 0.93), dayFactor);
                     vec3 cloudShad = mix(vec3(0.12, 0.14, 0.20), vec3(0.55, 0.58, 0.65), dayFactor);
+                    // 荒天の雲は分厚く、下から見ると暗い灰色になる
+                    cloudLit  *= 1.0 - overcast * 0.55;
+                    cloudShad *= 1.0 - overcast * 0.6;
                     float cloudLight = dot(dir, sunDirection) * 0.5 + 0.5;
                     vec3 cloudColor = mix(cloudShad, cloudLit, cloudLight);
                     cloudColor = mix(cloudColor, vec3(0.95, 0.52, 0.20), dawnFactor * cloudLight * 0.7);
@@ -118,7 +132,21 @@ function createSkyDome() {
                     cloudCover = cloud;
                 }
 
-                float starVis = nightFactor * (1.0 - cloudCover * 0.95);
+                // どんよりした空：青空の色を抜いて暗い灰色へ
+                {
+                    float lumS = dot(skyColor, vec3(0.3, 0.55, 0.15));
+                    skyColor = mix(skyColor, vec3(lumS * 0.62), overcast * 0.75);
+                }
+                // 雷：雲の中が一瞬明るく光る（光った方向ほど強く、雲が厚いほど広がる）
+                if (lightningFlash > 0.001) {
+                    float toward = max(0.0, dot(dir, lightningDir));
+                    float glow = pow(toward, 3.0) * 1.6 + 0.35;
+                    skyColor += vec3(0.78, 0.82, 1.0) * lightningFlash * glow * (0.4 + cloudCover * 0.9) * smoothstep(-0.05, 0.1, h);
+                }
+
+                // 曇天・霧・雨では星は見えない
+                float starVis = nightFactor * (1.0 - cloudCover * 0.95) * (1.0 - overcast)
+                              * (1.0 - clamp(fogVeil * 1.6, 0.0, 1.0));
                 if (starVis > 0.01 && h > -0.05) {
                     vec3 sd = floor(dir * 280.0);
                     float starRaw = hash3(sd);
@@ -228,6 +256,12 @@ function createSkyDome() {
                     skyColor = mix(skyColor, moonColor, diskAlpha);
                 }
 
+                // 霧・雨：空の上の方まで霞で覆う（地平線ほど濃い）。
+                // 空ドームは scene.fog の影響を受けないので、ここで霧の色へ寄せる。
+                if (fogVeil > 0.001) {
+                    float veil = fogVeil * mix(1.0, 0.72, smoothstep(0.0, 0.8, h));
+                    skyColor = mix(skyColor, fogTintColor / max(skyExposure, 0.01), clamp(veil, 0.0, 1.0));
+                }
                 gl_FragColor = vec4(max(skyColor * skyExposure, vec3(0.0)), 1.0);
                 // v83: 完全自前シェーダーのため、船体(標準マテリアル)と同じ見え方に
                 // 揃えるべくトーンマッピング＋sRGB出力エンコードを明示的に適用する。
@@ -296,6 +330,9 @@ function maybeUpdateEnvironmentMap(dt) {
     if (!envPmremGenerator) return;
     envRefreshTimer += dt;
     if (envRefreshTimer < 2.0) return; // 空はゆっくり変化するので2秒に1回で十分
+    // 雷の閃光の最中に撮ると、次に撮り直すまでの2秒間、船の反射が明るいまま
+    // 残ってしまうので、閃光が収まるまで待つ（29-weather-fx.js）
+    if (window._lightningActive) return;
     envRefreshTimer = 0;
     updateEnvironmentMap();
 }

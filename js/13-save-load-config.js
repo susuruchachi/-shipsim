@@ -104,6 +104,7 @@ function collectShipConfig() {
             hemiMult: lightSettings.hemiMult,
             fillMult: lightSettings.fillMult,
             exposure: lightSettings.exposure,
+            autoExposure: lightSettings.autoExposure !== false,
             fogMult: lightSettings.fogMult,
             glbMaster: lightSettings.glbMaster,
             windowGlowMult: lightSettings.windowGlowMult,
@@ -287,6 +288,11 @@ function applyShipConfig(cfg) {
         if (Number.isFinite(lt.hemiMult)) lightSettings.hemiMult = lt.hemiMult;
         if (Number.isFinite(lt.fillMult)) lightSettings.fillMult = lt.fillMult;
         if (Number.isFinite(lt.exposure)) lightSettings.exposure = lt.exposure;
+        if (typeof lt.autoExposure === 'boolean' && typeof setAutoExposureEnabled === 'function') {
+            setAutoExposureEnabled(lt.autoExposure);
+            const cbAe = $('light-auto-exposure');
+            if (cbAe) cbAe.checked = lt.autoExposure;
+        }
         if (Number.isFinite(lt.fogMult)) lightSettings.fogMult = lt.fogMult;
         if (Number.isFinite(lt.glbMaster)) lightSettings.glbMaster = lt.glbMaster;
         if (Number.isFinite(lt.windowGlowMult)) lightSettings.windowGlowMult = lt.windowGlowMult;
@@ -318,6 +324,8 @@ function applyShipConfig(cfg) {
             const c = wx.custom;
             if (Number.isFinite(c.beaufort)) window.weather.custom.beaufort = c.beaufort;
             if (Number.isFinite(c.cloud))    window.weather.custom.cloud = c.cloud;
+            window.weather.custom.rain = Number.isFinite(c.rain) ? c.rain : 0;
+            window.weather.custom.fog  = Number.isFinite(c.fog)  ? c.fog  : 0;
             window.weather.custom.windDir = Number.isFinite(c.windDir) ? c.windDir : null;
         }
         if (wx && wx.presetKey && typeof setWeatherPreset === 'function') {

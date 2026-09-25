@@ -25,6 +25,9 @@ function animate() {
     // updateDayNightCycle より前に置くのは、天候が決める減光倍率
     // (window.weatherLightMul) を同じフレームの時刻計算に反映させるため。
     if (typeof updateWeather === 'function') updateWeather(dt, t);
+    // 外洋波の位相を進める。天候が決めた波長・風向を受けて、波高を使う処理
+    // （浮力・パーティクル・水面描画）より前に1回だけ行う。基準点は船の位置。
+    if (typeof updateOceanWaveState === 'function') updateOceanWaveState(t, physics.cgWorldX, physics.cgWorldZ);
 
     updateDayNightCycle(physics.dayProgress);
     updateSunShadowFollow();               // v83: 太陽シャドウカメラを船へ追従
@@ -277,8 +280,27 @@ function animate() {
             //   直接キャップする。これにより船のサイズ・速度域によらず一貫して
             //   「大波でもある程度は減速するが、指示速度の大部分は維持できる」
             //   という挙動になる。
-            const maxBowDragLossFrac = 0.25; // 波の抵抗だけで指示速度の最大25%までしか奪わない（0.4→0.25、まだ強すぎるとのフィードバックのため再調整）
+            // 上限は一律25%ではなく、海況（有義波高÷船長）で決める
+            // （21-bow-stern-effects.js の bowDragLossCap）。中程度の海ではほぼ
+            // 減速せず、時化で2割前後。長い船ほど同じ波でも減速しにくい。
+            const _hsNow = (typeof estimateSignificantWaveHeight === 'function')
+                ? estimateSignificantWaveHeight(physics.cgWorldX, physics.cgWorldZ, t) : 0;
+            window._seaHs = _hsNow;
+            const maxBowDragLossFrac = (typeof bowDragLossCap === 'function')
+                ? bowDragLossCap(_hsNow, 12.0 * physics.scale) : 0.25;
             const thrustAuthority = 0.3 / Math.max(0.05, physics.mass);
+            // スラミングによる減速（船首・船尾共通、SLAM_SPEED_LOSS_INTERVAL 秒に1回まで）。
+            // 1回の減速量は、強いスラミングが続いてもつり合いの速度低下が
+            // SLAM_SPEED_LOSS_EQ 程度に収まるよう、推進の立ち上がりの速さから決める。
+            const applySlamSpeedLoss = (slamRatio) => {
+                const lastT = (typeof window._lastSlamSpeedLossT === 'number') ? window._lastSlamSpeedLossT : -1e9;
+                if (t - lastT < SLAM_SPEED_LOSS_INTERVAL) return;
+                window._lastSlamSpeedLossT = t;
+                // 衝撃の強さ（判定しきい値の何倍か）で 0.3〜1 に
+                const severity = THREE.MathUtils.clamp((slamRatio - SLAM_RATIO_THRESHOLD) / SLAM_RATIO_THRESHOLD, 0.3, 1.0);
+                const lossFrac = Math.min(0.05, SLAM_SPEED_LOSS_EQ * SLAM_SPEED_LOSS_INTERVAL * thrustAuthority * severity);
+                physics.speed *= (1 - lossFrac);
+            };
             const MAX_BOW_DRAG_ACCEL = Math.abs(physics.targetSpeed) * maxBowDragLossFrac * thrustAuthority;
             const bowDragAcc = _bowF ? Math.min(_bowF.dragForce / massKg, MAX_BOW_DRAG_ACCEL) : 0;
             window._bowExcessVol = _bowF ? _bowF.bowExcess : 0; // Stage4のグリーンウォーター判定用に公開
@@ -286,17 +308,10 @@ function animate() {
             window._bowSlamRatioLive = _bowF ? (_bowF.slamRatio || 0) : 0; // 連続値(イベント発火の有無に関わらず毎フレーム更新)
 
             if (_bowF && _bowF.slammed) {
-                // スラミング発生: 瞬間的な減速（水柱・衝撃音等の演出はStage 4以降で追加）
-                // 【修正】以前はSLAM_SPEED_DAMP(0.985)を船の規模によらず一律で掛けていたため、
-                // 大型船でも小型艇と全く同じ割合(1.5%)だけ速度がガクッと落ちてしまっていた。
-                // 大型船ほど運動量(慣性)が大きく、波を1発浴びただけで急減速はしないはず
-                // （力積Δp=一定なら、Δv=Δp/massで質量が大きいほど速度変化は小さい）。
-                // 上のmassFactor（ヒーブ応答減衰と共用、sqrt(MASS_REF/mass)で大型船ほど
-                // 小さくなる係数）を「速度損失分」にだけ掛けることで、基準船型
-                // (MASS_REF=1.5≒1500トン級)では従来通りの減速感を保ちつつ、大型船ほど
-                // スラミング1回あたりの速度低下がなだらかになるようにする。
-                const slamLossFrac = (1 - SLAM_SPEED_DAMP) * massFactor;
-                physics.speed *= (1 - slamLossFrac);
+                // スラミング発生: 瞬間的な減速。大きさと頻度の決め方は
+                // 21-bow-stern-effects.js の SLAM_SPEED_LOSS_* の説明を参照
+                // （判定自体は演出用に細かく出るが、減速は数秒に1回まで）。
+                applySlamSpeedLoss(_bowF.slamRatio);
                 window._bowSlamEvent = { t, impactRate: _bowF.impactRate, slamRatio: _bowF.slamRatio };
                 // デバッグ用: ポーポイズ(連続スラミング)が起きていないか件数で確認できるようにする
                 window._bowSlamCount = (window._bowSlamCount || 0) + 1;
@@ -323,9 +338,7 @@ function animate() {
                 physics.speed -= thrustLossAcc * subDt;
 
                 if (_sternF.slammed) {
-                    // Bow Slammingと同じ考え方（massFactorで大型船ほど減衰を弱める）を流用
-                    const sternSlamLossFrac = (1 - SLAM_SPEED_DAMP) * massFactor;
-                    physics.speed *= (1 - sternSlamLossFrac);
+                    applySlamSpeedLoss(_sternF.slamRatio);   // 船首と共通の間隔制限
                     window._sternSlamEvent = { t, impactRate: _sternF.impactRate, slamRatio: _sternF.slamRatio };
                 }
                 // レーシング強度(0=通常, 1=完全空転)。Stage6のRPM上昇・振動演出用に公開。
@@ -614,12 +627,24 @@ function animate() {
     // 入力として、カメラが水没していればその上から水中ぶんを掛ける。
     // 描画の直前に置くことで、この1フレームぶんの上書きだけで完結する
     // （状態の退避・復元が不要になり、時刻変化との競合も起きない）。
+    // 雨・雷・空の曇り/霞（29-weather-fx.js）。雷の閃光は描画の間だけ光を上書きする。
+    if (typeof updateWeatherFx === 'function') updateWeatherFx(t);
+    if (typeof applyWeatherFxRenderOverrides === 'function') applyWeatherFxRenderOverrides();
     if (typeof updateUnderwater === 'function') updateUnderwater(t);
 
     // エリアライト・発光パネル（25-area-lights.js）。船の位置・姿勢が確定した
     // この位置で呼ぶ。影マップを描き直さないフレームは影の変換行列だけを
     // 更新するので、ここより前で呼ぶと影が1フレーム分船に置いていかれる。
     if (typeof updateAreaLights === 'function') updateAreaLights(t);
+    if (typeof updateGlowHalos === 'function') updateGlowHalos();   // 遠景用の光のにじみ（26）
+    // 自動露出（30-auto-exposure.js）：目の慣れのように露出を少しずつ合わせる
+    if (typeof applyAutoExposure === 'function') applyAutoExposure(t);
+    // 水面の霧（04 の水面シェーダーは自前なので scene.fog を手で渡す）。
+    // 水中表現が霧を上書きした後のここで渡すと、水中から見上げた水面も霞む。
+    if (window._waterUniforms && window._waterUniforms.waterFogColor && scene.fog) {
+        window._waterUniforms.waterFogColor.value.copy(scene.fog.color);
+        window._waterUniforms.waterFogDensity.value = scene.fog.density;
+    }
 
     if (bloomEnabled && bloomComposer) {
         renderWithBloom();
@@ -627,6 +652,9 @@ function animate() {
         renderer.shadowMap.needsUpdate = true;   // 影は本描画で1回だけ（04参照）
         renderer.render(scene, camera);
     }
+    // 水中表現が描画のために書き換えた霧・光を、水上での値へ戻す（23-underwater.js）
+    if (typeof restoreUnderwaterOverrides === 'function') restoreUnderwaterOverrides();
+    if (typeof restoreWeatherFxRenderOverrides === 'function') restoreWeatherFxRenderOverrides();
 
     // v137: 描画完了直後にスクリーンショット待ちがあればキャプチャする
     // （preserveDrawingBuffer未設定のためrAF後では手遅れになり得るので、
@@ -638,6 +666,8 @@ function animate() {
         window._pendingScreenshotCallback = null;
         cb(renderer.domElement);
     }
+    // 描き終えた画面の明るさをときどき測る（自動露出、30-auto-exposure.js）
+    if (typeof sampleAutoExposure === 'function') sampleAutoExposure(t);
 }
 
 // 水面反射：カメラをy=0でミラーして低解像度レンダリングし、反射テクスチャを更新する
@@ -808,6 +838,34 @@ function updateWater(t) {
     uni.chopStrengthU.value  = (typeof physics.chopStrength  === 'number') ? physics.chopStrength  : 1.0;
     uni.windDirU.value       = (typeof physics.windDir   === 'number') ? physics.windDir   : 45;
     uni.windSpeedU.value     = (typeof physics.windSpeed === 'number') ? physics.windSpeed : 5;
+    // 外洋波の位相（02-utils-and-wave-physics.js の oceanWaveState）をそのまま渡す
+    if (typeof oceanWaveState !== 'undefined' && oceanWaveState.t !== null && uni.waveK01U) {
+        const S = oceanWaveState;
+        uni.waveK01U.value.set(S.K[0], S.K[1], S.K[2], S.K[3]);
+        uni.waveK23U.value.set(S.K[4], S.K[5], S.K[6], S.K[7]);
+        uni.wavePhaseU.value.set(S.phi[0], S.phi[1], S.phi[2], S.phi[3]);
+        uni.waveOriginU.value.set(S.ax, S.az);
+    }
+    // 水面の細かい波紋テクスチャが風で流れた量を積み上げる。
+    // （「風向×time×速さ」を毎回計算すると、風が変わった瞬間に経過時間ぶん
+    //   模様が飛ぶので、速さ×dt を足していく）
+    if (uni.detailOff1U) {
+        const dtW = (updateWater._lastT == null) ? 0 : Math.min(0.1, Math.max(0, t - updateWater._lastT));
+        updateWater._lastT = t;
+        const wr = ((typeof physics.windDir === 'number') ? physics.windDir : 45) * Math.PI / 180;
+        const wx = Math.sin(wr), wz = Math.cos(wr);
+        const wn = THREE.MathUtils.clamp(((typeof physics.windSpeed === 'number') ? physics.windSpeed : 5) / 20, 0, 1.5);
+        const rot = (a) => [wx * Math.cos(a) - wz * Math.sin(a), wx * Math.sin(a) + wz * Math.cos(a)];
+        const v2 = rot(2.29), v3 = rot(0.82);   // 約131°・約47°回した向き
+        const add = (u, vx, vz, spd) => {
+            // テクスチャは繰り返しなので、整数ぶんは捨てて精度を保つ
+            u.value.x = (u.value.x + vx * spd * dtW) % 1;
+            u.value.y = (u.value.y + vz * spd * dtW) % 1;
+        };
+        add(uni.detailOff1U,  wx,     wz,    0.010 + wn * 0.010);
+        add(uni.detailOff2U, -v2[0], -v2[1], 0.008 + wn * 0.009);
+        add(uni.detailOff3U,  v3[0],  v3[1], 0.005 + wn * 0.004);
+    }
     uni.physScaleU.value     = Math.max(0.25, physics.scale || 1);
     {
         const hp = (typeof window !== 'undefined' && window.hullProfile) ? window.hullProfile : null;

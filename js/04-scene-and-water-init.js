@@ -496,6 +496,20 @@ function createWater() {
         chopStrengthU:  { value: 1.0 },
         windDirU:       { value: (typeof physics !== 'undefined' && typeof physics.windDir === 'number') ? physics.windDir : 45 },
         windSpeedU:     { value: (typeof physics !== 'undefined' && typeof physics.windSpeed === 'number') ? physics.windSpeed : 5 },
+        // 外洋波の位相（02-utils-and-wave-physics.js の oceanWaveState と同じもの）。
+        // 位相 = K·(xz − 基準点) + φ。時刻や風向を式の中で直接使わないので、
+        // 風向・波長が変わっても波が飛んだり暴走したりしない。
+        waveK01U:       { value: new THREE.Vector4() },   // (K0x, K0z, K1x, K1z)
+        waveK23U:       { value: new THREE.Vector4() },   // (K2x, K2z, K3x, K3z)
+        wavePhaseU:     { value: new THREE.Vector4() },   // φ0..φ3
+        waveOriginU:    { value: new THREE.Vector2() },   // 基準点（ワールドXZ）
+        // 水面の細かい波紋テクスチャの流れ（風で流れた量を積み上げたもの）
+        detailOff1U:    { value: new THREE.Vector2() },
+        detailOff2U:    { value: new THREE.Vector2() },
+        detailOff3U:    { value: new THREE.Vector2() },
+        // 霧（scene.fog と同じ FogExp2 の式を自前で掛ける。17-main-loop.js の updateWater が毎フレーム反映）
+        waterFogColor:   { value: new THREE.Color(0, 0, 0) },
+        waterFogDensity: { value: 0.0 },
         physScaleU:     { value: 1.0 },
         hullHalfLenU:   { value: 6.0 },
         hullSliceCountU:{ value: 0 },
@@ -950,6 +964,10 @@ function createWater() {
             uniform float     chopStrengthU;
             uniform float     windDirU;
             uniform float     windSpeedU;
+            uniform vec4      waveK01U;
+            uniform vec4      waveK23U;
+            uniform vec4      wavePhaseU;
+            uniform vec2      waveOriginU;
             uniform float     physScaleU;
             uniform float     hullHalfLenU;
             uniform int       hullSliceCountU;
@@ -1004,42 +1022,33 @@ function createWater() {
             // 自動的に引き上げる」カップリングをここでも適用し、見た目と物理の
             // 急峻さ(波形勾配)を一致させる。
             vec2 oceanWaveHC(vec2 xz, float t, float h, float wIn) {
-                float autoWidthMin = h * 0.0782; // ≒ 0.005214/(1/15)
-                float w = max(wIn, autoWidthMin);
-
-                // ── v95: 風向・風速を波形に反映（CPU側 getWaveCrestAndHeight と対で維持）──
-                // ①向き: 位相計算に使うxzを風向の分だけ回転させ、うねり・チョップの
-                //   進行方向を風向スライダーに追従させる。
-                // ②シャープさ: crestだけ風速に応じて指数(crestPow)を上げてピークを
-                //   鋭く・狭くする。heightは変えないので浮力に使う波高は変わらない。
-                float windRad = radians(windDirU);
-                float wCos = cos(windRad), wSin = sin(windRad);
-                vec2 rxz = vec2(xz.x * wCos - xz.y * wSin, xz.x * wSin + xz.y * wCos);
+                // 位相は CPU 側（updateOceanWaveState）が積み上げた K・φ・基準点から作る。
+                // 以前は風向で原点まわりに回した座標 × 波数 + time·ω を直接計算して
+                // いたため、風向・波長が変わると原点からの距離に比例して波が飛んだ
+                // （船が原点から遠いほど、波が急に猛スピードで流れて見えた）。
+                // t・wIn は互換のために残しているが使わない（CPU側で反映済み）。
+                vec2 d = xz - waveOriginU;
                 float windSharpen = min(1.6, windSpeedU / 18.0);
                 float crestPow = 2.0 + windSharpen;
 
-                float k1 = 0.018 / w;
-                float p1 = rxz.x * k1 + rxz.y * (k1 * 0.6) + t * 0.38;
+                float p1 = dot(waveK01U.xy, d) + wavePhaseU.x;
                 float s1 = sin(p1); float s1m = max(s1, 0.0);
                 float ww1 = (s1m * s1m) * 2.0 - 0.6;
                 float c1 = pow(s1m, crestPow);
 
-                float k2 = 0.026 / w;
-                float p2 = -rxz.x * k2 + rxz.y * (k2 * 0.8) + t * 0.52;
+                float p2 = dot(waveK01U.zw, d) + wavePhaseU.y;
                 float s2 = sin(p2); float s2m = max(s2, 0.0);
                 float ww2 = (s2m * s2m) * 2.0 - 0.7;
                 float c2 = pow(s2m, crestPow);
 
                 // うねり成分（最も波長が長い）
-                float k3 = 0.009 / w;
-                float p3 = rxz.y * k3 + t * 0.22;
+                float p3 = dot(waveK23U.xy, d) + wavePhaseU.z;
                 float s3 = sin(p3);
                 float ww3 = s3;
                 float c3 = s3 > 0.0 ? s3 * s3 : 0.0;
 
                 // チョップ成分（最も波長が短い）
-                float k4 = 0.072 / w;
-                float p4 = rxz.x * (k4 * 0.7) + rxz.y * k4 - t * 0.95;
+                float p4 = dot(waveK23U.zw, d) + wavePhaseU.w;
                 float s4 = sin(p4);
                 float ww4 = s4 * 0.5;
                 float c4 = s4 > 0.0 ? pow(s4, crestPow) : 0.0;
@@ -1402,6 +1411,11 @@ function createWater() {
             uniform float     time;
             uniform float     windDirU;
             uniform float     windSpeedU;
+            uniform vec2      detailOff1U;
+            uniform vec2      detailOff2U;
+            uniform vec2      detailOff3U;
+            uniform vec3      waterFogColor;
+            uniform float     waterFogDensity;
             uniform vec3      sunDir;
             uniform vec3      sunColor;
             uniform vec3      deepColor;
@@ -1602,25 +1616,21 @@ function createWater() {
                 float parallaxLen = length(parallaxDir);
                 if (parallaxLen > 4.0) parallaxDir = parallaxDir / parallaxLen * 4.0;
                 // ── v95: テクスチャ上の細かい波紋(法線マップ)の向き・流れる速さを風に連動 ──
-                // windVec: 船の進行方向と同じsin/cos規約（0度=+Z方向）の風向ベクトル。
-                // uv1は風向そのまま（メインの風波）、uv2はそこから約131°回した向き
-                // （元のクロスするうねり感を保ちつつ、主方向は風に追従させる）。
-                // 風速が強いほどスクロール速度も上げ、水面の細波が「風で流れている」
-                // ように見せる。
-                float windRadF = radians(windDirU);
-                vec2 windVec = vec2(sin(windRadF), cos(windRadF));
+                // uv1は風向そのまま（メインの風波）、uv2はそこから約131°回した向き、
+                // uv3は約47°回した向きに流れる。風速が強いほど速く流れ、水面の細波が
+                // 「風で流れている」ように見える。
                 float wSpdNorm = clamp(windSpeedU / 20.0, 0.0, 1.5);
-                vec2 uv1 = worldXZ + windVec * time * (0.010 + wSpdNorm * 0.010);
-                float xa = 2.29; // ≒131度: uv2をずらす角度（cos,sin併用で回転）
-                vec2 windVec2 = vec2(windVec.x * cos(xa) - windVec.y * sin(xa), windVec.x * sin(xa) + windVec.y * cos(xa));
-                vec2 uv2 = worldXZ * 1.85 - windVec2 * time * (0.008 + wSpdNorm * 0.009);
+                // 流れた量（風向×速さを時間で積み上げたもの）は CPU 側（17-main-loop.js の
+                // updateWater）で計算して detailOff*U で受け取る。以前は
+                // 「風向ベクトル×time×速さ」をここで直接計算していたため、風向・風速が
+                // 変わると経過時間の分だけ模様が一気にずれて、細波が暴走して見えた。
+                vec2 uv1 = worldXZ + detailOff1U;
+                vec2 uv2 = worldXZ * 1.85 + detailOff2U;
                 // v162: 「大きめの波」用の第3レイヤー。uv1/uv2よりUVスケールを縮小
                 // （＝1テクセルが世界座標でより広い範囲をカバーする＝模様が大きく見える）し、
                 // スクロールも遅くして、細波よりゆったりしたうねりとして流れさせる。
                 // 向きはuv1とも違う角度(約47°)に振って、3枚が同じ方向に重ならないようにする。
-                float xb = 0.82; // ≒47度
-                vec2 windVec3 = vec2(windVec.x * cos(xb) - windVec.y * sin(xb), windVec.x * sin(xb) + windVec.y * cos(xb));
-                vec2 uv3 = worldXZ * 0.42 + windVec3 * time * (0.005 + wSpdNorm * 0.004);
+                vec2 uv3 = worldXZ * 0.42 + detailOff3U;
                 // v163: 各UVで一度ハイトマップ(normalMapのBチャンネル)を読み、視線方向に
                 // ズラしたUVを最終サンプリング座標として使う。オフセット量はテクスチャの
                 // UVスケールに対して相対的に効くよう、各レイヤーのUV空間のスケールに
@@ -1762,6 +1772,13 @@ function createWater() {
 
                 vec3 finalColor = mix(waterBase + specular + shipRefl, foamColor, foam);
                 finalColor      = mix(finalColor, reflColor, reflMix);
+                // 霧：船や空と同じ FogExp2 の式。以前は水面だけ霧を受けず、霧の中でも
+                // 海だけ水平線までくっきり見えていた。
+                {
+                    float fd = length(vWorldPos - cameraPosition) * waterFogDensity;
+                    float fogF = 1.0 - exp(-fd * fd);
+                    finalColor = mix(finalColor, waterFogColor, clamp(fogF, 0.0, 1.0));
+                }
                 gl_FragColor = vec4(finalColor, 1.0);
                 // v83: このシェーダーは完全自前のためThree.jsの標準チャンクを何も
                 // includeしていない。船体(MeshStandardMaterial)は自動でトーン

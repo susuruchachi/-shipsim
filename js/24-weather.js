@@ -48,22 +48,39 @@ const WEATHER_WAVE_HEIGHT_BY_BEAUFORT = [
     14.0, // 12 颶風
 ];
 
-// 有義波高[m] → physics.waveRoughness への換算係数。
-// 02-utils-and-wave-physics.js の合成式では、波面の山から谷までの振れ幅が
-// おおよそ waveRoughness の5.3倍になる。ただしここは物理的な厳密さより
-// 「見た目の据わり」を優先した補正で、既定値 waveRoughness=1.0 が
-// ビューフォート5（有義波高2m）相当に見えるように 0.5 としている。
-const WEATHER_WAVE_ROUGHNESS_PER_METER = 0.5;
+// 有義波高[m] → physics.waveRoughness への換算。
+// 以前は「waveRoughness = 有義波高 × 0.5」の一定係数だったが、実際に水面を
+// 測ると目標の2〜3倍の波が立っていた（風力11で表は11.5mのところ約35m）。
+// うねり・チョップの強さも風力とともに上がるのに、それを換算に入れていな
+// かったため。02-utils-and-wave-physics.js の合成式
+//   η = h·(1.3·w1 + 0.7·w2 + 0.55·swell·w3 + 0.22·chop·w4)
+// の各成分の分散（w1,w2 = 2·max(sinθ,0)² − c → 0.5、w3 = sinθ → 0.5、
+// w4 = 0.5·sinθ → 0.125）から、有義波高 Hs = 4σ は
+//   Hs = 4h·√(1.09 + 0.151·swell² + 0.00605·chop²)
+// になる（実際に水面を標本化して測った値と一致することを確認済み）。
+// これを逆に解いて h を決めるので、見た目の波も船の揺れ・抵抗も表どおりの
+// 波の大きさになる。もっと派手な海にしたいときは WEATHER_WAVE_HEIGHT_SCALE を上げる。
+const WEATHER_WAVE_HEIGHT_SCALE = 1.0;
+function weatherRoughnessForHs(hs, swell, chop) {
+    const k = 4 * Math.sqrt(1.09 + 0.151 * swell * swell + 0.00605 * chop * chop);
+    return Math.max(0, hs) * WEATHER_WAVE_HEIGHT_SCALE / k;
+}
 
 // 天候プリセット。severity は 0(穏やか)〜1(大時化) の目安で、
 // 自動変化のランダムウォークはこの並び順の上を歩く。
+// rain（雨量）・fog（霧）は 0〜1。嵐では雷も鳴る（29-weather-fx.js）。
 const WEATHER_PRESETS = [
-    { key: 'calm',   label: '凪',       beaufort: 1.0, cloud: 0.06, haze: 0.7 },
-    { key: 'fair',   label: '晴れ',     beaufort: 3.0, cloud: 0.22, haze: 0.85 },
-    { key: 'breezy', label: 'やや波あり', beaufort: 5.0, cloud: 0.45, haze: 1.0 },
-    { key: 'rough',  label: '荒れ模様',  beaufort: 7.0, cloud: 0.78, haze: 1.7 },
-    { key: 'gale',   label: '時化',     beaufort: 9.0, cloud: 0.92, haze: 2.6 },
-    { key: 'storm',  label: '嵐',       beaufort: 11.0, cloud: 0.98, haze: 3.8 },
+    { key: 'calm',   label: '凪',       beaufort: 1.0, cloud: 0.06, haze: 0.7,  rain: 0.0,  fog: 0.0 },
+    { key: 'fair',   label: '晴れ',     beaufort: 3.0, cloud: 0.22, haze: 0.85, rain: 0.0,  fog: 0.0 },
+    { key: 'breezy', label: 'やや波あり', beaufort: 5.0, cloud: 0.45, haze: 1.0,  rain: 0.0,  fog: 0.0 },
+    { key: 'rough',  label: '荒れ模様',  beaufort: 7.0, cloud: 0.78, haze: 1.7,  rain: 0.3,  fog: 0.05 },
+    { key: 'gale',   label: '時化',     beaufort: 9.0, cloud: 0.92, haze: 2.6,  rain: 0.7,  fog: 0.1 },
+    { key: 'storm',  label: '嵐',       beaufort: 11.0, cloud: 0.98, haze: 3.8, rain: 1.0,  fog: 0.15 },
+];
+// 荒れ具合の並びに乗らない天候（自動の移り変わりでは選ばれない。手動専用）
+const WEATHER_SPECIAL_PRESETS = [
+    { key: 'fog',    label: '霧',       beaufort: 2.0, cloud: 0.75, haze: 1.0,  rain: 0.0,  fog: 0.9 },
+    { key: 'rain',   label: '雨',       beaufort: 4.0, cloud: 0.88, haze: 1.3,  rain: 0.6,  fog: 0.2 },
 ];
 
 // 各量の追従の速さ[1/秒]。天候そのものは分単位でゆっくり動き、
@@ -105,15 +122,19 @@ window.weather = {
 
     // 手動で細かく決めた天候（presetKey === 'custom' のとき使う）。
     // windDir が null なら風向は自然に振れるまま。
-    custom: { beaufort: 5.0, cloud: 0.45, windDir: null },
+    custom: { beaufort: 5.0, cloud: 0.45, rain: 0.0, fog: 0.0, windDir: null },
+    rain: 0.0,          // 今の雨量（0〜1）
+    fog: 0.0,           // 今の霧（0〜1）
     _fastUntil: 0,      // この時刻までは手動の速い追従（WEATHER_TAU_MANUAL）を使う
 };
 
 // 16-daynight-and-telegraph.js が参照する光量・霧の倍率
-window.weatherLightMul = { sun: 1, ambient: 1, hemi: 1, fog: 1 };
+window.weatherLightMul = { sun: 1, ambient: 1, hemi: 1, fog: 1, grey: 0, waterDark: 1 };
 
 function weatherPresetByKey(key) {
-    return WEATHER_PRESETS.find(p => p.key === key) || WEATHER_PRESETS[2];
+    return WEATHER_PRESETS.find(p => p.key === key)
+        || WEATHER_SPECIAL_PRESETS.find(p => p.key === key)
+        || WEATHER_PRESETS[2];
 }
 
 // ビューフォート数に一番近いプリセット
@@ -142,7 +163,8 @@ function weatherTarget() {
     const w = window.weather;
     if (w.presetKey === WEATHER_CUSTOM_KEY) {
         const c = w.custom;
-        return { beaufort: c.beaufort, cloud: c.cloud, haze: weatherHazeFromBeaufort(c.beaufort) };
+        return { beaufort: c.beaufort, cloud: c.cloud, haze: weatherHazeFromBeaufort(c.beaufort),
+                 rain: c.rain || 0, fog: c.fog || 0 };
     }
     return weatherPresetByKey(w.presetKey);
 }
@@ -197,6 +219,8 @@ function applyWeatherTargetNow() {
     w.swellBeaufort = tg.beaufort;
     w.cloud = tg.cloud;
     w.haze = tg.haze;
+    w.rain = tg.rain || 0;
+    w.fog = tg.fog || 0;
     if (w.presetKey === WEATHER_CUSTOM_KEY && w.custom.windDir != null) {
         w.windDir = w._windDirTarget = weatherDirToSigned(w.custom.windDir);
     }
@@ -217,7 +241,7 @@ function updateWeather(dt, t) {
     if (!w._initialized) {
         const p = weatherTarget();
         w.beaufort = p.beaufort; w.swellBeaufort = p.beaufort;
-        w.cloud = p.cloud; w.haze = p.haze;
+        w.cloud = p.cloud; w.haze = p.haze; w.rain = p.rain || 0; w.fog = p.fog || 0;
         w._nextChangeAt = t + WEATHER_AUTO_MIN_SEC;
         w._initialized = true;
     }
@@ -227,6 +251,8 @@ function updateWeather(dt, t) {
         // 天候OFF。光量・雲量の上書きも解除して、手動スライダーに完全に任せる。
         window.weatherLightMul.sun = 1; window.weatherLightMul.ambient = 1;
         window.weatherLightMul.hemi = 1; window.weatherLightMul.fog = 1;
+        window.weatherLightMul.grey = 0; window.weatherLightMul.waterDark = 1;
+        w.rain = 0; w.fog = 0;
         return;
     }
 
@@ -245,6 +271,8 @@ function updateWeather(dt, t) {
     w.beaufort = weatherApproach(w.beaufort, target.beaufort, tau, dt);
     w.cloud    = weatherApproach(w.cloud,    target.cloud,    tau, dt);
     w.haze     = weatherApproach(w.haze,     target.haze,     tau, dt);
+    w.rain     = weatherApproach(w.rain || 0, target.rain || 0, tau, dt);
+    w.fog      = weatherApproach(w.fog || 0,  target.fog || 0,  tau, dt);
     // うねりは風よりずっと遅れて追従する（風が止んでも残り、吹き始めてもすぐには育たない）
     w.swellBeaufort = weatherApproach(w.swellBeaufort, w.beaufort, WEATHER_TAU_SWELL, dt);
 
@@ -287,7 +315,6 @@ function updateWeather(dt, t) {
 
     // ── 波 ──
     const hSig = weatherWaveHeightFromBeaufort(w.beaufort);
-    physics.waveRoughness = hSig * WEATHER_WAVE_ROUGHNESS_PER_METER;
 
     // 波長。海が育つほど波長も伸びる（深海波の関係 L ≒ 1.56*T^2 に倣い、
     // 波高の平方根に比例させた緩やかな増加にする）。
@@ -300,6 +327,11 @@ function updateWeather(dt, t) {
     physics.swellStrength = Math.min(3.0, 0.35 + hSwell * 0.32);
     physics.chopStrength  = Math.min(3.0, 0.30 + w.beaufort * 0.16);
 
+    // 全体の波の大きさ。今の風が立てる波に、嵐の後に残ったうねり（今の風より
+    // 大きいぶん）を足し合わせたものを、実際の有義波高の目標にする。
+    const hsTarget = Math.sqrt(hSig * hSig + Math.pow(Math.max(0, hSwell - hSig), 2));
+    physics.waveRoughness = weatherRoughnessForHs(hsTarget, physics.swellStrength, physics.chopStrength);
+
     // ── 空の雲量 ──
     if (typeof skyMesh !== 'undefined' && skyMesh && skyMesh.material
         && skyMesh.material.uniforms && skyMesh.material.uniforms.cloudAmount) {
@@ -309,10 +341,18 @@ function updateWeather(dt, t) {
     // ── 光量・視程 ──
     // 雲が厚いほど直射は弱く、代わりに空全体が光源になるので環境光の落ち方は
     // 直射よりずっと緩やかにする（曇天が真っ暗にならないように）。
-    window.weatherLightMul.sun     = 1 - w.cloud * 0.78;
-    window.weatherLightMul.ambient = 1 - w.cloud * 0.18;
-    window.weatherLightMul.hemi    = 1 - w.cloud * 0.12;
-    window.weatherLightMul.fog     = w.haze;
+    // 以前は環境光が最大18%しか落ちず、どんよりした空でも明るすぎた。
+    // 厚い雲・雨ほど、空全体からの光も目に見えて暗くなるようにする。
+    const gloom = Math.min(1, w.cloud * 0.8 + w.rain * 0.35);
+    window.weatherLightMul.sun     = Math.max(0.05, 1 - w.cloud * 0.88 - w.rain * 0.1);
+    window.weatherLightMul.ambient = 1 - gloom * 0.5;
+    window.weatherLightMul.hemi    = 1 - gloom * 0.45;
+    // 視程。霧は濃くなると数百m先がほとんど見えないところまで（霧の濃さの係数で
+    // 最大およそ40倍）、雨も降りが強いほど霞む。
+    window.weatherLightMul.fog     = w.haze * (1 + w.fog * 40 + w.rain * 5);
+    // 霧・背景の色を灰色に寄せる割合と、海の色の暗さ（16-daynight-and-telegraph.js）
+    window.weatherLightMul.grey      = Math.min(1, w.cloud * 0.45 + w.rain * 0.3 + w.fog * 0.8);
+    window.weatherLightMul.waterDark = 1 - gloom * 0.45;
 
     // 既存の波スライダーの表示を実際の値に追従させる（天候が動かしていることが
     // 画面上で分かるように）。ユーザーが掴んでいる最中の要素には触らない。
@@ -409,7 +449,7 @@ function renderWeatherPanel() {
     const host = document.getElementById('weather-presets');
     if (host) {
         const isCustom = w.presetKey === WEATHER_CUSTOM_KEY;
-        host.innerHTML = WEATHER_PRESETS.map(p =>
+        host.innerHTML = WEATHER_PRESETS.concat(WEATHER_SPECIAL_PRESETS).map(p =>
             `<button type="button" class="adjust-btn wx-preset" data-wx="${p.key}"`
             + ` style="flex:1 1 auto;min-width:56px;width:auto;height:auto;font-size:11px;font-weight:normal;padding:4px 6px;white-space:nowrap;`
             + (p.key === w.presetKey ? 'background:#1c4a6e;border-color:#3fa9ff;color:#eaf4ff;' : '')
@@ -446,13 +486,19 @@ function _weatherSyncManualSliders(force) {
     const cl = custom ? w.custom.cloud    : (showTarget ? tg.cloud    : w.cloud);
     const dir = (custom && w.custom.windDir != null) ? w.custom.windDir : ((Math.round(w.windDir) % 360) + 360) % 360;
     const set = (id, v) => { const el = document.getElementById(id); if (el && document.activeElement !== el) el.value = v; };
+    const rn = custom ? (w.custom.rain || 0) : (showTarget ? (tg.rain || 0) : (w.rain || 0));
+    const fg = custom ? (w.custom.fog || 0)  : (showTarget ? (tg.fog || 0)  : (w.fog || 0));
     set('weather-bf', bf.toFixed(1));
     set('weather-cloud', Math.round(cl * 100));
+    set('weather-rain', Math.round(rn * 100));
+    set('weather-fog', Math.round(fg * 100));
     set('weather-dir', Math.round(dir / 5) * 5);
     const kt = weatherWindSpeedFromBeaufort(bf) * 1.94384;
     const lab = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
     lab('weather-bf-val', `BF${bf.toFixed(1)}（${kt.toFixed(0)}kt・波${weatherWaveHeightFromBeaufort(bf).toFixed(1)}m）`);
     lab('weather-cloud-val', `${Math.round(cl * 100)}%`);
+    lab('weather-rain-val', rn < 0.02 ? 'なし' : (rn < 0.35 ? '小雨' : (rn < 0.75 ? '雨' : '大雨')) + ` ${Math.round(rn * 100)}%`);
+    lab('weather-fog-val', fg < 0.02 ? 'なし' : (fg < 0.35 ? 'もや' : (fg < 0.7 ? '霧' : '濃霧')) + ` ${Math.round(fg * 100)}%`);
     lab('weather-dir-val', (custom && w.custom.windDir != null) ? `${Math.round(dir)}°` : `${Math.round(dir)}°（自然に変化）`);
 }
 
@@ -463,6 +509,8 @@ function _weatherOnManualSlider(which, value) {
         const tg = weatherTarget();
         w.custom.beaufort = tg.beaufort;
         w.custom.cloud = tg.cloud;
+        w.custom.rain = tg.rain || 0;
+        w.custom.fog = tg.fog || 0;
         w.custom.windDir = null;
         w.presetKey = WEATHER_CUSTOM_KEY;
     }
@@ -470,6 +518,8 @@ function _weatherOnManualSlider(which, value) {
     if (which === 'bf')    w.custom.beaufort = Math.max(0, Math.min(12, value));
     if (which === 'cloud') w.custom.cloud = Math.max(0, Math.min(1, value / 100));
     if (which === 'dir')   w.custom.windDir = ((value % 360) + 360) % 360;
+    if (which === 'rain')  w.custom.rain = Math.max(0, Math.min(1, value / 100));
+    if (which === 'fog')   w.custom.fog = Math.max(0, Math.min(1, value / 100));
     renderWeatherPanel();
     _weatherSyncManualSliders(false);
 }
@@ -514,7 +564,7 @@ function initWeatherUI() {
         _weatherStop(cbAuto);
     }
 
-    [['weather-bf', 'bf'], ['weather-cloud', 'cloud'], ['weather-dir', 'dir']].forEach(([id, which]) => {
+    [['weather-bf', 'bf'], ['weather-cloud', 'cloud'], ['weather-rain', 'rain'], ['weather-fog', 'fog'], ['weather-dir', 'dir']].forEach(([id, which]) => {
         const el = document.getElementById(id);
         if (!el) return;
         el.addEventListener('input', (e) => _weatherOnManualSlider(which, parseFloat(e.target.value)));

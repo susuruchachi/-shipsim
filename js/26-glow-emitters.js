@@ -45,6 +45,7 @@ const GLOW_PANEL_LUMINANCE = 4.0;
 const GLOW_PROBE_STRENGTH = 0.25;
 
 let glowPanelNodes = [];
+let glowHaloPoints = null;   // 遠景用の光のにじみ（全パネルを1回の描画で）
 
 // 6方向のビン。+Y（上向き）は使わないので null。
 const GLOW_BIN_DIRS = [
@@ -56,6 +57,12 @@ const GLOW_BIN_DIRS = [
 function disposeGlowEmitters() {
     for (const n of glowPanelNodes) if (n.parent) n.parent.remove(n);
     glowPanelNodes = [];
+    if (glowHaloPoints) {
+        if (glowHaloPoints.parent) glowHaloPoints.parent.remove(glowHaloPoints);
+        glowHaloPoints.geometry.dispose();
+        glowHaloPoints.material.dispose();
+        glowHaloPoints = null;
+    }
     if (typeof setGlowAreaDefs === 'function') setGlowAreaDefs([]);
     if (windowGlowLightProbe && windowGlowLightProbe.parent) {
         windowGlowLightProbe.parent.remove(windowGlowLightProbe);
@@ -250,6 +257,7 @@ function buildGlowEmitters() {
     });
 
     if (typeof setGlowAreaDefs === 'function') setGlowAreaDefs(panels);
+    _glowBuildHalos(modelRoot, panels);
     _glowBuildProbe(modelRoot, probePts, pArea > 0 ? new THREE.Color(pr / pArea, pg / pArea, pb / pArea) : null);
     console.log(`[GlowEmitters] 発光パネル ${panels.length} 枚（発光メッシュ ${windowGlowMeshEntries.length} 個から）`);
     return panels;
@@ -301,4 +309,121 @@ function _glowBuildProbe(modelRoot, pts, color) {
     for (let i = 0; i < 9; i++) windowGlowLightProbe.sh.coefficients[i].copy(coeffs[i]);
     windowGlowLightProbe.intensity = 0;   // updateWindowGlow() が昼夜係数で設定する
     modelRoot.add(windowGlowLightProbe);
+}
+
+// ════════════════════════════════════════════════════════════════
+//  遠景用の「光のにじみ」
+// ════════════════════════════════════════════════════════════════
+// 実際に周りを照らす面光源は、負荷の都合でカメラに近い数灯しか点けられない。
+// 離れて船を眺めると、点いていない窓・灯具は発光マテリアルが光るだけで、
+// 「灯りがともっている」感じが出にくい。
+// そこで全パネルの位置に、加算合成の光点（ポイントスプライト）を置く。
+//   ・1回の描画で全パネル分を描くので、数百個あってもほぼ負荷にならない
+//   ・近くでは本物の面光源に任せてフェードアウトし、離れるほど見えてくる
+//   ・霧・雨のときは大きく明るくにじませ、灯りが空気中の水滴を照らして
+//     光の玉ができる感じを出す（24-weather.js の haze / 雨量を使う）
+const GLOW_HALO_SIZE_MUL   = 1.8;   // パネルの大きさに対するにじみの大きさ
+const GLOW_HALO_MIN_M      = 2.5;   // にじみの最小サイズ[m]
+const GLOW_HALO_MAX_M      = 14.0;  // にじみの最大サイズ[m]
+const GLOW_HALO_FADE_NEAR  = 25.0;  // これより近いと見えない[m]（本物の面光源に任せる）
+const GLOW_HALO_FADE_FAR   = 90.0;  // これより遠いと完全に見える[m]
+const GLOW_HALO_STRENGTH   = 0.55;
+
+function _glowBuildHalos(modelRoot, panels) {
+    if (!panels.length) return;
+    const n = panels.length;
+    const pos = new Float32Array(n * 3), col = new Float32Array(n * 3), size = new Float32Array(n);
+    const dir = new THREE.Vector3();
+    const metersPerUnit = new THREE.Vector3().setFromMatrixScale(modelRoot.matrixWorld).x || 1;
+    panels.forEach((p, i) => {
+        const node = p.node;
+        // 発光面から少し前に出す（壁にめり込んで半分隠れないように）
+        dir.set(0, 1, 0).applyQuaternion(node.quaternion);
+        pos[i * 3]     = node.position.x + dir.x * (0.3 / metersPerUnit);
+        pos[i * 3 + 1] = node.position.y + dir.y * (0.3 / metersPerUnit);
+        pos[i * 3 + 2] = node.position.z + dir.z * (0.3 / metersPerUnit);
+        col[i * 3] = p.color.r; col[i * 3 + 1] = p.color.g; col[i * 3 + 2] = p.color.b;
+        const sizeM = Math.max(node.scale.x, node.scale.z) * metersPerUnit * GLOW_HALO_SIZE_MUL;
+        size[i] = THREE.MathUtils.clamp(sizeM, GLOW_HALO_MIN_M, GLOW_HALO_MAX_M);   // m
+    });
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geom.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
+    geom.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
+    const mat = new THREE.ShaderMaterial({
+        uniforms: {
+            uStrength:   { value: 0 },
+            uPixelScale: { value: 500 },
+            uNear:       { value: GLOW_HALO_FADE_NEAR },
+            uFar:        { value: GLOW_HALO_FADE_FAR },
+            uSizeMul:    { value: 1 },
+            uMinPx:      { value: 6 },
+        },
+        vertexShader: `
+            attribute vec3 aColor;
+            attribute float aSize;
+            uniform float uStrength, uPixelScale, uNear, uFar, uSizeMul, uMinPx;
+            varying vec3 vColor;
+            varying float vAlpha;
+            void main() {
+                vec4 mv = modelViewMatrix * vec4(position, 1.0);
+                float dist = max(0.1, -mv.z);
+                gl_Position = projectionMatrix * mv;
+                // 遠くでも「灯りがともっている」と分かるよう、見た目の大きさに下限を設ける
+                // （実寸どおりだと400m先の灯具は3ピクセルほどで、ほとんど見えない）
+                float px = aSize * uSizeMul * uPixelScale / dist;
+                gl_PointSize = clamp(px, uMinPx, 256.0);
+                vColor = aColor;
+                // 下限で大きく見せているぶん、少しだけ明るさを抑える
+                vAlpha = uStrength * smoothstep(uNear, uFar, dist) * mix(0.75, 1.0, clamp(px / uMinPx - 1.0, 0.0, 1.0));
+            }`,
+        fragmentShader: `
+            varying vec3 vColor;
+            varying float vAlpha;
+            void main() {
+                vec2 c = gl_PointCoord - 0.5;
+                float r2 = dot(c, c) * 4.0;           // 0（中心）〜1（縁）
+                if (r2 > 1.0) discard;
+                // 中心の芯＋ふんわりした裾
+                float a = exp(-r2 * 9.0) * 1.1 + exp(-r2 * 2.2) * 0.35;
+                a *= (1.0 - r2);
+                gl_FragColor = vec4(vColor * a * vAlpha, 1.0);
+            }`,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+    });
+    glowHaloPoints = new THREE.Points(geom, mat);
+    glowHaloPoints.name = 'GlowHalos';
+    glowHaloPoints.frustumCulled = false;
+    glowHaloPoints.renderOrder = 5;
+    glowHaloPoints.userData.noBloom = true;   // 既に柔らかい光なので、ブルームで二重ににじませない
+    modelRoot.add(glowHaloPoints);
+}
+
+// 毎フレーム（描画の直前）。昼夜・窓の発光の強さ・天候に合わせる。
+function updateGlowHalos() {
+    if (!glowHaloPoints) return;
+    const u = glowHaloPoints.material.uniforms;
+    const glow = (typeof _alGlowFactor !== 'undefined') ? _alGlowFactor : 0;
+    // 霧・雨のときは、灯りが空気中の水滴を照らしてにじみが大きく・明るくなる
+    const w = window.weather;
+    const haze = (w && w.enabled) ? Math.max(0, (w.haze || 1) - 1) : 0;         // 晴れ0 〜 嵐≒2.8
+    const rain = (w && w.enabled && typeof w.rain === 'number') ? w.rain : 0;    // 0〜1
+    const fog  = (w && w.enabled && typeof w.fog === 'number') ? w.fog : 0;      // 0〜1
+    const wet = Math.min(1.5, haze * 0.25 + rain * 0.6 + fog * 1.0);
+    u.uStrength.value = glow * GLOW_HALO_STRENGTH * (1 + wet * 0.9);
+    u.uSizeMul.value = 1 + wet * 1.2;
+    // 霧の中では近くでもにじみが見える
+    u.uNear.value = GLOW_HALO_FADE_NEAR * (1 - Math.min(0.85, wet * 0.6));
+    u.uFar.value  = GLOW_HALO_FADE_FAR  * (1 - Math.min(0.6, wet * 0.4));
+    glowHaloPoints.visible = u.uStrength.value > 0.003;
+    // 画面の高さ[px] ÷ (2·tan(視野角/2)) … 距離1mで1mの物が何pxになるか
+    if (typeof camera !== 'undefined' && camera && camera.isPerspectiveCamera && typeof renderer !== 'undefined') {
+        const hPx = renderer.domElement.height;
+        u.uPixelScale.value = hPx / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+        u.uMinPx.value = 6 * Math.max(1, renderer.getPixelRatio());
+    }
+    // aSize は m 単位、距離もビュー空間（ワールド単位）で測るので、
+    // 船体設定で船の拡大率を変えても補正は要らない。
 }

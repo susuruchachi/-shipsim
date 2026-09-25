@@ -123,6 +123,7 @@ const lightSettings = {
     hemiMult: 1.0,
     fillMult: 1.0,
     exposure: 0.85,       // v83で色空間を修正した分、全体的に明るく出るようになったため1.1→0.85へ
+    autoExposure: true,   // 見ている画面の明るさに合わせて露出を自動調整する（30-auto-exposure.js）
     fogMult: 1.0,
     glbMaster: 1.0,
     windowGlowMult: 1.0,  // 窓・キャビンなど常時emissiveマテリアルの発光強さ（ユーザー調整用）

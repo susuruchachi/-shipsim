@@ -349,61 +349,123 @@ function smoothstepJS(edge0, edge1, x) {
     return t * t * (3 - 2 * t);
 }
 
-function getWaveCrestAndHeight(x, z, t) {
+// ════════════════════════════════════════════════════════════════
+//  外洋波の位相（4成分）
+// ════════════════════════════════════════════════════════════════
+// 以前は各成分の位相を
+//     p = (原点まわりに風向で回した座標)·k + t·ω
+// で直接計算していた。この式は風向・波長が一定なら問題ないが、
+//   ・風向が変わると、ワールド原点を中心に波の模様全体が回転する。船が原点から
+//     10万m離れていると、0.01rad/sの風向の揺れでも船の位置では1000m/s級の
+//     見かけの移動になる（天候が風向をゆっくり揺らすと、急に波が暴走して見えた）
+//   ・波長（k）が変わっても同様に、原点からの距離に比例して位相が飛ぶ
+// という問題があった。
+//
+// そこで位相を「船の近くの基準点Aからの相対座標 × 波数ベクトルK ＋ 積み上げた
+// 位相φ」で表す。
+//     p_i(X) = K_i·(X − A) + φ_i
+// 毎フレーム φ_i に ω_i·dt を足し、基準点が動いた分は K·ΔA を足して場を保つ。
+// K が変わるときは基準点での位相φをそのまま保つので、船のまわりの波は
+// 滑らかに形を変えるだけで、飛んだり流れたりしない。
+// GPU側（04-scene-and-water-init.js の oceanWaveHC）も同じ K・A・φ を使う。
+const OCEAN_WAVE_OMEGA = [0.38, 0.52, 0.22, -0.95];
+const oceanWaveState = {
+    t: null,                         // φ を計算した時刻
+    ax: 0, az: 0,                    // 基準点A（ワールドXZ）
+    K: new Float32Array(8),          // 各成分の波数ベクトル (Kx,Kz)×4
+    phi: new Float64Array(4),        // 各成分の位相
+};
+window.oceanWaveState = oceanWaveState;
+
+// 波高に応じて波長の下限を引き上げた「実効波長」
+function oceanWaveEffectiveWidth() {
     const h = physics.waveRoughness;
     // ── 波の急峻さ(高さ÷波長)を現実的な範囲に保つ自動カップリング ──────────
     // waveRoughness(波高)とwaveWidth(波長)が完全に独立したスライダーだと、
     // 波高だけを上げて波長を変えないと「鋭く尖った、非現実的に急な」波になる。
     // 実際の海洋波は波高/波長比(波形勾配)に物理的な上限があり(砕波限界は
     // 概ね1/7、一般的な外洋うねりは1/15〜1/30程度)、これを超えると波は崩れる。
-    // ここでは最も急峻な成分(k1, 振幅係数1.82)を基準に、目標勾配
-    // WAVE_STEEPNESS_MAX(≒1/15)を超えないために必要な最低波長(=最低waveWidth)
-    // を波高から逆算し、ユーザー指定のwaveWidthとの大きい方を採用する。
-    // これにより「波を高くするほど自動的に波長も伸びる」物理的に自然な挙動になり、
-    // 短波長×大振幅という不自然な急加速度の原因を取り除く。
-    const WAVE_STEEPNESS_MAX = 1 / 15;
+    // 最も急峻な成分(k1, 振幅係数1.82)を基準に、目標勾配 1/15 を超えないために
+    // 必要な最低波長を波高から逆算し、ユーザー指定のwaveWidthとの大きい方を採用する。
     // 係数導出: steepness1 = 1.82*h*0.018/(2π*w) ≒ 0.005214*h/w
-    //           → w_min = 0.005214*h / WAVE_STEEPNESS_MAX
-    const AUTO_WIDTH_COEFF = 0.005214 / WAVE_STEEPNESS_MAX; // ≒0.0782
-    const autoWidthMin = h * AUTO_WIDTH_COEFF;
-    const w = Math.max(physics.waveWidth, autoWidthMin);
+    //           → w_min = 0.005214*h / (1/15) ≒ 0.0782*h
+    const autoWidthMin = h * 0.0782;
+    return Math.max(physics.waveWidth, autoWidthMin);
+}
 
-    // ── v95: 風向・風速を波形に反映 ──────────────────────────────
-    // ① 向き: k1〜k4の位相計算に使うxz座標を風向(windDir)の分だけ回転させる。
-    //    元の式は(x, z)を固定の軸に対して斜めに組み合わせていただけ（風とは無関係）
-    //    だったが、この座標系ごと回転させることで「うねり・チョップの向き」が
-    //    風向スライダーと連動するようになる。各成分間の相対角（k1とk2が交差する
-    //    見た目の複雑さ等）は保ったまま、全体の向きだけが風について回る。
-    // ② シャープさ: crest(泡・砕波の判定に使う値)だけ、風速に応じて指数
-    //    (crestPow)を上げてピークをより狭く・鋭くする。height側（浮力計算が
-    //    使う実際の波高）は据え置きなので、波の高さ自体はwaveRoughnessスライダーの
-    //    支配のまま保たれ、見た目の「先端の尖り方」だけが強風ほどシャープになる。
+// 今の波長・風向から、4成分の波数ベクトルを求める。
+// （旧式 p = rx·a + rz·b を、風向回転 rx = x·cos − z·sin, rz = x·sin + z·cos を
+//   展開して x, z の係数にまとめたもの。波の見た目は旧式と同じ）
+function _oceanWaveVectors(out) {
+    const w = oceanWaveEffectiveWidth();
     const windRad = (typeof physics.windDir === 'number') ? physics.windDir * Math.PI / 180 : 0;
-    const wCos = Math.cos(windRad), wSin = Math.sin(windRad);
-    const rx = x * wCos - z * wSin;
-    const rz = x * wSin + z * wCos;
+    const c = Math.cos(windRad), sn = Math.sin(windRad);
+    // 成分ごとの (rx係数, rz係数)
+    const k1 = 0.018 / w, k2 = 0.026 / w, k3 = 0.009 / w, k4 = 0.072 / w;
+    const coef = [[k1, k1 * 0.6], [-k2, k2 * 0.8], [0, k3], [k4 * 0.7, k4]];
+    for (let i = 0; i < 4; i++) {
+        const a = coef[i][0], b = coef[i][1];
+        out[i * 2]     = a * c + b * sn;    // x の係数
+        out[i * 2 + 1] = -a * sn + b * c;   // z の係数
+    }
+    return out;
+}
+
+// 毎フレーム1回、天候（波長・風向）の更新の後、波高を使う処理の前に呼ぶ。
+// ax, az: 基準点（船の位置）
+function updateOceanWaveState(t, ax, az) {
+    const S = oceanWaveState;
+    if (S.t === null) {
+        S.t = t; S.ax = ax; S.az = az;
+        _oceanWaveVectors(S.K);
+        for (let i = 0; i < 4; i++) S.phi[i] = 0;
+        return;
+    }
+    const dt = t - S.t;
+    const dax = ax - S.ax, daz = az - S.az;
+    for (let i = 0; i < 4; i++) {
+        // 時間発展と、基準点の移動ぶん（今の K のまま場を保つ）
+        let ph = S.phi[i] + OCEAN_WAVE_OMEGA[i] * dt + S.K[i * 2] * dax + S.K[i * 2 + 1] * daz;
+        // 延々と大きくならないよう 2π で巻き戻す
+        ph -= Math.floor(ph / (Math.PI * 2)) * Math.PI * 2;
+        S.phi[i] = ph;
+    }
+    S.t = t; S.ax = ax; S.az = az;
+    // K は基準点での位相を保ったまま差し替える
+    _oceanWaveVectors(S.K);
+}
+
+function getWaveCrestAndHeight(x, z, t) {
+    const S = oceanWaveState;
+    if (S.t === null) updateOceanWaveState(t, 0, 0);
+    const h = physics.waveRoughness;
+
+    // ── v95: 風速を波形のシャープさに反映 ──────────────────────────
+    // crest(泡・砕波の判定に使う値)だけ、風速に応じて指数(crestPow)を上げて
+    // ピークをより狭く・鋭くする。height側（浮力計算が使う実際の波高）は据え置き。
+    // （風向は波数ベクトルKの向きとして updateOceanWaveState で反映済み）
     const windSpd = (typeof physics.windSpeed === 'number') ? physics.windSpeed : 0;
     const windSharpen = Math.min(1.6, windSpd / 18); // 無風0 〜 強風(30kt程度)で最大1.6
 
-    const k1 = 0.018 / w;
-    const p1 = rx * k1 + rz * (k1 * 0.6) + t * 0.38;
+    // 基準点からの相対座標と、φ を計算した時刻からの経過時間
+    const dx = x - S.ax, dz = z - S.az, dtp = t - S.t;
+    const K = S.K, P = S.phi, W = OCEAN_WAVE_OMEGA;
+
+    const p1 = K[0] * dx + K[1] * dz + P[0] + W[0] * dtp;
     const s1 = Math.sin(p1);
     const s1Max = Math.max(s1, 0);
     const w1 = (s1Max * s1Max) * 2.0 - 0.6;
 
-    const k2 = 0.026 / w;
-    const p2 = -rx * k2 + rz * (k2 * 0.8) + t * 0.52;
+    const p2 = K[2] * dx + K[3] * dz + P[1] + W[1] * dtp;
     const s2 = Math.sin(p2);
     const s2Max = Math.max(s2, 0);
     const w2 = (s2Max * s2Max) * 2.0 - 0.7;
 
-    const k3 = 0.009 / w;
-    const p3 = rz * k3 + t * 0.22;
+    const p3 = K[4] * dx + K[5] * dz + P[2] + W[2] * dtp;
     const s3 = Math.sin(p3);
     const w3 = s3; // 最も波長が長い成分＝「うねり」
 
-    const k4 = 0.072 / w;
-    const p4 = rx * (k4 * 0.7) + rz * k4 - t * 0.95;
+    const p4 = K[6] * dx + K[7] * dz + P[3] + W[3] * dtp;
     const s4 = Math.sin(p4);
     const w4 = s4 * 0.5; // 最も波長が短い成分＝「チョップ」
 
