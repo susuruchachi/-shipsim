@@ -13,7 +13,11 @@ function createSkyDome() {
             // v83b: 空だけ今まで生値のまま出力していた（トーンマッピング/sRGB出力とも
             // 無関係だった）ため、それらを追加した途端に相対的に白飛びし始めた。
             // 船体・水面と質感を揃えたまま明るさだけ落とすための補正係数。
-            skyExposure: { value: 0.75 }
+            skyExposure: { value: 0.75 },
+            // v170: 雲量(0=快晴〜1=どんより)。24-weather.js が毎フレーム書き込む。
+            // 従来は雲の出方が固定しきい値だったため、天候が変わっても空だけが
+            // いつも同じ雲だった。
+            cloudAmount: { value: 0.35 }
         },
         vertexShader: `
             varying vec3 vWorldPosition;
@@ -35,6 +39,7 @@ function createSkyDome() {
             uniform float meteorTime;
             uniform float auroraStrength;
             uniform float skyExposure;
+            uniform float cloudAmount;
 
             float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
             float hash3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
@@ -98,7 +103,11 @@ function createSkyDome() {
                     vec2 cloudUV = dir.xz / (dir.y + 0.05) * 0.18 + vec2(time * 0.0015, time * 0.0008);
                     float cloud = fbm(cloudUV);
                     float cloudEdge = fbm(cloudUV * 2.3 + vec2(3.7, 1.2)) * 0.4;
-                    cloud = smoothstep(0.46 - cloudEdge * 0.15, 0.70, cloud);
+                    // v170: cloudAmount でしきい値を動かして雲量を変える。
+                    // 快晴(0)では高いしきい値＝ほとんど雲が出ず、
+                    // どんより(1)では低いしきい値＝空一面が覆われる。
+                    float cloudThr = mix(0.63, 0.16, clamp(cloudAmount, 0.0, 1.0));
+                    cloud = smoothstep(cloudThr - cloudEdge * 0.15, cloudThr + 0.24, cloud);
                     cloud *= smoothstep(0.02, 0.12, h); 
                     vec3 cloudLit  = mix(vec3(0.55, 0.60, 0.70), vec3(1.0, 0.97, 0.93), dayFactor);
                     vec3 cloudShad = mix(vec3(0.12, 0.14, 0.20), vec3(0.55, 0.58, 0.65), dayFactor);

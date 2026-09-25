@@ -1,144 +1,7 @@
-// ── 「面ベースエリアグロー」シェーダーパッチ ────────────────────────────
-// Blenderのエリアライトを面として正確に再現する。
-// ライトのワールド変換行列から法線・幅ベクトル・高さベクトルを毎フレーム計算し、
-// GLSLで「フラグメントからライト面への最短距離」を求めてemissiveを加算する。
-// 法線方向の符号チェックにより面の「表側」（照射方向）のみ照らされるので、
-// 外壁への漏れが自然に抑制され、内壁も正しく照らされる。
-const HULL_GLOW_MAX_LIGHTS = 16;
-let hullGlowUniforms = null;
-let hullGlowEntries = []; // [{ light: PointLight, node: Object3D, color, baseIntensity }]
-
-function createHullGlowUniforms() {
-    const positions = [], colors = [], normals = [], halfW = [], halfH = [];
-    for (let i = 0; i < HULL_GLOW_MAX_LIGHTS; i++) {
-        positions.push(new THREE.Vector3());
-        colors.push(new THREE.Color());
-        normals.push(new THREE.Vector3(0, 1, 0));
-        halfW.push(new THREE.Vector3(1, 0, 0));
-        halfH.push(new THREE.Vector3(0, 0, 1));
-    }
-    return {
-        glowCount:       { value: 0 },
-        glowPositions:   { value: positions },
-        glowColors:      { value: colors },
-        glowIntensities: { value: new Float32Array(HULL_GLOW_MAX_LIGHTS) },
-        glowNormals:     { value: normals },
-        glowHalfW:       { value: halfW },
-        glowHalfH:       { value: halfH },
-    };
-}
-
-function applyHullGlowShader(modelRoot, glowSources) {
-    hullGlowEntries = glowSources.slice(0, HULL_GLOW_MAX_LIGHTS);
-    hullGlowUniforms = createHullGlowUniforms();
-    hullGlowUniforms.glowCount.value = hullGlowEntries.length;
-
-    hullGlowEntries.forEach((entry, i) => {
-        hullGlowUniforms.glowColors.value[i].copy(entry.color);
-    });
-
-    const patched = new Set();
-    modelRoot.traverse((obj) => {
-        if (!obj.isMesh || !obj.material) return;
-        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-        mats.forEach((mat) => {
-            if (!mat || patched.has(mat) || !mat.isMeshStandardMaterial) return;
-            patched.add(mat);
-            patchMaterialWithHullGlow(mat);
-        });
-    });
-
-    updateHullGlowUniforms();
-}
-
-function patchMaterialWithHullGlow(mat) {
-    mat.userData.hullGlowPatched = true;
-    mat.onBeforeCompile = (shader) => {
-        shader.uniforms.glowCount       = hullGlowUniforms.glowCount;
-        shader.uniforms.glowPositions   = hullGlowUniforms.glowPositions;
-        shader.uniforms.glowColors      = hullGlowUniforms.glowColors;
-        shader.uniforms.glowIntensities = hullGlowUniforms.glowIntensities;
-        shader.uniforms.glowNormals     = hullGlowUniforms.glowNormals;
-        shader.uniforms.glowHalfW       = hullGlowUniforms.glowHalfW;
-        shader.uniforms.glowHalfH       = hullGlowUniforms.glowHalfH;
-
-        shader.vertexShader = shader.vertexShader
-            .replace('#include <common>', '#include <common>\nvarying vec3 vAreaGlowWorldPos;\nvarying vec3 vAreaGlowWorldNormal;')
-            .replace('#include <begin_vertex>', '#include <begin_vertex>\nvAreaGlowWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvAreaGlowWorldNormal = normalize(mat3(modelMatrix) * objectNormal);');
-
-        shader.fragmentShader = shader.fragmentShader
-            .replace('#include <common>', `#include <common>
-varying vec3 vAreaGlowWorldPos;
-varying vec3 vAreaGlowWorldNormal;
-#define HULL_GLOW_MAX ${HULL_GLOW_MAX_LIGHTS}
-uniform int glowCount;
-uniform vec3 glowPositions[HULL_GLOW_MAX];
-uniform vec3 glowColors[HULL_GLOW_MAX];
-uniform float glowIntensities[HULL_GLOW_MAX];
-uniform vec3 glowNormals[HULL_GLOW_MAX];
-uniform vec3 glowHalfW[HULL_GLOW_MAX];
-uniform vec3 glowHalfH[HULL_GLOW_MAX];`)
-            .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
-// ── 面ベースエリアライト（スポットライト型・面全体均一照射） ─────────────
-// 「エリア全体からスポットライトのように照らす」実装：
-// 1. ライト面への垂直距離（depth）だけで主減衰させる（面内位置は関係なし）
-// 2. フラグメントが面の射影内に収まるかどうかで境界の自然なフォールオフを出す
-// 3. フラグメント法線との余弦則はソフトに（0値カットなし・pow圧縮）
-// → エリアの端にある壁も原点から遠いからではなく「面に近い距離」で照らされる
-{
-    vec3 fragNormal = normalize(vAreaGlowWorldNormal);
-    for (int i = 0; i < HULL_GLOW_MAX; i++) {
-        if (i >= glowCount) break;
-        vec3 lNorm = glowNormals[i]; // ライト面法線（照射方向）
-        vec3 toFrag = vAreaGlowWorldPos - glowPositions[i];
-        // 照射方向チェック：法線と反対側（裏面）は照らさない
-        float depth = dot(toFrag, lNorm); // 面法線方向の符号付き距離（正=照射側）
-        if (depth < 0.0) continue;        // 裏面は照らさない（透過もしない）
-
-        // 面上への射影 UV を求める
-        float wLen = length(glowHalfW[i]);
-        float hLen = length(glowHalfH[i]);
-        vec3 wDir = glowHalfW[i] / max(wLen, 0.0001);
-        vec3 hDir = glowHalfH[i] / max(hLen, 0.0001);
-        float pu = dot(toFrag, wDir);
-        float pv = dot(toFrag, hDir);
-
-        // 面上の最近接点（面の外ならクランプ）までの3D距離で減衰を計算。
-        // エリアライトらしい「面全体から均等に広がる照射」の核心。
-        float clampedU = clamp(pu, -wLen, wLen);
-        float clampedV = clamp(pv, -hLen, hLen);
-        vec3 nearest  = glowPositions[i] + wDir * clampedU + hDir * clampedV;
-        vec3 toNearest = vAreaGlowWorldPos - nearest; // フラグ→最近接点
-        float distSq   = dot(toNearest, toNearest);
-        float attenuation = 1.0 / (distSq * 0.5 + 1.0);
-
-        // ── nDotL ──
-        // lNorm固定ランバート：三角アーティファクトが出ない安定した計算。
-        // smoothstepの下限を負にすることで、ライト法線と平行な壁（dot=0付近）にも
-        // 適度な明るさを与え、完全に暗くなるのを防ぐ。
-        float nDotL = smoothstep(-0.3, 1.0, dot(fragNormal, -lNorm));
-
-        // 面外フォールオフ（面の外に出るほど減衰）
-        float outerU2    = max(abs(pu) - wLen, 0.0);
-        float outerV2    = max(abs(pv) - hLen, 0.0);
-        float outerDist2 = outerU2 * outerU2 + outerV2 * outerV2;
-        float edgeFade   = 1.0 / (outerDist2 * 0.8 + 1.0);
-
-        // 正面チェック（depthが小さいほど弱く、境界をソフトに）
-        float frontFactor = smoothstep(0.0, 0.1, depth / (sqrt(distSq) + 0.001));
-
-        reflectedLight.directDiffuse += glowColors[i] * glowIntensities[i]
-                                       * attenuation * nDotL * edgeFade * frontFactor;
-    }
-}`);
-    };
-    mat.needsUpdate = true;
-}
-
 // ============================================================
 //  Stage 3: 船体曲げシェーダー（ホギング/サギングの視覚表現）
 //  21-bow-stern-effects.js の hogSagUniforms / computeHogSagAmount() と対になる。
-//  hull-glowと同じ「マテリアルをtraverseしてonBeforeCompileを仕込む」手法を使うが、
+//  マテリアルをtraverseしてonBeforeCompileを仕込む手法を使うが、
 //  同一マテリアルに両方のパッチが乗る場合があるため、既存のonBeforeCompileを
 //  破棄せずチェーン（先に呼んでから自分の処理を足す）する。
 // ============================================================
@@ -203,47 +66,6 @@ uniform float hsAlongOffset;`)
 }`);
     };
     mat.needsUpdate = true;
-}
-
-// 毎フレーム：ライト面のワールド変換を計算してGPUへ送る。
-// Blenderエリアライトのローカル座標系：Y軸が法線（照射方向）、XとZが面の幅・高さ。
-// scaleはノードのscaleから取得（width=1,height=1でもscaleに実サイズが入っている）。
-const _glowMat  = new THREE.Matrix4();
-const _glowPos  = new THREE.Vector3();
-const _glowNorm = new THREE.Vector3();
-const _glowW    = new THREE.Vector3();
-const _glowH    = new THREE.Vector3();
-const _glowScale = new THREE.Vector3();
-const _glowQuat  = new THREE.Quaternion();
-
-function updateHullGlowUniforms() {
-    if (!hullGlowUniforms || hullGlowEntries.length === 0) return;
-    hullGlowEntries.forEach((entry, i) => {
-        const node = entry.node; // エリアライトのObject3D（scaleにサイズが入っている）
-        node.updateWorldMatrix(true, false);
-        _glowMat.copy(node.matrixWorld);
-
-        // ワールド座標でのスケール・回転を取り出す
-        _glowMat.decompose(_glowPos, _glowQuat, _glowScale);
-
-        // 法線 = ローカルY軸のワールド方向
-        _glowNorm.set(0, 1, 0).applyQuaternion(_glowQuat).normalize();
-        // 幅方向 = ローカルX軸 × ワールドスケールX（面の実半幅）
-        _glowW.set(1, 0, 0).applyQuaternion(_glowQuat).multiplyScalar(_glowScale.x * 0.5);
-        // 高さ方向 = ローカルZ軸 × ワールドスケールZ（面の実半高さ）
-        _glowH.set(0, 0, 1).applyQuaternion(_glowQuat).multiplyScalar(_glowScale.z * 0.5);
-
-        hullGlowUniforms.glowPositions.value[i].copy(_glowPos);
-        hullGlowUniforms.glowNormals.value[i].copy(_glowNorm);
-        hullGlowUniforms.glowHalfW.value[i].copy(_glowW);
-        hullGlowUniforms.glowHalfH.value[i].copy(_glowH);
-
-        const visible = entry.light.visible ? 1.0 : 0.0;
-        // 以前はPointLightの直接照明（標準ライトループ）+ このシェーダー加算の二重構成だった。
-        // PointLightをシーンから外した分、ここで強度を約2倍に補正し、見た目の明るさを維持する。
-        // 減衰・余弦則は最近接点（面全体）ベースなので、エリアの端でも自然に減衰する。
-        hullGlowUniforms.glowIntensities.value[i] = entry.light.intensity * 2.4 * visible;
-    });
 }
 
 
@@ -1617,70 +1439,19 @@ function setCustomModel(model) {
         pendingAreaLightEmpties.push(child);
     });
 
-    // ── エリアライト（PointLight代用）をモデル階層内に直接生成 ──────────────
-    // 旧実装は「ワールド座標を手計算で焼き込んでimportedModelGroupの子として配置」
-    // していたため、(1) GLBごとにメッシュノードとEmptyノードのベイク済み回転が
-    // 異なる（ブリタニックは一致、タイタニック/オリンピックの"mirrored"書き出しは
-    // 不一致）ことで初期配置がズレ、(2) 船体設定パネルでmodelOffsetを後から変えても
-    // 焼き込み済みの位置は再計算されない、という2つの不具合の原因になっていた。
-    // → 元のEmptyと同じ親・同じローカル座標にPointLightを差し込むことで、
-    //   通常のThree.jsシーングラフ継承により model 自身の回転・移動・スケールに
-    //   常に自動追従するようになる（手動でのワールド座標計算が不要になる）。
-    const hullGlowSources = []; // 後段のシェーダーパッチ（面全体グロー）用に位置・色を集めておく
-    pendingAreaLightEmpties.forEach((child) => {
-        const ud = child.userData;
-        const rawIntensity = parseFloat(ud.intensity) || 100.0;
-        const intensity = rawIntensity > 20 ? rawIntensity * 0.03 : rawIntensity;
-        const colorStr = ud.color || '#ffffff';
-
-        // ── 間接照明エミュレーション ──────────────────────────────
-        // 以前はこのPointLightをシーンに追加し、標準のThree.jsライティング
-        // （1点からのランバート減衰）でも面を照らしていたため、点の位置から見て
-        // 真裏・側面を向いた壁（エリアの端で原点から外側を向いている面など）が
-        // 不自然に暗く落ちる「原点からのスポットライト」現象が発生していた。
-        // → このPointLightはシーンに追加せず、強度・色・位置のデータ保持専用
-        //   （UIスライダー等の表示・保存用）にとどめる。実際に面を照らすのは
-        //   下のHullGlowシェーダー（面全体の最近接点ベースの減衰）のみとし、
-        //   エリア全体を使った自然な「面光源」の見え方に統一する。
-        const ambPt = new THREE.PointLight(colorStr, intensity * 0.4, 0, 0);
-        ambPt.position.copy(child.position); // 元Emptyと全く同じローカル座標をそのまま使う
-        ambPt.userData.isGlbLight    = true;
-        ambPt.userData.isAreaLight   = true;  // UIでエリアライトとして扱う
-        ambPt.userData.baseIntensity = intensity;
-        ambPt.userData.labelName     = child.name || ('Area #' + (glbLights.length + 1));
-        glbLights.push(ambPt);
-        // 注意: 意図的に parent.add(ambPt) を呼ばない（シーングラフに追加しない）。
-        // これにより標準ライトループの計算コスト・ライト数も増えない（モバイル負荷対策にもなる）。
-
-        // 面の変換情報（position/quaternion/scale）をnodeとして保持しておく。
-        // updateHullGlowUniformsでワールド変換を毎フレーム計算するため、
-        // PointLightではなくemptyの変換を持つObject3Dをそのまま使う。
-        // ただしemptyはparent.remove(child)で削除してしまうので、
-        // PointLightに同じ変換を引き継いだダミーObject3Dを用意する。
-        const areaNode = new THREE.Object3D();
-        areaNode.position.copy(child.position);
-        areaNode.quaternion.copy(child.quaternion);
-        areaNode.scale.copy(child.scale);
-        ambPt.userData.areaNode = areaNode; // UIからサイズ・向き変更のため参照を保持
-        hullGlowSources.push({ light: ambPt, node: areaNode, color: new THREE.Color(colorStr), baseIntensity: intensity });
-
-        // 元のEmptyと同じ親（＝modelのローカル階層）にぶら下げ、Emptyは削除
-        const parent = child.parent || model;
-        parent.add(areaNode); // 面変換追従用ノード（updateWorldMatrix対象）。ambPtはシーンに追加しない。
-        parent.remove(child);
-    });
+    // ── エリアライトの生成は 25-area-lights.js に任せる ──────────────────
+    // 元のEmptyと同じ親・同じローカル変換のノードを置き、その子に光源を持たせる
+    // 方式なので、モデルの移動・回転・拡縮にシーングラフの継承だけで追従する
+    // （ワールド座標を手計算して焼き込む必要がない＝modelOffsetを後から変えても
+    //   ズレない）。実際の照明は three.js の RectAreaLight（面光源）が行い、
+    // 影は同じ位置・向きに置いた SpotLight が担当する。
+    if (typeof buildAreaLights === 'function') {
+        buildAreaLights(model, pendingAreaLightEmpties);
+    }
 
     importedModelGroup = new THREE.Group();
     importedModelGroup.add(model);
     shipGroup.add(importedModelGroup);
-
-    // モデル内の全マテリアルに「面全体グロー」をシェーダーで仕込む。
-    // 法線方向に関係なく、近くのエリアライト位置からの距離だけで
-    // emissiveを底上げするので、窓の外側プレートのような
-    // 「光源の真反対を向いた面」でも自然に明るくなる。
-    if (hullGlowSources.length > 0) {
-        applyHullGlowShader(model, hullGlowSources);
-    }
 
     detectGlbMovableParts(model);
 
@@ -1768,12 +1539,11 @@ function applyGlbLightSettingsData(settingsArr) {
             if (sn.pos)   an.position.set(sn.pos.x, sn.pos.y, sn.pos.z);
             if (sn.rot)   an.rotation.set(sn.rot.x, sn.rot.y, sn.rot.z, sn.rot.order || 'XYZ');
             if (sn.scale) an.scale.set(sn.scale.x, sn.scale.y, sn.scale.z);
-            // light本体の位置もareaNodeに同期（シェーダー以外のPointLight等でも使われるため）
-            light.position.copy(an.position);
-            // mirrorLightの位置も対称に更新
-            if (light.userData.mirrorLight) {
-                light.userData.mirrorLight.position.set(-an.position.x, an.position.y, an.position.z);
-            }
+            // RectAreaLight本体は「スケールを持たない光源ノード」の子として
+            // ローカル原点に置いてあり、位置はそのノードが areaNode から毎フレーム
+            // 受け取る（25-area-lights.js）。ここで light.position を触ると
+            // 二重にオフセットされてしまうので、エリアライト以外だけ同期する。
+            if (!light.isRectAreaLight) light.position.copy(an.position);
             // areaBoxHelper（ギズモ用ワイヤーフレーム）も同期
             if (light.userData.areaBoxHelper) {
                 const h = light.userData.areaBoxHelper;
@@ -1880,9 +1650,15 @@ function applyGlbLightIntensities() {
     glbLights.forEach((light) => {
         if (light.userData && light.userData.isMirrorLight) return; // ミラーは元ライトに同期するのでスキップ
         const base = light.userData.baseIntensity != null ? light.userData.baseIntensity : light.intensity;
-        light.intensity = base * glbLightMaster * factor;
         // 個別のON/OFFスイッチ(手動)が優先。手動でOFFでなければ、昼の自動消灯判定に従う。
-        light.visible = !light.userData.manuallyOff && !autoHide;
+        const wantVisible = !light.userData.manuallyOff && !autoHide;
+        // エリアライトは RectAreaLight と影用SpotLightの2灯構成で、光量を分け合う。
+        // その配分は 25-area-lights.js の updateAreaLights() が毎フレーム決めるので、
+        // ここでは「こうしたい値」をuserDataに残すだけにして、直接の代入は競合させない。
+        light.userData.targetIntensity = base * glbLightMaster * factor;
+        light.userData.targetVisible   = wantVisible;
+        light.intensity = light.userData.targetIntensity;
+        light.visible = wantVisible;
         if (light.userData.mirrorLight) {
             light.userData.mirrorLight.intensity = light.intensity;
             light.userData.mirrorLight.visible = light.visible;
@@ -2063,15 +1839,17 @@ function updateGlbLightsUI() {
         row.style.cssText = 'margin-bottom:10px;padding:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.12);border-radius:6px;';
 
         // エリアライトはサイズ・位置・ギズモ・シンメトリーも表示
-        const pos = light.position;
+        // エリアライトの位置の実体は areaNode（光源本体はその子ノードの原点に居る）
+        const pos = (light.userData && light.userData.areaNode) ? light.userData.areaNode.position : light.position;
         const isSym = !!light.userData.symmetry;
         // isAreaLight（PointLight代用）も RectAreaLight と同じUIを出す
         const isAreaLike = light.isRectAreaLight || light.userData.isAreaLight;
         // サイズ・向きの現在値を取得
         const _anode = light.userData.areaNode;
-        const _aw = light.isRectAreaLight ? light.width  : (_anode ? _anode.scale.x : 1);
-        const _ah = light.isRectAreaLight ? light.height : (_anode ? _anode.scale.z : 1); // Z=高さ(シェーダー軸と一致)
-        const _asrc = light.isRectAreaLight ? light.rotation : (_anode ? _anode.rotation : new THREE.Euler());
+        // areaNode があるときは常にそちらが実体（scale.x=幅, scale.z=高さ, rotationは面の向き）
+        const _aw = _anode ? _anode.scale.x : (light.isRectAreaLight ? light.width  : 1);
+        const _ah = _anode ? _anode.scale.z : (light.isRectAreaLight ? light.height : 1);
+        const _asrc = _anode ? _anode.rotation : (light.isRectAreaLight ? light.rotation : new THREE.Euler());
         const _rx = THREE.MathUtils.radToDeg(_asrc.x || 0);
         const _ry = THREE.MathUtils.radToDeg(_asrc.y || 0);
         const _rz = THREE.MathUtils.radToDeg(_asrc.z || 0);

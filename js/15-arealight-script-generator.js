@@ -79,33 +79,35 @@ function copyAreaLightScript(btn) {
 
 // ===== RectAreaLight ギズモ・シンメトリー =====
 
+// エリアライトの位置・向き・サイズの実体は areaNode（25-area-lights.js が作る
+// 「操作用ノード」）。光源本体（RectAreaLightと影用SpotLight）はスケールを持たない
+// 別ノードの子で、毎フレーム areaNode の位置・回転を受け取る。
+// したがってUIからは areaNode だけを書き換えればよい。
 function setAreaLightPos(i, axis, val) {
     const light = glbLights[i];
     if (!light || (!light.isRectAreaLight && !light.userData.isAreaLight)) return;
-    light.position[axis] = val;
-    // areaNode も同期（glowシェーダーの位置計算に使う）
-    if (light.userData.areaNode) light.userData.areaNode.position[axis] = val;
-    // シンメトリーミラーも追従
-    if (light.userData.symmetry && light.userData.mirrorLight) {
+    const node = light.userData.areaNode;
+    if (node) node.position[axis] = val;
+    else      light.position[axis] = val;
+    // シンメトリーのミラーは updateAreaLights() が元ライトから毎フレーム作り直すので、
+    // ここで個別に動かす必要はない（areaNodeを持たない旧形式のときだけ同期する）。
+    if (!node && light.userData.symmetry && light.userData.mirrorLight) {
         light.userData.mirrorLight.position[axis] = axis === 'x' ? -val : val;
-        if (light.userData.mirrorLight.userData.areaNode) {
-            light.userData.mirrorLight.userData.areaNode.position[axis] = axis === 'x' ? -val : val;
-        }
     }
 }
-// エリアライトのサイズ変更（areaNodeのscaleを変更）
-// updateHullGlowUniformsの軸定義: X=幅方向, Z=高さ方向, Y=法線
+
+// エリアライトのサイズ変更。軸の定義: X=幅方向, Z=高さ方向, Y=法線（照射方向）
 function setAreaLightSize(i, axis, val) {
     const light = glbLights[i];
     if (!light) return;
     val = Math.max(0.01, parseFloat(val) || 1);
-    if (light.isRectAreaLight) {
+    const node = light.userData.areaNode;
+    if (node) {
+        if (axis === 'w') node.scale.x = val; // X=幅
+        if (axis === 'h') node.scale.z = val; // Z=高さ
+    } else if (light.isRectAreaLight) {
         if (axis === 'w') light.width  = val;
         if (axis === 'h') light.height = val;
-    } else if (light.userData.areaNode) {
-        const node = light.userData.areaNode;
-        if (axis === 'w') node.scale.x = val; // X=幅
-        if (axis === 'h') node.scale.z = val; // Z=高さ（シェーダーと一致）
     }
 }
 
@@ -114,17 +116,23 @@ function setAreaLightRotation(i, axis, val) {
     const light = glbLights[i];
     if (!light) return;
     const rad = THREE.MathUtils.degToRad(parseFloat(val) || 0);
-    if (light.isRectAreaLight) {
-        light.rotation[axis] = rad;
-    } else if (light.userData.areaNode) {
-        light.userData.areaNode.rotation[axis] = rad;
-    }
+    const node = light.userData.areaNode;
+    if (node) node.rotation[axis] = rad;
+    else if (light.isRectAreaLight) light.rotation[axis] = rad;
 }
 
 function toggleAreaLightSymmetry(i, enabled) {
     const light = glbLights[i];
     if (!light || (!light.isRectAreaLight && !light.userData.isAreaLight)) return;
     light.userData.symmetry = enabled;
+
+    // 新方式（areaNodeを持つエリアライト）は、ミラーも「操作用ノード＋光源ノード＋
+    // 影用SpotLight」の一式で作らないと影や面サイズが食い違う。生成と追従は
+    // 25-area-lights.js に任せる。
+    if (light.userData.areaNode && typeof setAreaLightMirror === 'function') {
+        setAreaLightMirror(light, enabled);
+        return;
+    }
 
     if (enabled) {
         // ミラーライトがなければ生成

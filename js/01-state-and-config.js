@@ -212,6 +212,9 @@ function applyShadowQualityFromPerf() {
     // v147: 窓灯りPointLight（windowGlowLights、08-model-loading-and-lighting.js）の
     // 影設定も、画質プリセットが変わるたびに追従させる（モデルを読み込み直さなくても
     // 品質スライダーの変更だけで即座に切り替わるように）。
+    // エリアライトの影（25-area-lights.js）も画質設定に追従させる
+    if (typeof refreshAreaLightShadowQuality === 'function') refreshAreaLightShadowQuality();
+
     const wg = getWindowGlowShadowConfig();
     windowGlowLights.forEach((pl) => {
         pl.castShadow = wg.enabled;

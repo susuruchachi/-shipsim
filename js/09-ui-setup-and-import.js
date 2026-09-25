@@ -131,6 +131,9 @@ function setupUIControls() {
     setupParamControl('wavewidth-slider', 'wavewidth-num', 'wavewidth-dec', 'wavewidth-inc', (v) => { physics.waveWidth = v; });
     setupParamControl('swell-slider', 'swell-num', 'swell-dec', 'swell-inc', (v) => { physics.swellStrength = v; });
     setupParamControl('chop-slider', 'chop-num', 'chop-dec', 'chop-inc', (v) => { physics.chopStrength = v; });
+    // v170: 天候パネル。波スライダーのsetupParamControlより後に呼ぶこと
+    // （初期化時にdisabled状態を上書きされないようにするため）。
+    if (typeof initWeatherUI === 'function') initWeatherUI();
     setupParamControl('turnrad-slider', 'turnrad-num', 'turnrad-dec', 'turnrad-inc', (v) => { physics.turningRadiusFactor = v; });
     setupParamControl('physspeed-slider', 'physspeed-num', 'physspeed-dec', 'physspeed-inc', (v) => { physicsSpeed = v; });
 

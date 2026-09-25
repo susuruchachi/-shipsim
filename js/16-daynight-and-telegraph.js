@@ -158,15 +158,20 @@ function updateDayNightCycle(dayProgress) {
     if (!sunLight.userData.currentPos) sunLight.userData.currentPos = activeLightPos.clone();
     sunLight.userData.currentPos.lerp(activeLightPos, 0.03);
     sunLight.position.copy(sunLight.userData.currentPos);
-    sunLight.intensity += (lightIntensity * lightSettings.sunMult - sunLight.intensity) * 0.05;
+    // v170: 天候による減光。時刻で決まる明るさに掛け算することで、
+    // 「曇りの朝」「快晴の夕方」が自然に両立する（どちらか一方が
+    // もう一方を上書きしてしまわない）。
+    const wxMul = window.weatherLightMul || { sun: 1, ambient: 1, hemi: 1, fog: 1 };
+    sunLight.intensity += (lightIntensity * lightSettings.sunMult * wxMul.sun - sunLight.intensity) * 0.05;
     sunLight.color.lerp(lightColor, 0.05);
     scene.background.lerp(background, 0.05);
     scene.fog.color.lerp(fogColor, 0.05);
-    const targetFogDensity = (isNight ? 0.00015 : 0.00025) * lightSettings.fogMult;
+    // 荒天ほど視程が落ちる（しぶき・降水・もやで霞む）
+    const targetFogDensity = (isNight ? 0.00015 : 0.00025) * lightSettings.fogMult * wxMul.fog;
     scene.fog.density += (targetFogDensity - scene.fog.density) * 0.02;
 
-    ambientLight.intensity += (ambientIntensity * lightSettings.ambientMult - ambientLight.intensity) * 0.05;
-    hemiLight.intensity += (hemiIntensity * lightSettings.hemiMult - hemiLight.intensity) * 0.05;
+    ambientLight.intensity += (ambientIntensity * lightSettings.ambientMult * wxMul.ambient - ambientLight.intensity) * 0.05;
+    hemiLight.intensity += (hemiIntensity * lightSettings.hemiMult * wxMul.hemi - hemiLight.intensity) * 0.05;
     if (fillLight) {
         const targetFill = lightIntensity * 0.3 * lightSettings.fillMult;
         fillLight.intensity += (targetFill - fillLight.intensity) * 0.05;

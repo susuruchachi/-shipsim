@@ -431,7 +431,12 @@ function createWater() {
     };
     // 毎フレーム glbLights からユニフォームを更新する関数（main-loopから呼ぶ）
     window._updateWaterShipLights = function() {
-        const lights = (window.glbLights || []).filter(l => l.visible && l.intensity > 0);
+        // エリアライトは glbLights に「シーンに居ないデータ保持役」として入って
+        // いるのでワールド座標を持たない。実際にシーンで光っている枠のライト
+        // （25-area-lights.js）を代わりに足す。
+        const lights = (window.glbLights || [])
+            .filter(l => l.visible && l.intensity > 0 && !(l.userData && l.userData.isAreaLight))
+            .concat(typeof getAreaLightSceneLights === 'function' ? getAreaLightSceneLights() : []);
         const cnt = Math.min(lights.length, WATER_SHIP_LIGHT_MAX);
         waterUniforms.shipLightCount.value = cnt;
         const _wp = new THREE.Vector3();

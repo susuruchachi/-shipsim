@@ -252,9 +252,12 @@ function onGizmoChange() {
         const anode = light.userData.areaNode;
 
         if (currentGizmoMode === 'translate') {
-            // areaNode が動く → light も同期（areaNode と light は同じ親のLocal座標）
+            // areaNode が動く → UI反映。
+            // RectAreaLight本体はスケールを持たない光源ノードの子（ローカル原点）で、
+            // 位置は 25-area-lights.js が areaNode から毎フレーム写す。ここで
+            // light.position を触ると二重にずれるので、旧形式のときだけ同期する。
             if (anode) {
-                light.position.copy(anode.position);
+                if (!light.isRectAreaLight) light.position.copy(anode.position);
                 const ix = $(`alight-x-${i}`); if (ix) ix.value = anode.position.x.toFixed(2);
                 const iy = $(`alight-y-${i}`); if (iy) iy.value = anode.position.y.toFixed(2);
                 const iz = $(`alight-z-${i}`); if (iz) iz.value = anode.position.z.toFixed(2);
@@ -263,7 +266,9 @@ function onGizmoChange() {
                 const iy = $(`alight-y-${i}`); if (iy) iy.value = pos.y.toFixed(2);
                 const iz = $(`alight-z-${i}`); if (iz) iz.value = pos.z.toFixed(2);
             }
-            if (light.userData.symmetry && light.userData.mirrorLight) {
+            // シンメトリーのミラーは updateAreaLights() が元ライトから毎フレーム
+            // 位置・向きを作り直すので、新方式では何もしなくてよい。
+            if (!anode && light.userData.symmetry && light.userData.mirrorLight) {
                 const lp = light.position;
                 light.userData.mirrorLight.position.set(-lp.x, lp.y, lp.z);
             }

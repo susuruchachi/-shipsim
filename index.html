@@ -150,6 +150,22 @@
         <input type="range" id="draft-slider" min="-4.0" max="4.0" step="0.05" value="0.00" class="param-slider" style="accent-color: #ffaa66;">
     </div>
 
+    <div class="interactive-ui" id="weather-panel">
+        <div class="param-row">
+            <label style="color:#9fd8ff; font-weight:bold;">🌦 天候</label>
+            <span id="weather-readout" style="font-family:monospace;font-size:11px;color:#8fb8d8;"></span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0;">
+            <label style="font-size:11.5px;color:#cfe3f2;display:flex;align-items:center;gap:4px;cursor:pointer;">
+                <input type="checkbox" id="weather-enabled" checked style="width:auto;margin:0;">天候で風・波を制御
+            </label>
+            <label style="font-size:11.5px;color:#cfe3f2;display:flex;align-items:center;gap:4px;cursor:pointer;">
+                <input type="checkbox" id="weather-auto" checked style="width:auto;margin:0;">自動で移り変わる
+            </label>
+        </div>
+        <div id="weather-presets" style="display:flex;gap:4px;flex-wrap:wrap;"></div>
+    </div>
+
     <div class="interactive-ui">
         <div class="param-row">
             <label style="color:#ffcc00; font-weight:bold;">Wave Height (波高):</label>
@@ -1000,6 +1016,9 @@
 <script src="js/15-arealight-script-generator.js"></script>
 <script src="js/16-daynight-and-telegraph.js"></script>
 <script src="js/20-viewpoint-camera.js"></script>
+<script src="js/23-underwater.js"></script>
+<script src="js/24-weather.js"></script>
+<script src="js/25-area-lights.js"></script>
 <script src="js/17-main-loop.js"></script>
 <script src="js/18-hull-wake-physics.js"></script>
 <script src="js/19-swe-fluid.js"></script>

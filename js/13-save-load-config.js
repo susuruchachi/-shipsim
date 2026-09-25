@@ -144,6 +144,13 @@ function collectShipConfig() {
                 } : null,
             };
         }),
+        // 天候（24-weather.js）。ONのときは風・波はここから決まるので、
+        // 上の waveRoughness 等より優先される。
+        weather: (window.weather) ? {
+            enabled: !!window.weather.enabled,
+            auto: !!window.weather.auto,
+            presetKey: window.weather.presetKey,
+        } : null,
         // 位置・向き・月齢
         shipPos: { x: physics.cgWorldX, z: physics.cgWorldZ, heading: physics.heading },
         dayProgress: physics.dayProgress,
@@ -292,6 +299,28 @@ function applyShipConfig(cfg) {
         } else {
             pendingGlbLightSettings = cfg.glbLightSettings;
         }
+    }
+
+    // ── 天候（24-weather.js）──────────────────────────────────────────
+    // 天候がONだと風・波はそちらが毎フレーム上書きするので、この設定が
+    // 保存していた風速・波の値は効かなくなる。天候機能より前に保存された
+    // データ（weatherキーが無い）は、保存された風・波の値のほうを尊重して
+    // 天候制御を切っておく。あとでパネルのチェックで戻せる。
+    if (window.weather) {
+        const wx = cfg.weather;
+        window.weather.enabled = wx ? !!wx.enabled : false;
+        window.weather.auto    = wx ? !!wx.auto    : window.weather.auto;
+        if (wx && wx.presetKey && typeof setWeatherPreset === 'function') {
+            setWeatherPreset(wx.presetKey, { immediate: true });
+        }
+        const wxEnabled = $('weather-enabled');
+        const wxAuto    = $('weather-auto');
+        if (wxEnabled) wxEnabled.checked = window.weather.enabled;
+        if (wxAuto)    wxAuto.checked    = window.weather.auto;
+        if (typeof setWeatherDrivenSlidersDisabled === 'function') {
+            setWeatherDrivenSlidersDisabled(window.weather.enabled);
+        }
+        if (typeof renderWeatherPanel === 'function') renderWeatherPanel();
     }
 
     if (typeof cfg.waterVisible === 'boolean') {

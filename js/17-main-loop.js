@@ -20,12 +20,19 @@ function animate() {
         $('phase-slider').value = physics.moonPhase;
         $('phase-num').value = physics.moonPhase.toFixed(2);
     }
+    // v170: 天候を先に進める。ここで physics.windSpeed/waveRoughness 等が
+    // 書き換わり、この後の波・浮力・描画がすべて新しい海況で計算される。
+    // updateDayNightCycle より前に置くのは、天候が決める減光倍率
+    // (window.weatherLightMul) を同じフレームの時刻計算に反映させるため。
+    if (typeof updateWeather === 'function') updateWeather(dt, t);
+
     updateDayNightCycle(physics.dayProgress);
     updateSunShadowFollow();               // v83: 太陽シャドウカメラを船へ追従
     if (typeof maybeUpdateEnvironmentMap === 'function') maybeUpdateEnvironmentMap(dt); // v83: 空のIBL環境光を数秒おきに再撮影
     // 引き波波源点のワールド座標を heading+modelOffset.ry で毎フレーム更新
     if (typeof updateHullSlicePositions === 'function') updateHullSlicePositions();
-    updateHullGlowUniforms(); // 船の移動・回転に合わせて内壁グローの位置・反転設定をGPUへ反映
+    // エリアライト（面光源＋影用スポット）を、カメラに近い順に枠へ割り当て直す
+    if (typeof updateAreaLights === 'function') updateAreaLights(t);
     // エリアライト枠をareaNodeの変換に追随させる
     if (typeof glbLights !== 'undefined') {
         glbLights.forEach(l => {
@@ -604,6 +611,12 @@ function animate() {
     waterMesh.position.z = Math.round(physics.cgWorldZ);
 
     updateUI();
+
+    // 水中表現。updateDayNightCycle()が決めた「水上での正しい霧・背景・光量」を
+    // 入力として、カメラが水没していればその上から水中ぶんを掛ける。
+    // 描画の直前に置くことで、この1フレームぶんの上書きだけで完結する
+    // （状態の退避・復元が不要になり、時刻変化との競合も起きない）。
+    if (typeof updateUnderwater === 'function') updateUnderwater(t);
 
     if (bloomEnabled && bloomComposer) {
         renderWithBloom();
