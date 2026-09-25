@@ -150,6 +150,8 @@ function collectShipConfig() {
             enabled: !!window.weather.enabled,
             auto: !!window.weather.auto,
             presetKey: window.weather.presetKey,
+            // 手動で細かく決めた天候（presetKey が 'custom' のとき使う）
+            custom: Object.assign({}, window.weather.custom),
         } : null,
         // 位置・向き・月齢
         shipPos: { x: physics.cgWorldX, z: physics.cgWorldZ, heading: physics.heading },
@@ -312,6 +314,12 @@ function applyShipConfig(cfg) {
         const wx = cfg.weather;
         window.weather.enabled = wx ? !!wx.enabled : false;
         window.weather.auto    = wx ? !!wx.auto    : window.weather.auto;
+        if (wx && wx.custom && typeof wx.custom === 'object') {
+            const c = wx.custom;
+            if (Number.isFinite(c.beaufort)) window.weather.custom.beaufort = c.beaufort;
+            if (Number.isFinite(c.cloud))    window.weather.custom.cloud = c.cloud;
+            window.weather.custom.windDir = Number.isFinite(c.windDir) ? c.windDir : null;
+        }
         if (wx && wx.presetKey && typeof setWeatherPreset === 'function') {
             setWeatherPreset(wx.presetKey, { immediate: true });
         }
@@ -323,6 +331,7 @@ function applyShipConfig(cfg) {
             setWeatherDrivenSlidersDisabled(window.weather.enabled);
         }
         if (typeof renderWeatherPanel === 'function') renderWeatherPanel();
+        if (typeof _weatherSyncManualSliders === 'function') _weatherSyncManualSliders(true);
     }
 
     if (typeof cfg.waterVisible === 'boolean') {

@@ -164,6 +164,16 @@
             </label>
         </div>
         <div id="weather-presets" style="display:flex;gap:4px;flex-wrap:wrap;"></div>
+        <!-- 手動で細かく決める（動かすと「カスタム」になり、自動変化は止まる） -->
+        <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;font-size:11px;color:#cfe3f2;">
+            <div style="display:flex;justify-content:space-between;"><span>風力</span><span id="weather-bf-val" style="font-family:monospace;color:#8fb8d8;"></span></div>
+            <input type="range" id="weather-bf" min="0" max="12" step="0.5" value="5" class="param-slider" style="accent-color:#7fc4ff;">
+            <div style="display:flex;justify-content:space-between;"><span>雲量</span><span id="weather-cloud-val" style="font-family:monospace;color:#8fb8d8;"></span></div>
+            <input type="range" id="weather-cloud" min="0" max="100" step="1" value="45" class="param-slider" style="accent-color:#b8c7d4;">
+            <div style="display:flex;justify-content:space-between;"><span>風向</span><span id="weather-dir-val" style="font-family:monospace;color:#8fb8d8;"></span></div>
+            <input type="range" id="weather-dir" min="0" max="355" step="5" value="45" class="param-slider" style="accent-color:#aaddff;">
+            <button type="button" id="weather-apply-now" class="adjust-btn" style="margin-top:4px;width:100%;height:auto;font-size:11px;font-weight:normal;padding:5px 6px;">⚡ すぐ反映（うねりも含めて一気に切り替え）</button>
+        </div>
     </div>
 
     <div class="interactive-ui">

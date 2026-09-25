@@ -76,6 +76,18 @@ const WEATHER_TAU_SWELL     = 1 / 70;  // うねり（約70秒。風が止んで
 const WEATHER_AUTO_MIN_SEC = 90;
 const WEATHER_AUTO_MAX_SEC = 260;
 
+// 手で天候を変えたときの追従の速さ[1/秒]（約3秒）。自動の移り変わり
+// （約25秒）のままだと、ボタンを押しても何も起きないように見えるため。
+// うねりだけは手動でも遅れて育つ（それが自然な海なので）。すぐに全部
+// 切り替えたいときは「すぐ反映」を使う。
+const WEATHER_TAU_MANUAL = 1 / 3;
+const WEATHER_MANUAL_FAST_SEC = 10;   // 手で変えてから、速い追従を続ける時間[秒]
+// 手動で風向を決めたときの揺らぎ[度]。完全に固定だと機械的に見えるので少しだけ振れる。
+const WEATHER_MANUAL_DIR_SWING = 4;
+
+// 手動で細かく決める天候（presetKey が 'custom' のときに使う）
+const WEATHER_CUSTOM_KEY = 'custom';
+
 window.weather = {
     enabled: true,      // 天候で風・波を制御するか（OFFなら既存の手動スライダーのまま）
     auto: true,         // 自動で移り変わるか
@@ -90,6 +102,11 @@ window.weather = {
     _windDirTarget: 45,
     _nextChangeAt: 0,   // 次に自動変化する時刻[秒]
     _initialized: false,
+
+    // 手動で細かく決めた天候（presetKey === 'custom' のとき使う）。
+    // windDir が null なら風向は自然に振れるまま。
+    custom: { beaufort: 5.0, cloud: 0.45, windDir: null },
+    _fastUntil: 0,      // この時刻までは手動の速い追従（WEATHER_TAU_MANUAL）を使う
 };
 
 // 16-daynight-and-telegraph.js が参照する光量・霧の倍率
@@ -97,6 +114,37 @@ window.weatherLightMul = { sun: 1, ambient: 1, hemi: 1, fog: 1 };
 
 function weatherPresetByKey(key) {
     return WEATHER_PRESETS.find(p => p.key === key) || WEATHER_PRESETS[2];
+}
+
+// ビューフォート数に一番近いプリセット
+function weatherNearestPreset(beaufort) {
+    let best = WEATHER_PRESETS[0];
+    for (const p of WEATHER_PRESETS) if (Math.abs(p.beaufort - beaufort) < Math.abs(best.beaufort - beaufort)) best = p;
+    return best;
+}
+
+// ビューフォート数から、プリセットの表を補間して視程（haze）を決める。
+// 手動で風力だけ決めたときも、荒れるほど霞むという関係を保つ。
+function weatherHazeFromBeaufort(b) {
+    const P = WEATHER_PRESETS;
+    if (b <= P[0].beaufort) return P[0].haze;
+    for (let i = 1; i < P.length; i++) {
+        if (b <= P[i].beaufort) {
+            const k = (b - P[i - 1].beaufort) / (P[i].beaufort - P[i - 1].beaufort);
+            return P[i - 1].haze + (P[i].haze - P[i - 1].haze) * k;
+        }
+    }
+    return P[P.length - 1].haze;
+}
+
+// 今の目標天候 { beaufort, cloud, haze }
+function weatherTarget() {
+    const w = window.weather;
+    if (w.presetKey === WEATHER_CUSTOM_KEY) {
+        const c = w.custom;
+        return { beaufort: c.beaufort, cloud: c.cloud, haze: weatherHazeFromBeaufort(c.beaufort) };
+    }
+    return weatherPresetByKey(w.presetKey);
 }
 
 // ビューフォート数 → 風速[m/s]。B = (v/0.836)^(2/3) の逆算。
@@ -122,7 +170,9 @@ function weatherApproach(current, target, ratePerSec, dt) {
 // 自動変化のときに次の目標天候を選ぶ。
 // 隣の天候へ移りやすく、いきなり凪から嵐へは飛ばない（ランダムウォーク）。
 function weatherPickNextPreset(currentKey) {
-    const idx = Math.max(0, WEATHER_PRESETS.findIndex(p => p.key === currentKey));
+    let idx = WEATHER_PRESETS.findIndex(p => p.key === currentKey);
+    // 手動（カスタム）から自動に戻したときは、今の風力に近いプリセットから歩き始める
+    if (idx < 0) idx = WEATHER_PRESETS.indexOf(weatherNearestPreset(window.weather.beaufort));
     const r = Math.random();
     let next;
     if (r < 0.40)      next = idx - 1;
@@ -134,15 +184,28 @@ function weatherPickNextPreset(currentKey) {
 
 function setWeatherPreset(key, opts) {
     const w = window.weather;
-    const p = weatherPresetByKey(key);
-    w.presetKey = p.key;
-    if (opts && opts.immediate) {
-        w.beaufort = p.beaufort;
-        w.swellBeaufort = p.beaufort;
-        w.cloud = p.cloud;
-        w.haze = p.haze;
-    }
+    w.presetKey = (key === WEATHER_CUSTOM_KEY) ? WEATHER_CUSTOM_KEY : weatherPresetByKey(key).key;
+    if (opts && opts.immediate) applyWeatherTargetNow();
     if (typeof renderWeatherPanel === 'function') renderWeatherPanel();
+}
+
+// 目標天候へ、うねりも含めて一気に切り替える（「すぐ反映」ボタン・設定の読込）
+function applyWeatherTargetNow() {
+    const w = window.weather;
+    const tg = weatherTarget();
+    w.beaufort = tg.beaufort;
+    w.swellBeaufort = tg.beaufort;
+    w.cloud = tg.cloud;
+    w.haze = tg.haze;
+    if (w.presetKey === WEATHER_CUSTOM_KEY && w.custom.windDir != null) {
+        w.windDir = w._windDirTarget = weatherDirToSigned(w.custom.windDir);
+    }
+}
+
+// 0〜360度 → -180〜180度
+function weatherDirToSigned(d) {
+    let v = ((d % 360) + 360) % 360;
+    return v > 180 ? v - 360 : v;
 }
 
 // 毎フレーム呼ぶ。dt[秒]、t[秒]。
@@ -152,12 +215,13 @@ function updateWeather(dt, t) {
     dt = Math.max(0, Math.min(dt || 0, 0.25)); // 一時停止明けの巨大なdtで飛ばないように
 
     if (!w._initialized) {
-        const p = weatherPresetByKey(w.presetKey);
+        const p = weatherTarget();
         w.beaufort = p.beaufort; w.swellBeaufort = p.beaufort;
         w.cloud = p.cloud; w.haze = p.haze;
         w._nextChangeAt = t + WEATHER_AUTO_MIN_SEC;
         w._initialized = true;
     }
+    w._now = t;
 
     if (!w.enabled) {
         // 天候OFF。光量・雲量の上書きも解除して、手動スライダーに完全に任せる。
@@ -173,23 +237,44 @@ function updateWeather(dt, t) {
             + Math.random() * (WEATHER_AUTO_MAX_SEC - WEATHER_AUTO_MIN_SEC);
         if (typeof renderWeatherPanel === 'function') renderWeatherPanel();
     }
-    const target = weatherPresetByKey(w.presetKey);
+    const target = weatherTarget();
 
     // ── 現在値を目標へ寄せる ──
-    w.beaufort = weatherApproach(w.beaufort, target.beaufort, WEATHER_TAU_CONDITION, dt);
-    w.cloud    = weatherApproach(w.cloud,    target.cloud,    WEATHER_TAU_CONDITION, dt);
-    w.haze     = weatherApproach(w.haze,     target.haze,     WEATHER_TAU_CONDITION, dt);
+    // 手で変えた直後は速く、自動の移り変わりはゆっくり
+    const tau = (t < w._fastUntil) ? WEATHER_TAU_MANUAL : WEATHER_TAU_CONDITION;
+    w.beaufort = weatherApproach(w.beaufort, target.beaufort, tau, dt);
+    w.cloud    = weatherApproach(w.cloud,    target.cloud,    tau, dt);
+    w.haze     = weatherApproach(w.haze,     target.haze,     tau, dt);
     // うねりは風よりずっと遅れて追従する（風が止んでも残り、吹き始めてもすぐには育たない）
     w.swellBeaufort = weatherApproach(w.swellBeaufort, w.beaufort, WEATHER_TAU_SWELL, dt);
 
     // ── 風向 ──
     // 普段はゆっくり振れるだけ。荒れているときほど振れ幅が大きい。
-    if (t >= (w._nextDirChangeAt || 0)) {
-        const swing = 12 + w.beaufort * 6;          // 荒天ほど大きく振れる
-        w._windDirTarget = w.windDir + (Math.random() - 0.5) * 2 * swing;
+    // 手動で風向を決めたときは、その向きのまわりで少しだけ振れる。
+    const manualDir = (w.presetKey === WEATHER_CUSTOM_KEY && w.custom.windDir != null)
+        ? weatherDirToSigned(w.custom.windDir) : null;
+    if (manualDir != null && w._manualDirApplied !== w.custom.windDir) {
+        // 新しく向きを決めた：最短回りで向かうよう目標を今の値の近くへ寄せる
+        let d = manualDir - w.windDir;
+        while (d > 180) d -= 360;
+        while (d < -180) d += 360;
+        w._windDirTarget = w.windDir + d;
+        w._manualDirApplied = w.custom.windDir;
+        w._nextDirChangeAt = t + 8;
+    } else if (t >= (w._nextDirChangeAt || 0)) {
+        if (manualDir != null) {
+            let d = manualDir - w.windDir;
+            while (d > 180) d -= 360;
+            while (d < -180) d += 360;
+            w._windDirTarget = w.windDir + d + (Math.random() - 0.5) * 2 * WEATHER_MANUAL_DIR_SWING;
+        } else {
+            const swing = 12 + w.beaufort * 6;          // 荒天ほど大きく振れる
+            w._windDirTarget = w.windDir + (Math.random() - 0.5) * 2 * swing;
+        }
         w._nextDirChangeAt = t + 20 + Math.random() * 40;
     }
-    w.windDir = weatherApproach(w.windDir, w._windDirTarget, 1 / 30, dt);
+    if (manualDir == null) w._manualDirApplied = null;
+    w.windDir = weatherApproach(w.windDir, w._windDirTarget, (t < w._fastUntil) ? WEATHER_TAU_MANUAL : 1 / 30, dt);
     // -180〜180に正規化（延々と増え続けないように）
     while (w.windDir > 180)  { w.windDir -= 360; w._windDirTarget -= 360; }
     while (w.windDir < -180) { w.windDir += 360; w._windDirTarget += 360; }
@@ -236,83 +321,157 @@ function updateWeather(dt, t) {
         w._lastUiSync = t;
         if (typeof syncWeatherDrivenSliders === 'function') syncWeatherDrivenSliders();
         if (typeof updateWeatherReadout === 'function') updateWeatherReadout();
+        if (typeof _weatherSyncManualSliders === 'function') _weatherSyncManualSliders(false);
     }
 }
 
 // ════════════════════════════════════════════════════════════
 //  UI
 // ════════════════════════════════════════════════════════════
-// 天候が風・波を握っている間は、既存の波スライダーは「天候が決めた値の表示」に
-// なる。ユーザーが自分で動かしたいときは「天候で風・波を制御」を外す。
-// 勝手にOFFに切り替えたりはしない（意図せず制御が移ると分かりにくいため）。
+// 天候が風・波を握っている間は、既存の風・波スライダーは「天候が決めた値の
+// 表示」になる（操作不能＋薄表示）。自分で個別に動かしたいときは
+// 「天候で風・波を制御」を外す。
+//
+// 天候そのものを手で決める方法は2つ：
+//   ・プリセットのボタン（凪〜嵐）
+//   ・風力・雲量・風向のスライダー（細かく決める＝「カスタム」）
+// どちらも操作した時点で「自動で移り変わる」を外す。外さないと、しばらく
+// して自動変化に上書きされ、手で決めた天候が勝手に変わってしまうため。
 
 // 天候が駆動する側のスライダー。id と physics のキーの対応。
 const WEATHER_DRIVEN_SLIDERS = [
-    { slider: 'roughness-slider', num: 'roughness-num', key: 'waveRoughness' },
-    { slider: 'wavewidth-slider', num: 'wavewidth-num', key: 'waveWidth' },
-    { slider: 'swell-slider',     num: 'swell-num',     key: 'swellStrength' },
-    { slider: 'chop-slider',      num: 'chop-num',      key: 'chopStrength' },
+    { slider: 'roughness-slider', num: 'roughness-num', key: 'waveRoughness', base: 'roughness' },
+    { slider: 'wavewidth-slider', num: 'wavewidth-num', key: 'waveWidth',     base: 'wavewidth' },
+    { slider: 'swell-slider',     num: 'swell-num',     key: 'swellStrength', base: 'swell' },
+    { slider: 'chop-slider',      num: 'chop-num',      key: 'chopStrength',  base: 'chop' },
+    { slider: 'windspd-slider',   num: 'windspd-num',   key: 'windSpeed',     base: 'windspd', digits: 0 },
+    { slider: 'winddir-slider',   num: 'winddir-num',   key: 'windDir',       base: 'winddir', digits: 0,
+      toUi: (v) => ((Math.round(v) % 360) + 360) % 360 },
 ];
 
 // 表示だけを実際の値に合わせる。setter は呼ばないので物理には影響しない。
 // 入力中の要素（フォーカス中）は触らない。
 function syncWeatherDrivenSliders() {
     for (const d of WEATHER_DRIVEN_SLIDERS) {
-        const v = physics[d.key];
+        let v = physics[d.key];
         if (typeof v !== 'number') continue;
+        if (d.toUi) v = d.toUi(v);
+        const txt = v.toFixed(d.digits != null ? d.digits : 2);
         const sl = document.getElementById(d.slider);
         const nm = document.getElementById(d.num);
-        if (sl && document.activeElement !== sl) sl.value = v.toFixed(2);
-        if (nm && document.activeElement !== nm) nm.value = v.toFixed(2);
+        if (sl && document.activeElement !== sl) sl.value = txt;
+        if (nm && document.activeElement !== nm) nm.value = txt;
     }
 }
 
-// 天候に握られている間、波スライダーを操作不能＋薄表示にして
+// 天候に握られている間、スライダーを操作不能＋薄表示にして
 // 「今はここを触っても効かない」と分かるようにする。
 function setWeatherDrivenSlidersDisabled(disabled) {
     for (const d of WEATHER_DRIVEN_SLIDERS) {
-        for (const id of [d.slider, d.num]) {
+        for (const id of [d.slider, d.num, d.base + '-dec', d.base + '-inc']) {
             const el = document.getElementById(id);
             if (!el) continue;
             el.disabled = disabled;
             el.style.opacity = disabled ? '0.45' : '';
         }
     }
-    // ± ボタンも同様に
-    for (const base of ['roughness', 'wavewidth', 'swell', 'chop']) {
-        for (const sfx of ['-dec', '-inc']) {
-            const el = document.getElementById(base + sfx);
-            if (!el) continue;
-            el.disabled = disabled;
-            el.style.opacity = disabled ? '0.45' : '';
-        }
+}
+
+// メインループが updateWeather に渡すのと同じ時計の、今の時刻
+function _weatherClockNow() {
+    if (typeof clock !== 'undefined' && clock && clock.getElapsedTime) return clock.getElapsedTime();
+    return (typeof window.weather._now === 'number') ? window.weather._now : 0;
+}
+
+// 手で天候を変えたときの共通処理：天候制御をON・自動変化をOFFにし、
+// しばらく速い追従にする。
+function _weatherTakeManualControl() {
+    const w = window.weather;
+    w._fastUntil = _weatherClockNow() + WEATHER_MANUAL_FAST_SEC;
+    let changed = false;
+    if (!w.enabled) { w.enabled = true; changed = true; }
+    if (w.auto) { w.auto = false; changed = true; }
+    if (changed) {
+        const cbEnabled = document.getElementById('weather-enabled');
+        const cbAuto = document.getElementById('weather-auto');
+        if (cbEnabled) cbEnabled.checked = true;
+        if (cbAuto) cbAuto.checked = false;
+        setWeatherDrivenSlidersDisabled(true);
     }
+}
+
+function _weatherStop(el) {
+    ['mousedown', 'touchstart', 'pointerdown'].forEach(ev => el.addEventListener(ev, e => e.stopPropagation()));
 }
 
 function renderWeatherPanel() {
     const w = window.weather;
     const host = document.getElementById('weather-presets');
     if (host) {
+        const isCustom = w.presetKey === WEATHER_CUSTOM_KEY;
         host.innerHTML = WEATHER_PRESETS.map(p =>
             `<button type="button" class="adjust-btn wx-preset" data-wx="${p.key}"`
-            + ` style="flex:1 1 auto;min-width:56px;font-size:11px;padding:4px 6px;`
+            + ` style="flex:1 1 auto;min-width:56px;width:auto;height:auto;font-size:11px;font-weight:normal;padding:4px 6px;white-space:nowrap;`
             + (p.key === w.presetKey ? 'background:#1c4a6e;border-color:#3fa9ff;color:#eaf4ff;' : '')
             + `">${p.label}</button>`
-        ).join('');
+        ).join('')
+        + `<span style="flex:1 1 auto;min-width:56px;font-size:11px;padding:4px 6px;text-align:center;white-space:nowrap;`
+        + `border:1px dashed ${isCustom ? '#3fa9ff' : 'rgba(255,255,255,0.18)'};border-radius:4px;`
+        + `color:${isCustom ? '#eaf4ff' : '#6f8799'};">カスタム</span>`;
         host.querySelectorAll('.wx-preset').forEach(btn => {
             btn.addEventListener('click', () => {
+                _weatherTakeManualControl();
                 window.weather.presetKey = btn.dataset.wx;
-                // 手でプリセットを選んだら、その直後に自動変化が上書きしないよう
-                // 次の自動変化までの時間をリセットする
-                window.weather._nextChangeAt = (typeof clock !== 'undefined' ? clock.getElapsedTime() : 0)
-                    + WEATHER_AUTO_MIN_SEC;
+                // 風向は自然に振れる状態へ戻す（プリセットは風向を持たない）
+                window.weather.custom.windDir = null;
                 renderWeatherPanel();
+                _weatherSyncManualSliders(true);
             });
-            btn.addEventListener('mousedown', e => e.stopPropagation());
-            btn.addEventListener('touchstart', e => e.stopPropagation());
+            _weatherStop(btn);
         });
     }
     updateWeatherReadout();
+}
+
+// ── 手動スライダー（風力・雲量・風向）──
+// 自動で移り変わっている間は「今の値」を、手で決めた（プリセット・カスタム）
+// ときは「目標の値」を表示する。
+function _weatherSyncManualSliders(force) {
+    const w = window.weather;
+    const custom = w.presetKey === WEATHER_CUSTOM_KEY;
+    const tg = weatherTarget();
+    // 自動で移り変わっている間は「今の値」、手で決めたときは「目標の値」を出す
+    const showTarget = force || !w.auto;
+    const bf = custom ? w.custom.beaufort : (showTarget ? tg.beaufort : w.beaufort);
+    const cl = custom ? w.custom.cloud    : (showTarget ? tg.cloud    : w.cloud);
+    const dir = (custom && w.custom.windDir != null) ? w.custom.windDir : ((Math.round(w.windDir) % 360) + 360) % 360;
+    const set = (id, v) => { const el = document.getElementById(id); if (el && document.activeElement !== el) el.value = v; };
+    set('weather-bf', bf.toFixed(1));
+    set('weather-cloud', Math.round(cl * 100));
+    set('weather-dir', Math.round(dir / 5) * 5);
+    const kt = weatherWindSpeedFromBeaufort(bf) * 1.94384;
+    const lab = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+    lab('weather-bf-val', `BF${bf.toFixed(1)}（${kt.toFixed(0)}kt・波${weatherWaveHeightFromBeaufort(bf).toFixed(1)}m）`);
+    lab('weather-cloud-val', `${Math.round(cl * 100)}%`);
+    lab('weather-dir-val', (custom && w.custom.windDir != null) ? `${Math.round(dir)}°` : `${Math.round(dir)}°（自然に変化）`);
+}
+
+function _weatherOnManualSlider(which, value) {
+    const w = window.weather;
+    // 初めてカスタムにするときは、今見えている天候から始める（急に飛ばない）
+    if (w.presetKey !== WEATHER_CUSTOM_KEY) {
+        const tg = weatherTarget();
+        w.custom.beaufort = tg.beaufort;
+        w.custom.cloud = tg.cloud;
+        w.custom.windDir = null;
+        w.presetKey = WEATHER_CUSTOM_KEY;
+    }
+    _weatherTakeManualControl();
+    if (which === 'bf')    w.custom.beaufort = Math.max(0, Math.min(12, value));
+    if (which === 'cloud') w.custom.cloud = Math.max(0, Math.min(1, value / 100));
+    if (which === 'dir')   w.custom.windDir = ((value % 360) + 360) % 360;
+    renderWeatherPanel();
+    _weatherSyncManualSliders(false);
 }
 
 function updateWeatherReadout() {
@@ -320,7 +479,9 @@ function updateWeatherReadout() {
     if (!el) return;
     const w = window.weather;
     if (!w.enabled) { el.textContent = '手動'; return; }
-    const kt = (physics.windSpeed || 0) * 1.94384; // m/s → ノット
+    // physics.windSpeed は次の updateWeather まで更新されないので、
+    // 天候の今の風力から直接出す（「すぐ反映」直後も正しく表示するため）
+    const kt = weatherWindSpeedFromBeaufort(w.beaufort) * 1.94384; // m/s → ノット
     const hSig = weatherWaveHeightFromBeaufort(w.beaufort);
     el.textContent = `BF${w.beaufort.toFixed(1)} / 風${kt.toFixed(0)}kt / 波${hSig.toFixed(1)}m`;
 }
@@ -336,13 +497,40 @@ function initWeatherUI() {
             setWeatherDrivenSlidersDisabled(w.enabled);
             renderWeatherPanel();
         });
-        cbEnabled.addEventListener('mousedown', e => e.stopPropagation());
+        _weatherStop(cbEnabled);
     }
     if (cbAuto) {
         cbAuto.checked = w.auto;
-        cbAuto.addEventListener('change', (e) => { w.auto = e.target.checked; });
-        cbAuto.addEventListener('mousedown', e => e.stopPropagation());
+        cbAuto.addEventListener('change', (e) => {
+            w.auto = e.target.checked;
+            if (w.auto) {
+                // 自動に戻したら、手で決めた風向の固定も解除し、すぐ次の変化へ
+                w.custom.windDir = null;
+                if (w.presetKey === WEATHER_CUSTOM_KEY) w.presetKey = weatherNearestPreset(w.beaufort).key;
+                w._nextChangeAt = _weatherClockNow() + WEATHER_AUTO_MIN_SEC;
+                renderWeatherPanel();
+            }
+        });
+        _weatherStop(cbAuto);
     }
+
+    [['weather-bf', 'bf'], ['weather-cloud', 'cloud'], ['weather-dir', 'dir']].forEach(([id, which]) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('input', (e) => _weatherOnManualSlider(which, parseFloat(e.target.value)));
+        _weatherStop(el);
+    });
+    const nowBtn = document.getElementById('weather-apply-now');
+    if (nowBtn) {
+        nowBtn.addEventListener('click', () => {
+            applyWeatherTargetNow();
+            updateWeatherReadout();
+            _weatherSyncManualSliders(true);
+        });
+        _weatherStop(nowBtn);
+    }
+
     setWeatherDrivenSlidersDisabled(w.enabled);
     renderWeatherPanel();
+    _weatherSyncManualSliders(true);
 }
