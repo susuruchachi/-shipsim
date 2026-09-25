@@ -1,0 +1,304 @@
+// 26-glow-emitters.js — 発光メッシュ（窓・灯具・天窓・看板）を面光源として扱う
+//
+// ════════════════════════════════════════════════════════════════
+//  やりたいこと
+// ════════════════════════════════════════════════════════════════
+//  Blenderで「光る」マテリアルを貼った窓や灯具が、周りの甲板・壁・水面を
+//  照らすようにする。点光源のように近くを明るくしつつ、面光源のように
+//  柔らかく広がる光にしたい。
+//
+// ════════════════════════════════════════════════════════════════
+//  やり方：発光面を「向き × 格子」でまとめてパネルにする
+// ════════════════════════════════════════════════════════════════
+//  発光メッシュの三角形を1枚ずつ見て、
+//    ・向き : 法線がどの軸方向（±X / -Y / ±Z）に一番近いか
+//    ・場所 : 船のローカル座標で、約 GLOW_CELL_METERS 四方の格子のどこか
+//  の組でグループにまとめる。1グループが1枚の「発光パネル」になり、
+//  グループの中心に、その向きを照らす面光源（25-area-lights.js）を置く。
+//
+//  こうすると、
+//    ・窓が1枚ずつ別オブジェクトでも、何百枚が1つに結合（Join）されていても
+//      同じ結果になる（以前は結合メッシュの扱いで何度も不具合が出ていた）
+//    ・天窓のドームのように四方を向いた形は、面ごとに外向きのパネルに分かれ、
+//      周りの甲板を四方へ照らす
+//    ・並んだ灯具は近いもの同士が1枚のパネルにまとまり、光源の数が抑えられる
+//  上向きの面（+Y）は空を照らすだけなので使わない。
+//
+//  光源の数が数百になっても、実際に点けるのはカメラに近い数灯だけ
+//  （25-area-lights.js の枠の仕組み）なので、重さは灯数に比例しない。
+
+// 格子の一辺[m]。灯具の間隔（数m）程度にしておくと、1灯具≒1パネルになる。
+const GLOW_CELL_METERS = 6.0;
+// パネルの最小サイズ[m]。灯具のような小さな発光体でも、周りを照らせる
+// 程度の広がりを持たせる（小さすぎる面光源はほとんど光を出さない）。
+const GLOW_MIN_PANEL_METERS = 1.0;
+// これより面積[m²]の小さいグループは無視する（文字のかけら等のゴミ）
+const GLOW_MIN_AREA_M2 = 0.004;
+// パネルを発光面から浮かせる距離[m]。面そのものに置くと、灯具の枠などに
+// 光が遮られて外に出てこないことがある。
+const GLOW_SURFACE_OFFSET_M = 0.08;
+// パネルの明るさ（RectAreaLightの輝度）の基準値。昼夜係数と
+// 「窓の発光の強さ」スライダー（windowGlowMult）がこれに掛かる。
+const GLOW_PANEL_LUMINANCE = 4.0;
+// 船内全体を底上げする環境光プローブの強さ。あくまで「真っ暗を防ぐ」程度に
+// 留める（強くすると外板まで一様に明るくなり、夜の船らしさが消える）。
+const GLOW_PROBE_STRENGTH = 0.25;
+
+let glowPanelNodes = [];
+
+// 6方向のビン。+Y（上向き）は使わないので null。
+const GLOW_BIN_DIRS = [
+    new THREE.Vector3( 1, 0, 0), new THREE.Vector3(-1, 0, 0),
+    null,                        new THREE.Vector3( 0, -1, 0),
+    new THREE.Vector3( 0, 0, 1), new THREE.Vector3( 0, 0, -1),
+];
+
+function disposeGlowEmitters() {
+    for (const n of glowPanelNodes) if (n.parent) n.parent.remove(n);
+    glowPanelNodes = [];
+    if (typeof setGlowAreaDefs === 'function') setGlowAreaDefs([]);
+    if (windowGlowLightProbe && windowGlowLightProbe.parent) {
+        windowGlowLightProbe.parent.remove(windowGlowLightProbe);
+    }
+    windowGlowLightProbe = null;
+}
+
+// 発光マテリアルの平均色から、照らす光の色を決める。
+// ほぼ白〜暖色の明るい発光は、電球色として扱う（白い窓ガラスの発光色を
+// そのまま使うと、蛍光灯のような青白い光になって船の雰囲気に合わない）。
+function _glowLightColor(r, g, b) {
+    const lum = r * 0.299 + g * 0.587 + b * 0.114;
+    if (lum > 0.45 && r >= b) return new THREE.Color(1.0, 0.82, 0.55);
+    const m = Math.max(r, g, b, 1e-6);
+    return new THREE.Color(r / m, g / m, b / m);
+}
+
+// 発光メッシュの三角形を、向き×格子のグループに集計する。
+// 座標はすべて modelRoot のローカル座標（＝モデルの向き・拡縮を除いた座標）。
+// 戻り値: Map<key, {bin, area, sx,sy,sz, min:Vector3, max:Vector3, r,g,b}>
+function _glowCollectGroups(modelRoot, entries, metersPerUnit) {
+    const invRoot = new THREE.Matrix4().copy(modelRoot.matrixWorld).invert();
+    const M = new THREE.Matrix4();
+    const cellLocal = GLOW_CELL_METERS / metersPerUnit;
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+    const e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), n = new THREE.Vector3();
+    const groups = new Map();
+    const glowMatSet = new Set(windowGlowMaterials);
+
+    for (const { mesh } of entries) {
+        if (!mesh.parent || !mesh.geometry) continue;
+        const geom = mesh.geometry;
+        const pos = geom.attributes && geom.attributes.position;
+        if (!pos) continue;
+        mesh.updateWorldMatrix(true, false);
+        M.multiplyMatrices(invRoot, mesh.matrixWorld);
+        // 鏡像変換（Blenderの "mirrored" 書き出し等）では三角形の巻きが逆になり、
+        // 外積で求めた法線が裏返る。行列式の符号で打ち消す。
+        const flip = M.determinant() < 0 ? -1 : 1;
+
+        // 複数マテリアルのメッシュでは、発光マテリアルの範囲の三角形だけを使う
+        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        const ranges = [];
+        const idx = geom.index ? geom.index.array : null;
+        const triCount = (idx ? idx.length : pos.count) / 3 | 0;
+        if (Array.isArray(mesh.material) && geom.groups && geom.groups.length) {
+            geom.groups.forEach((g) => {
+                if (glowMatSet.has(mats[g.materialIndex])) {
+                    ranges.push([g.start / 3 | 0, Math.min(triCount, (g.start + g.count) / 3 | 0)]);
+                }
+            });
+        } else {
+            ranges.push([0, triCount]);
+        }
+
+        const col = (mats.find(m => glowMatSet.has(m)) || mats[0]).emissive || new THREE.Color(1, 1, 1);
+
+        for (const [t0, t1] of ranges) {
+            for (let t = t0; t < t1; t++) {
+                const i0 = idx ? idx[t * 3] : t * 3;
+                const i1 = idx ? idx[t * 3 + 1] : t * 3 + 1;
+                const i2 = idx ? idx[t * 3 + 2] : t * 3 + 2;
+                a.fromBufferAttribute(pos, i0).applyMatrix4(M);
+                b.fromBufferAttribute(pos, i1).applyMatrix4(M);
+                c.fromBufferAttribute(pos, i2).applyMatrix4(M);
+                e1.subVectors(b, a); e2.subVectors(c, a);
+                n.crossVectors(e1, e2);
+                const len = n.length();
+                if (len < 1e-12) continue;
+                const area = len * 0.5;
+                n.multiplyScalar(flip / len);
+
+                // 法線がいちばん近い軸方向
+                const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
+                let bin;
+                if (ax >= ay && ax >= az) bin = n.x >= 0 ? 0 : 1;
+                else if (ay >= az)        bin = n.y >= 0 ? 2 : 3;
+                else                      bin = n.z >= 0 ? 4 : 5;
+                if (!GLOW_BIN_DIRS[bin]) continue;   // 上向きは空を照らすだけなので捨てる
+
+                const cx = (a.x + b.x + c.x) / 3, cy = (a.y + b.y + c.y) / 3, cz = (a.z + b.z + c.z) / 3;
+                const cell = Math.floor(cx / cellLocal) + '|' + Math.floor(cy / cellLocal) + '|' + Math.floor(cz / cellLocal);
+                const key = bin + '|' + cell;
+                let g = groups.get(key);
+                if (!g) {
+                    g = { bin, cell, area: 0, sx: 0, sy: 0, sz: 0, r: 0, g: 0, b: 0,
+                          min: new THREE.Vector3(Infinity, Infinity, Infinity),
+                          max: new THREE.Vector3(-Infinity, -Infinity, -Infinity) };
+                    groups.set(key, g);
+                }
+                g.area += area;
+                g.sx += cx * area; g.sy += cy * area; g.sz += cz * area;
+                g.r += col.r * area; g.g += col.g * area; g.b += col.b * area;
+                g.min.min(a).min(b).min(c);
+                g.max.max(a).max(b).max(c);
+            }
+        }
+    }
+    return groups;
+}
+
+// 格子1マスの中のグループを整理する。
+//  ・マス内の発光体が小さい（GLOW_POINTLIKE_METERS 未満）なら、灯具のような
+//    「点に近い光源」とみなし、真下を照らすパネル1枚にまとめる。小さな
+//    円筒形の灯具は側面・底面がそれぞれ別の向きのグループになるが、それを
+//    全部パネルにすると、カメラの近くの枠が1個の灯具の各面で埋まってしまう。
+//  ・大きいもの（窓の列・天窓など）は向きごとのパネルを残すが、マス内で一番
+//    大きい向きの GLOW_MINOR_BIN_RATIO 未満しかない向きは、縁や厚みの
+//    部分とみなして捨てる。
+const GLOW_POINTLIKE_METERS = 1.2;
+const GLOW_MINOR_BIN_RATIO = 0.15;
+function _glowMergeCells(groups, metersPerUnit) {
+    const cells = new Map();
+    groups.forEach((g) => {
+        let c = cells.get(g.cell);
+        if (!c) { c = []; cells.set(g.cell, c); }
+        c.push(g);
+    });
+    const out = [];
+    cells.forEach((list) => {
+        const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+        const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+        let maxArea = 0;
+        list.forEach((g) => { min.min(g.min); max.max(g.max); maxArea = Math.max(maxArea, g.area); });
+        const extentM = Math.max(max.x - min.x, max.y - min.y, max.z - min.z) * metersPerUnit;
+        if (extentM < GLOW_POINTLIKE_METERS) {
+            const m = { bin: 3, cell: list[0].cell, area: 0, sx: 0, sy: 0, sz: 0, r: 0, g: 0, b: 0,
+                        min: min.clone(), max: max.clone() };
+            list.forEach((g) => {
+                m.area += g.area; m.sx += g.sx; m.sy += g.sy; m.sz += g.sz;
+                m.r += g.r; m.g += g.g; m.b += g.b;
+            });
+            // 真下を照らすので、パネルは発光体の底面に置く
+            m.sy = min.y * m.area;
+            out.push(m);
+        } else {
+            list.forEach((g) => { if (g.area >= maxArea * GLOW_MINOR_BIN_RATIO) out.push(g); });
+        }
+    });
+    return out;
+}
+
+// モデル読み込み後（ワールド行列が確定してから）に1回呼ぶ。
+function buildGlowEmitters() {
+    disposeGlowEmitters();
+    const modelRoot = (typeof importedModelGroup !== 'undefined' && importedModelGroup)
+        ? importedModelGroup.children[0] : null;
+    if (!modelRoot || !windowGlowMeshEntries || windowGlowMeshEntries.length === 0) return [];
+
+    modelRoot.updateWorldMatrix(true, true);
+    // modelRoot の1単位が何mか（船全体は一様に拡縮される）
+    const metersPerUnit = new THREE.Vector3().setFromMatrixScale(modelRoot.matrixWorld).x || 1;
+    const groups = _glowMergeCells(_glowCollectGroups(modelRoot, windowGlowMeshEntries, metersPerUnit), metersPerUnit);
+
+    const up = new THREE.Vector3(0, 1, 0);
+    const axX = new THREE.Vector3(), axZ = new THREE.Vector3(), size = new THREE.Vector3();
+    const minLocal = GLOW_MIN_PANEL_METERS / metersPerUnit;
+    const maxLocal = GLOW_CELL_METERS / metersPerUnit;
+    const minArea = GLOW_MIN_AREA_M2 / (metersPerUnit * metersPerUnit);
+
+    const panels = [];
+    const probePts = [];
+    let pr = 0, pg = 0, pb = 0, pArea = 0;
+    groups.forEach((g) => {
+        if (g.area < minArea) return;
+        const dir = GLOW_BIN_DIRS[g.bin];
+        const center = new THREE.Vector3(g.sx / g.area, g.sy / g.area, g.sz / g.area);
+
+        // パネルの向き：ローカル+Y が照らす方向を向くように回す
+        const q = new THREE.Quaternion().setFromUnitVectors(up, dir);
+        axX.set(1, 0, 0).applyQuaternion(q);
+        axZ.set(0, 0, 1).applyQuaternion(q);
+        size.subVectors(g.max, g.min);
+        // 回した軸に沿った発光面の広がり（軸は座標軸のどれかと平行なので、成分の絶対値で取れる）
+        const w = Math.abs(axX.x) * size.x + Math.abs(axX.y) * size.y + Math.abs(axX.z) * size.z;
+        const h = Math.abs(axZ.x) * size.x + Math.abs(axZ.y) * size.y + Math.abs(axZ.z) * size.z;
+
+        const node = new THREE.Object3D();
+        node.name = 'GlowPanel';
+        node.position.copy(center).addScaledVector(dir, GLOW_SURFACE_OFFSET_M / metersPerUnit);
+        node.quaternion.copy(q);
+        node.scale.set(THREE.MathUtils.clamp(w, minLocal, maxLocal), 1,
+                       THREE.MathUtils.clamp(h, minLocal, maxLocal));
+        modelRoot.add(node);
+        glowPanelNodes.push(node);
+
+        const color = _glowLightColor(g.r / g.area, g.g / g.area, g.b / g.area);
+        panels.push({ node, color, weight: 1 });
+
+        probePts.push({ p: center.clone(), w: g.area });
+        pr += color.r * g.area; pg += color.g * g.area; pb += color.b * g.area; pArea += g.area;
+    });
+
+    if (typeof setGlowAreaDefs === 'function') setGlowAreaDefs(panels);
+    _glowBuildProbe(modelRoot, probePts, pArea > 0 ? new THREE.Color(pr / pArea, pg / pArea, pb / pArea) : null);
+    console.log(`[GlowEmitters] 発光パネル ${panels.length} 枚（発光メッシュ ${windowGlowMeshEntries.length} 個から）`);
+    return panels;
+}
+
+// 船内全体をほんのり底上げする環境光（球面調和ライトプローブ）。
+// 面光源は近くの数灯しか点けないので、遠くの窓際が真っ暗にならないよう、
+// 発光パネルの分布を1回だけSH係数に焼き込んでおく。影は持たないが、
+// 1個の係数セットを全マテリアルが共有するだけなので非常に軽い。
+const _GLOW_SH_BASIS = [
+    () => 0.282095,
+    (x, y, z) => 0.488603 * y,
+    (x, y, z) => 0.488603 * z,
+    (x, y, z) => 0.488603 * x,
+    (x, y, z) => 1.092548 * x * y,
+    (x, y, z) => 1.092548 * y * z,
+    (x, y, z) => 0.315392 * (3 * z * z - 1),
+    (x, y, z) => 1.092548 * x * z,
+    (x, y, z) => 0.546274 * (x * x - y * y),
+];
+function _glowBuildProbe(modelRoot, pts, color) {
+    if (!color || pts.length === 0) return;
+    const origin = new THREE.Vector3();
+    let wsum = 0;
+    pts.forEach(({ p, w }) => { origin.addScaledVector(p, w); wsum += w; });
+    origin.multiplyScalar(1 / wsum);
+
+    const coeffs = [];
+    for (let i = 0; i < 9; i++) coeffs.push(new THREE.Vector3());
+    const dir = new THREE.Vector3();
+    // 各パネルを「その方向から光が来る」1サンプルとし、面積で重み付けする。
+    // 全体の明るさがパネル数に左右されないよう、面積の合計で正規化する。
+    pts.forEach(({ p, w }) => {
+        dir.subVectors(p, origin);
+        const d = dir.length();
+        if (d < 1e-6) return;
+        dir.multiplyScalar(1 / d);
+        const k = GLOW_PROBE_STRENGTH * w / wsum;
+        for (let i = 0; i < 9; i++) {
+            const basis = _GLOW_SH_BASIS[i](dir.x, dir.y, dir.z) * k;
+            coeffs[i].x += color.r * basis;
+            coeffs[i].y += color.g * basis;
+            coeffs[i].z += color.b * basis;
+        }
+    });
+
+    windowGlowLightProbe = new THREE.LightProbe();
+    windowGlowLightProbe.position.copy(origin);
+    for (let i = 0; i < 9; i++) windowGlowLightProbe.sh.coefficients[i].copy(coeffs[i]);
+    windowGlowLightProbe.intensity = 0;   // updateWindowGlow() が昼夜係数で設定する
+    modelRoot.add(windowGlowLightProbe);
+}

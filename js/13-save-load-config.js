@@ -156,8 +156,10 @@ function collectShipConfig() {
         dayProgress: physics.dayProgress,
         moonPhase: physics.moonPhase,
         moonPhaseManual: !!physics.moonPhaseManual,
-        // 最後に使ったモデル形式名（バイナリは保存不可なので名前のみ）
+        // 最後に使ったモデル形式名
         lastModelName: window.lastLoadedModelName || null,
+        // モデル本体への参照。本体は IndexedDB に保存してある（27-model-store.js）
+        modelRef: (typeof getCurrentModelRef === 'function') ? getCurrentModelRef() : null,
     };
 }
 
@@ -459,19 +461,48 @@ function saveShipConfig() {
     const all = loadAllShipSaves();
     all[name] = collectShipConfig();
     saveAllShipSaves(all);
-    if (status) status.textContent = `「${name}」として保存しました。`;
+    const src = window.currentModelSource;
+    let msg = `「${name}」として保存しました。`;
+    if (src && !src.embedded && src.stored === false) {
+        msg += '（モデル本体はブラウザの保存容量が足りず保存できませんでした。次回はモデルファイルを選び直してください）';
+    } else if (src) {
+        msg += `（モデル: ${src.name}）`;
+    }
+    if (status) status.textContent = msg;
     renderShipSaveList();
+    if (typeof gcModelStore === 'function') gcModelStore();
 }
 
-function loadShipConfig(name) {
+// 設定を適用する前に、その設定に結びついたモデルへ切り替える。
+// いま表示中のモデルと同じなら読み込み直さない。
+// 戻り値: 'same' | 'loaded' | 'missing' | 'none'
+async function switchModelForConfig(cfg) {
+    const ref = cfg && cfg.modelRef;
+    if (!ref || typeof loadModelByRef !== 'function') return 'none';
+    const cur = (typeof getCurrentModelRef === 'function') ? getCurrentModelRef() : null;
+    if (typeof sameModelRef === 'function' && sameModelRef(ref, cur)) return 'same';
+    try {
+        return (await loadModelByRef(ref)) ? 'loaded' : 'missing';
+    } catch (e) {
+        return 'missing';
+    }
+}
+
+async function loadShipConfig(name) {
     const all = loadAllShipSaves();
     const cfg = all[name];
     if (!cfg) return;
+    const status = $('ship-save-status');
+    if (cfg.modelRef && status) status.textContent = `「${name}」のモデルを読み込んでいます…`;
+    const r = await switchModelForConfig(cfg);
     applyShipConfig(cfg);
     const nameInput = $('ship-name-input');
     if (nameInput) nameInput.value = name;
-    const status = $('ship-save-status');
-    if (status) status.textContent = `「${name}」を読み込みました。`;
+    if (status) {
+        status.textContent = (r === 'missing')
+            ? `「${name}」の設定を読み込みました（モデル「${cfg.modelRef.name}」は保存されていないため、今のモデルのままです）。`
+            : `「${name}」を読み込みました。`;
+    }
 }
 
 function deleteShipConfig(name) {
@@ -479,6 +510,7 @@ function deleteShipConfig(name) {
     delete all[name];
     saveAllShipSaves(all);
     renderShipSaveList();
+    if (typeof gcModelStore === 'function') gcModelStore();
 }
 
 function renderShipSaveList() {
@@ -492,13 +524,19 @@ function renderShipSaveList() {
     }
     names.forEach(name => {
         const safeName = name.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        const ref = all[name] && all[name].modelRef;
+        const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const modelLine = ref
+            ? `<div style="font-size:10px;color:#8fb8d8;margin:2px 0 4px;">🚢 ${esc(ref.name)}${ref.embedded ? '（同梱）' : (typeof formatModelSize === 'function' ? ' ' + formatModelSize(ref.size) : '')}</div>`
+            : `<div style="font-size:10px;color:#777;margin:2px 0 4px;">モデル未登録（設定のみ）</div>`;
         const card = document.createElement('div');
         card.className = 'sp-item-card';
         card.innerHTML = `
             <div class="sp-item-header">
-                <span class="sp-item-title">${name}</span>
+                <span class="sp-item-title">${esc(name)}</span>
                 <button class="sp-remove-btn" onclick="deleteShipConfig('${safeName}')">✕</button>
             </div>
+            ${modelLine}
             <div class="sp-row" style="gap:8px;">
                 <button class="sp-add-btn" style="flex:1;" onclick="loadShipConfig('${safeName}')">📂 読み込み</button>
             </div>`;
@@ -552,12 +590,19 @@ function importShipConfigFile(event) {
                 if (status) status.textContent = 'エラー: 無効な設定ファイルです。';
                 return;
             }
-            applyShipConfig(cfg);
-            if (cfg.shipName) {
-                const nameInput = $('ship-name-input');
-                if (nameInput) nameInput.value = cfg.shipName;
-            }
-            if (status) status.textContent = `ファイルから読み込みました: ${file.name}`;
+            // この端末にモデルが保存されていれば、モデルごと切り替える
+            switchModelForConfig(cfg).then((r) => {
+                applyShipConfig(cfg);
+                if (cfg.shipName) {
+                    const nameInput = $('ship-name-input');
+                    if (nameInput) nameInput.value = cfg.shipName;
+                }
+                if (status) {
+                    status.textContent = (r === 'missing')
+                        ? `ファイルから読み込みました: ${file.name}（モデル「${cfg.modelRef.name}」はこの端末に無いため、今のモデルのままです）`
+                        : `ファイルから読み込みました: ${file.name}`;
+                }
+            });
         } catch (e) {
             if (status) status.textContent = 'エラー: ファイルの読み込みに失敗しました。(JSON形式エラー)';
         }

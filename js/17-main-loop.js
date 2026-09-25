@@ -31,8 +31,6 @@ function animate() {
     if (typeof maybeUpdateEnvironmentMap === 'function') maybeUpdateEnvironmentMap(dt); // v83: 空のIBL環境光を数秒おきに再撮影
     // 引き波波源点のワールド座標を heading+modelOffset.ry で毎フレーム更新
     if (typeof updateHullSlicePositions === 'function') updateHullSlicePositions();
-    // エリアライト（面光源＋影用スポット）を、カメラに近い順に枠へ割り当て直す
-    if (typeof updateAreaLights === 'function') updateAreaLights(t);
     // エリアライト枠をareaNodeの変換に追随させる
     if (typeof glbLights !== 'undefined') {
         glbLights.forEach(l => {
@@ -618,9 +616,15 @@ function animate() {
     // （状態の退避・復元が不要になり、時刻変化との競合も起きない）。
     if (typeof updateUnderwater === 'function') updateUnderwater(t);
 
+    // エリアライト・発光パネル（25-area-lights.js）。船の位置・姿勢が確定した
+    // この位置で呼ぶ。影マップを描き直さないフレームは影の変換行列だけを
+    // 更新するので、ここより前で呼ぶと影が1フレーム分船に置いていかれる。
+    if (typeof updateAreaLights === 'function') updateAreaLights(t);
+
     if (bloomEnabled && bloomComposer) {
         renderWithBloom();
     } else {
+        renderer.shadowMap.needsUpdate = true;   // 影は本描画で1回だけ（04参照）
         renderer.render(scene, camera);
     }
 

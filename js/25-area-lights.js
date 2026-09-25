@@ -1,91 +1,107 @@
-// 25-area-lights.js — エリアライト（Blenderのエリアライト由来）と、その影
+// 25-area-lights.js — 面光源（エリアライト・発光パネル）と、その影
 //
 // ════════════════════════════════════════════════════════════════
-//  なぜ作り直したか
+//  扱う光源は2種類
 // ════════════════════════════════════════════════════════════════
-//  従来（HullGlow方式）は、エリアライトの照明を **自前のGLSLを全マテリアルへ
-//  onBeforeCompileで注入して** 計算していた。PointLightで照らすと「点から
-//  放射状に照らされる」不自然さが出たため、それを避けようとした結果だった。
-//
-//  ただしこの方式には次の問題があった。
-//    ・面光源の積分を手書きで近似しているため、正しさの保証が無い。実際
-//      コードには「壁が暗くなりすぎるのを防ぐ」ための smoothstep(-0.3, 1.0, …)、
-//      面外フォールオフ、正面チェックといった、辻褄合わせの項が積み重なって
-//      いた。船やライト配置を変えるたびに、どこかが破綻する。
-//    ・reflectedLight.directDiffuse に足しているだけなので、**影が一切出ない**。
-//    ・全マテリアルのシェーダーを書き換えるため、マテリアル数ぶんシェーダーが
-//      増え、他の描画機能と干渉しやすい。
-//
-//  three.js には面光源そのものである RectAreaLight があり、LTC（線形変換
-//  コサイン）という確立した手法で面光源の積分を正しく行う。手書きの近似を
-//  捨てて、これに置き換える。
+//  ・エリアライト : Blenderで type="area" を付けたEmpty由来（UIで位置・向き・
+//                   サイズ・強さを個別に調整できる）
+//  ・発光パネル   : 窓・灯具・天窓・看板などの発光メッシュ由来
+//                   （26-glow-emitters.js が抽出して登録する）
+//  どちらも「面の中心・向き・大きさ」を持つノードで表し、同じ仕組みで照らす。
 //
 // ════════════════════════════════════════════════════════════════
-//  影について（three.js側の制約）
+//  なぜ RectAreaLight か
 // ════════════════════════════════════════════════════════════════
-//  **three.js の RectAreaLight は影を落とせない。** r128 のライト処理を見ると、
-//  SpotLight や PointLight にある castShadow の分岐が RectAreaLight には
-//  存在せず、色・サイズ・位置だけを渡して終わっている。エンジン側の制約なので、
-//  エリアライト単体で影を出す方法は無い。
+//  以前はエリアライトを自前のGLSL（HullGlow）で、発光メッシュを影付き
+//  PointLight群で近似していた。前者は辻褄合わせの項が積み重なったうえ影が
+//  出ず、後者は PointLight の影がキューブマップ（1灯で船全体を6回描画）なので
+//  非常に重かった。three.js の RectAreaLight は LTC（線形変換コサイン）で
+//  面光源の積分を正しく行うので、どちらもこれに置き換える。
 //
-//  そこで、影を出す枠には **同じ位置・同じ向きの SpotLight を重ねて** 置き、
-//  光量を両者で分け合う（AREA_LIGHT_SHADOW_SHARE）。SpotLight側を強くすると
-//  影ははっきりするが「点から照らした感じ」が戻ってくるので、既定は半々。
-//  大きな面光源の影は現実でも輪郭がぼやけて薄いので、これは物理的にも自然。
+// ════════════════════════════════════════════════════════════════
+//  影について（three.js側の制約と、軽くする工夫）
+// ════════════════════════════════════════════════════════════════
+//  **three.js の RectAreaLight は影を落とせない。** そこで影を出す枠には
+//  同じ位置・向きの SpotLight を重ね、光量を分け合う（AREA_LIGHT_SHADOW_SHARE）。
+//  SpotLight の影は2Dマップ1枚なので、PointLight のキューブ影の1/6で済む。
+//
+//  さらに、光源は船に固定されていて船と一緒に剛体として動くので、
+//  **光源から見た船の奥行き（影マップの中身）は船が動いても変わらない。**
+//  変わるのは「ワールド→影マップ」の変換行列だけなので、影マップは
+//  割り当てが変わったときだけ描き直し、毎フレームは行列だけを更新する。
+//  （three.js は影を描き直さないフレームは行列の更新もしないため、
+//   autoUpdate=false のまま放置すると船の移動に影が置いていかれる。
+//   以前の窓灯りの影がずれて見えたのはこれが原因だった）
 //
 // ════════════════════════════════════════════════════════════════
 //  「定義」と「枠（スロット）」を分ける
 // ════════════════════════════════════════════════════════════════
-//  船の窓ひとつひとつがエリアライトになっていると、灯数は数十に達する。
-//  一方 LTC の面光源は1灯あたりの負荷が大きく、全部を点けるのは現実的でない。
-//
-//  さらに three.js では **シーン内で visible なライトの数が変わるたびに
-//  全マテリアルのシェーダーが再コンパイルされる**（NUM_RECT_AREA_LIGHTS 等の
-//  #define が変わるため）。「カメラに近い灯だけ visible にする」という素朴な
-//  やり方だと、船が揺れて順位が入れ替わるたびに再コンパイルが走り、数百ms
-//  単位で画面が固まる。
-//
-//  そこで次の二層構造にする。
-//    ・定義(def)   : Empty1個ぶんの情報。位置・向き・サイズを持つノードと、
-//                    UI/保存用のデータ保持役（シーンには入れない RectAreaLight）。
-//                    何十個あってもよい。描画コストは無い。
-//    ・枠(slot)    : 実際にシーンに居るライト。個数は固定。
-//                    毎フレーム「カメラに近い定義」を割り当て直して使い回す。
-//  灯数が変わらないので再コンパイルが起きず、負荷も一定に保てる。
+//  船の窓や灯具を全部光源にすると、定義は数十〜数百に達する。一方 LTC は
+//  1灯あたりの負荷が大きく、全部は点けられない。さらに three.js では
+//  **シーン内で visible なライトの数が変わるたびに全マテリアルのシェーダーが
+//  再コンパイルされる**ので、「近い灯だけ visible にする」素朴なやり方だと、
+//  順位が入れ替わるたびに画面が固まる。
+//    ・定義(def) : 位置・向き・サイズを持つノード＋色・強さ。何百個あってもよい。
+//    ・枠(slot)  : 実際にシーンに居るライト。個数は画質で決まる固定数。
+//  カメラに近い定義を枠に割り当てて使い回す。灯数が変わらないので
+//  再コンパイルが起きず、負荷も一定に保てる。
 
-// 同時に点ける枠の数。LTCは1灯あたりの負荷が大きいのでこの数で頭打ちにする。
-const AREA_LIGHT_MAX_ACTIVE = 8;
-// そのうち影を落とす枠の数。影はシャドウマップを1枚ずつ描くのでさらに絞る。
-const AREA_LIGHT_MAX_SHADOW = 2;
+// 画質ごとの枠の数と、そのうち影を落とす枠の数・影の解像度
+const AREA_LIGHT_BUDGET = {
+    high:     { active: 6, shadows: 3, mapSize: 1024 },
+    medium:   { active: 5, shadows: 2, mapSize: 1024 },
+    low:      { active: 4, shadows: 1, mapSize: 512 },
+    verylow:  { active: 3, shadows: 0, mapSize: 512 },
+    ultralow: { active: 2, shadows: 0, mapSize: 512 },
+};
 // 光量のうち、影を落とすSpotLightに持たせる割合。
 // 1.0 に近づけるほど影は濃くなるが、面光源らしさは失われる。
 const AREA_LIGHT_SHADOW_SHARE = 0.5;
+// 影用SpotLightの強さを面光源に釣り合わせる基準距離（面の大きさに対する倍率）。
+// RectAreaLight と SpotLight は強さの単位も距離による減り方も違うので、
+// 同じ intensity を渡しても明るさは揃わない（このアプリの従来ライティングでは
+// SpotLight に π が掛かり、距離でもほとんど減衰しない）。そこで「面の大きさ×
+// この倍率」の距離で両者の照度が所定の割合になるよう、SpotLight の強さを
+// 面光源の照度から逆算する。
+const AREA_LIGHT_MATCH_DIST = 1.5;
+// SpotLight が届く距離＝基準距離のこの倍。減衰の指数2と組み合わせると、
+// 基準距離の約3倍までは面光源の 1/距離² の減り方とほぼ同じ形で暗くなる。
+const AREA_LIGHT_SPOT_REACH = 4.0;
 // Blenderのエリアライトのエネルギー[W] → three.jsの強度への換算。
 // Blender側は数十〜数百Wで置かれることが多いので、そのままでは明るすぎる。
 const AREA_LIGHT_WATT_SCALE = 0.03;
 // この閾値より大きい値は「Blenderのワット数」とみなして換算し、
 // それ以下は既に調整済みの値とみなしてそのまま使う。
 const AREA_LIGHT_WATT_THRESHOLD = 20;
-// 割り当て直しの間隔[秒]。毎フレームやると船の揺れで順位が細かく入れ替わり、
-// 影がちらちら動いて目障りになる。
+// 割り当て直しの間隔[秒]
 const AREA_LIGHT_REBIND_INTERVAL = 0.25;
+// 割り当て済みの定義を、この割合だけ近いものとして扱う（ヒステリシス）。
+// 距離が拮抗する2つの定義の間で、枠が行ったり来たりするのを防ぐ。
+const AREA_LIGHT_KEEP_BONUS = 0.15;
+// 新しく割り当てた枠を点灯させるフェード時間[秒]。パッと点かないようにする。
+const AREA_LIGHT_FADE_IN = 0.4;
+// 影マップを念のため描き直す間隔[秒]（舵など船の中で動く部品のため）
+const AREA_LIGHT_SHADOW_REFRESH = 4.0;
 // 影用SpotLightの広がり。面の全体を覆える程度に広く取る。
 const AREA_LIGHT_SPOT_ANGLE = Math.PI / 3;
 // 照射方向の合わせ込み。
-//  Blenderのエリアライトから作られたEmptyは、glTF書き出し後この向きになる:
+//  定義ノードは次の規約で向き・大きさを表す（BlenderのエリアライトをEmptyに
+//  変換したものが、glTF書き出し後この向きになる）:
 //      面の法線 = ローカル +Y （この方向を照らす）
 //      面の幅   = ローカル X 方向、スケール x が実寸
 //      面の高さ = ローカル Z 方向、スケール z が実寸
-//  一方 three.js の RectAreaLight は、面がローカル XY 平面にあり
+//  three.js の RectAreaLight は、面がローカル XY 平面にあり
 //  **ローカル -Z 方向を照らす**（実測で確認）。X軸まわりに +90° 回して子に
 //  持たせると、光の -Z が親の +Y、光の X が親の X、光の Y が親の Z に一致する。
-//  もしモデル側の規約が違って裏側が照らされる場合は、ここを -Math.PI/2 にする。
 const AREA_LIGHT_EMIT_ROT_X = Math.PI / 2;
 
-let areaLightDefs  = [];   // { node, holder, mirrorOf, mirrorNode, _dist }
-let areaLightSlots = [];   // { root, rect, spot }
+let areaLightDefs  = [];   // { kind:'empty'|'glow', node, holder, color, weight, mirrorOf, mirror, _dist }
+let areaLightSlots = [];   // { root, rect, spot, def, fade, shadowDirty, sig }
 let _alLastBindAt  = -1;
-let _alBinding     = [];   // slotと同じ長さ。各枠に割り当てた定義（無ければnull）
+let _alLastT       = -1;
+let _alShadowRefreshAt  = 0;
+let _alShadowRefreshIdx = 0;
+let _alGlowFactor  = 0;    // 発光パネルの明るさ（昼夜×windowGlowMult、updateWindowGlowが設定）
 
 const _alTmpPos   = new THREE.Vector3();
 const _alTmpQuat  = new THREE.Quaternion();
@@ -98,17 +114,15 @@ function areaLightIntensityFromProps(raw) {
     return v > AREA_LIGHT_WATT_THRESHOLD ? v * AREA_LIGHT_WATT_SCALE : v;
 }
 
-// 画質設定から「影を落とす枠の数」と解像度を決める。
-// 窓灯りPointLight（08-model-loading-and-lighting.js）が既に最大8灯ぶんの
-// キューブ影を使うので、こちらは控えめに積む。
-function getAreaLightShadowConfig() {
-    const q = (typeof perf !== 'undefined' && perf.quality) ? perf.quality : 'high';
-    if (typeof perf !== 'undefined' && !perf.shadowsEnabled) return { count: 0, mapSize: 512 };
-    if (q === 'verylow' || q === 'ultralow') return { count: 0, mapSize: 512 };
-    if (q === 'low')    return { count: 1, mapSize: 512 };
-    if (q === 'medium') return { count: AREA_LIGHT_MAX_SHADOW, mapSize: 512 };
-    return { count: AREA_LIGHT_MAX_SHADOW, mapSize: 1024 };
+function getAreaLightBudget() {
+    const q = (typeof perf !== 'undefined' && perf.quality) ? perf.quality : 'medium';
+    const b = AREA_LIGHT_BUDGET[q] || AREA_LIGHT_BUDGET.medium;
+    const shadowsOn = !(typeof perf !== 'undefined' && !perf.shadowsEnabled);
+    return { active: b.active, shadows: shadowsOn ? b.shadows : 0, mapSize: b.mapSize };
 }
+
+// 発光パネルの明るさ（16-daynight-and-telegraph.js の updateWindowGlow から）
+function setAreaLightGlowFactor(v) { _alGlowFactor = Math.max(0, v || 0); }
 
 function _alDisposeSlots() {
     for (const s of areaLightSlots) {
@@ -119,8 +133,15 @@ function _alDisposeSlots() {
         if (s.root.parent) s.root.parent.remove(s.root);
     }
     areaLightSlots = [];
-    _alBinding = [];
     _alLastBindAt = -1;
+}
+
+function _alRemoveDef(d) {
+    if (d.node && d.node.parent) d.node.parent.remove(d.node);
+    if (d.holder && typeof glbLights !== 'undefined') {
+        const gi = glbLights.indexOf(d.holder);
+        if (gi !== -1) glbLights.splice(gi, 1);
+    }
 }
 
 // 以前のエリアライトを片付ける（モデル差し替え時）
@@ -150,49 +171,51 @@ function _alMakeSlot(withShadow, mapSize) {
         spot = new THREE.SpotLight(0xffffff, 0);
         spot.angle = AREA_LIGHT_SPOT_ANGLE;
         spot.penumbra = 0.9;   // 面光源の影らしく、縁を大きくぼかす
-        spot.decay = 1.2;
+        spot.decay = 2;        // AREA_LIGHT_SPOT_REACH の説明参照
         spot.castShadow = true;
         spot.shadow.mapSize.set(mapSize, mapSize);
-        spot.shadow.bias = -0.0008;
+        spot.shadow.bias = -0.0006;
         spot.shadow.normalBias = 0.02;
-        spot.shadow.camera.near = 0.2;
+        spot.shadow.radius = 2;
+        spot.shadow.camera.near = 0.1;
+        // 影マップは割り当て時だけ描く（冒頭の説明参照）
+        spot.shadow.autoUpdate = false;
+        spot.shadow.needsUpdate = false;
         root.add(spot);
         // SpotLightはtargetの方を向く。ローカル+Y側に置けば、枠ごと回っても
-        // スポットの向きは常に面の法線（＝Blender側の規約）と一致する。
+        // スポットの向きは常に面の法線と一致する。
         spot.target.position.set(0, 1, 0);
         root.add(spot.target);
     }
 
     if (typeof scene !== 'undefined' && scene) scene.add(root);
-    return { root, rect, spot };
+    return { root, rect, spot, def: null, fade: 0, shadowDirty: false, sig: '' };
 }
 
 function _alRebuildSlots(force) {
-    const want = Math.min(AREA_LIGHT_MAX_ACTIVE, areaLightDefs.length);
-    // 枠の数が変わらないなら作り直さない。作り直すとシャドウマップを捨てることに
-    // なるうえ、シーン内のライト数が一時的に変わって全マテリアルの再コンパイルを
-    // 招くため、必要なときだけにする。
-    if (!force && want === areaLightSlots.length) return;
+    const b = getAreaLightBudget();
+    const want = Math.min(b.active, areaLightDefs.length);
+    const wantShadows = Math.min(b.shadows, want);
+    const haveShadows = areaLightSlots.filter(s => s.spot).length;
+    // 枠の構成が変わらないなら作り直さない。作り直すとシャドウマップを捨てる
+    // うえ、シーン内のライト数が変わって全マテリアルの再コンパイルを招くため。
+    if (!force && want === areaLightSlots.length && wantShadows === haveShadows) return;
     _alDisposeSlots();
-    if (want <= 0) return;
-    const sh = getAreaLightShadowConfig();
     for (let i = 0; i < want; i++) {
-        areaLightSlots.push(_alMakeSlot(i < sh.count, sh.mapSize));
+        areaLightSlots.push(_alMakeSlot(i < wantShadows, b.mapSize));
     }
-    _alBinding = new Array(want).fill(null);
 }
 
-// 画質設定が変わったときに呼ぶ（影の枚数・解像度を作り直す）。
+// 画質設定が変わったときに呼ぶ（枠の数・影の枚数・解像度を作り直す）。
 function refreshAreaLightShadowQuality() {
     if (areaLightDefs.length === 0) return;
     _alRebuildSlots(true);
 }
 
-// エリアライト用Empty群から、定義を組み立てる。
-//   empties : userData.type === 'area' のノード配列（まだmodel階層に居るもの）
+// ── エリアライト（Empty由来）─────────────────────────────────────
+// empties : userData.type === 'area' のノード配列（まだmodel階層に居るもの）
 // Emptyと同じ親・同じローカル変換のノードを置き換えとして残す。こうすると
-// モデルの移動・回転・拡縮にシーングラフの継承だけで追従するので、ワールド座標を
-// 手計算して焼き込む必要がない（＝modelOffsetを後から変えてもズレない）。
+// モデルの移動・回転・拡縮にシーングラフの継承だけで追従する。
 function buildAreaLights(model, empties) {
     disposeAreaLights();
     if (!empties || empties.length === 0) return areaLightDefs;
@@ -203,9 +226,8 @@ function buildAreaLights(model, empties) {
         const colorStr = ud.color || '#ffffff';
         const parent = empty.parent || model;
 
-        // ── 位置・向き・サイズの実体となるノード ──
-        // UIのXYZ入力もギズモも、従来の areaNode と同じくこのノードを動かす。
-        // scale.x が面の幅、scale.z が面の高さ（Blender側の規約）。
+        // 位置・向き・サイズの実体となるノード。UIのXYZ入力もギズモも、
+        // 従来の areaNode と同じくこのノードを動かす。
         const node = new THREE.Object3D();
         node.position.copy(empty.position);
         node.quaternion.copy(empty.quaternion);
@@ -214,11 +236,9 @@ function buildAreaLights(model, empties) {
         parent.add(node);
         parent.remove(empty);
 
-        // ── UI・保存用のデータ保持役 ──
-        // 既存のライト一覧UI・保存/復元・ギズモは glbLights の要素を見るので、
-        // 定義1個につき1個のライトオブジェクトを持たせる。ただし**シーンには
-        // 追加しない**（実際に照らすのは枠のライト）。型を RectAreaLight に
-        // しておくと、UI側の「エリアライト扱い」の判定にそのまま乗る。
+        // UI・保存用のデータ保持役。既存のライト一覧UI・保存/復元・ギズモは
+        // glbLights の要素を見るので、定義1個につき1個のライトオブジェクトを
+        // 持たせる。**シーンには追加しない**（実際に照らすのは枠のライト）。
         const holder = new THREE.RectAreaLight(new THREE.Color(colorStr).getHex(), intensity, 1, 1);
         holder.userData.isGlbLight    = true;
         holder.userData.isAreaLight   = true;
@@ -227,11 +247,31 @@ function buildAreaLights(model, empties) {
         holder.userData.areaNode      = node;
         if (typeof glbLights !== 'undefined' && Array.isArray(glbLights)) glbLights.push(holder);
 
-        areaLightDefs.push({ node, holder, mirrorOf: null, _dist: 0 });
+        areaLightDefs.push({ kind: 'empty', node, holder, color: holder.color, mirrorOf: null, _dist: 0 });
     });
 
     _alRebuildSlots(true);
     return areaLightDefs;
+}
+
+// ── 発光パネル（発光メッシュ由来、26-glow-emitters.js から）─────────────
+// panels: [{ node, color, weight }]。node の規約は上と同じ。
+// 渡したものに置き換える（空配列で全部外す）。
+function setGlowAreaDefs(panels) {
+    for (let i = areaLightDefs.length - 1; i >= 0; i--) {
+        if (areaLightDefs[i].kind === 'glow') {
+            const d = areaLightDefs[i];
+            for (const s of areaLightSlots) if (s.def === d) s.def = null;
+            _alRemoveDef(d);
+            areaLightDefs.splice(i, 1);
+        }
+    }
+    (panels || []).forEach((p) => {
+        areaLightDefs.push({ kind: 'glow', node: p.node, holder: null, color: p.color,
+                             weight: p.weight || 1, mirrorOf: null, _dist: 0 });
+    });
+    _alRebuildSlots(false);
+    _alLastBindAt = -1;   // 次のフレームですぐ割り当て直す
 }
 
 // ── シンメトリー（左右対称コピー）──────────────────────────────
@@ -260,40 +300,101 @@ function setAreaLightMirror(holder, enabled) {
         m.userData.areaNode      = node;
         if (typeof glbLights !== 'undefined' && Array.isArray(glbLights)) glbLights.push(m);
 
-        const def = { node, holder: m, mirrorOf: src, _dist: 0 };
+        const def = { kind: 'empty', node, holder: m, color: m.color, mirrorOf: src, _dist: 0 };
         areaLightDefs.push(def);
         src.mirror = def;
         holder.userData.mirrorLight = m;
-        _alRebuildSlots();
+        _alRebuildSlots(false);
     } else if (src.mirror) {
         const def = src.mirror;
-        if (def.node.parent) def.node.parent.remove(def.node);
-        const gi = (typeof glbLights !== 'undefined') ? glbLights.indexOf(def.holder) : -1;
-        if (gi !== -1) glbLights.splice(gi, 1);
+        for (const s of areaLightSlots) if (s.def === def) s.def = null;
+        _alRemoveDef(def);
         const di = areaLightDefs.indexOf(def);
         if (di !== -1) areaLightDefs.splice(di, 1);
         src.mirror = null;
         holder.userData.mirrorLight = null;
-        _alRebuildSlots();
+        _alRebuildSlots(false);
     }
 }
 
-// 定義が「今点いているべきか」。applyGlbLightIntensities() が毎回
-// userData.targetVisible / targetIntensity に「こうしたい値」を書いてくれるので、
-// 手動OFFや昼間の自動消灯の判定をここで二重に書かずに済む。
+// 定義が「今点いているべきか」と、その強さ。
+// エリアライトは applyGlbLightIntensities() が userData.targetVisible /
+// targetIntensity に「こうしたい値」を書いてくれるので、手動OFFや昼間の
+// 自動消灯の判定をここで二重に書かずに済む。
 function _alDefVisible(def) {
+    if (def.kind === 'glow') return _alGlowFactor > 0.01;
     const src = def.mirrorOf || def;
     return src.holder.userData.targetVisible !== false;
 }
 function _alDefIntensity(def) {
+    if (def.kind === 'glow') {
+        const base = (typeof GLOW_PANEL_LUMINANCE !== 'undefined') ? GLOW_PANEL_LUMINANCE : 4.0;
+        return base * _alGlowFactor * (def.weight || 1);
+    }
     const ud = (def.mirrorOf || def).holder.userData;
     if (Number.isFinite(ud.targetIntensity)) return ud.targetIntensity;
     if (Number.isFinite(ud.baseIntensity))   return ud.baseIntensity;
     return (def.mirrorOf || def).holder.intensity;
 }
 
-// 毎フレーム。
+// 枠へ定義を割り当てる。すでに割り当てられている定義はそのままの枠に残し、
+// 空いた枠にだけ新しい定義を入れる（順位が入れ替わるたびに全部の枠を
+// 付け替えると、影の描き直しとフェードが無駄に走るため）。
+function _alAssignTier(slots, wanted) {
+    const wantSet = new Set(wanted);
+    const free = [];
+    for (const s of slots) {
+        if (s.def && wantSet.has(s.def)) wantSet.delete(s.def);
+        else free.push(s);
+    }
+    const rest = wanted.filter(d => wantSet.has(d));   // 近い順を保つ
+    free.forEach((s, i) => {
+        const d = rest[i] || null;
+        if (s.def !== d) {
+            s.def = d;
+            s.fade = 0;
+            s.shadowDirty = !!(s.spot && d);
+            s.sig = '';
+        }
+    });
+}
+
+function _alRebind(cam) {
+    const bound = new Set();
+    for (const s of areaLightSlots) if (s.def) bound.add(s.def);
+
+    const live = [];
+    for (const d of areaLightDefs) {
+        if (!_alDefVisible(d)) continue;
+        d.node.updateWorldMatrix(true, false);
+        _alTmpPos.setFromMatrixPosition(d.node.matrixWorld);
+        let dist = _alTmpPos.distanceTo(cam.position);
+        if (bound.has(d)) dist *= (1 - AREA_LIGHT_KEEP_BONUS);
+        d._dist = dist;
+        live.push(d);
+    }
+    live.sort((a, b) => a._dist - b._dist);
+
+    const shadowSlots = areaLightSlots.filter(s => s.spot);
+    const plainSlots  = areaLightSlots.filter(s => !s.spot);
+    // 一番近いものに影を付ける。
+    const forShadow = live.slice(0, shadowSlots.length);
+    const forPlain  = live.slice(shadowSlots.length, shadowSlots.length + plainSlots.length);
+    _alAssignTier(shadowSlots, forShadow);
+    _alAssignTier(plainSlots, forPlain);
+}
+
+// 定義ノードの「船に対する」置き方のシグネチャ。ギズモ等でエリアライトを
+// 動かしたら影を描き直すために使う（船ごと動くぶんには変わらない）。
+function _alNodeSig(node) {
+    const p = node.position, q = node.quaternion, s = node.scale;
+    return [p.x, p.y, p.z, q.x, q.y, q.z, q.w, s.x, s.z].map(v => v.toFixed(4)).join(',');
+}
+
+// 毎フレーム、**描画の直前**に呼ぶ（船の位置・姿勢が確定した後）。
 function updateAreaLights(t) {
+    const dt = (_alLastT < 0) ? 0 : Math.min(0.1, Math.max(0, t - _alLastT));
+    _alLastT = t;
     if (areaLightDefs.length === 0 || areaLightSlots.length === 0) return;
     const cam = (typeof camera !== 'undefined') ? camera : null;
     if (!cam) return;
@@ -310,28 +411,26 @@ function updateAreaLights(t) {
         d.holder.color.copy(d.mirrorOf.holder.color);
     }
 
-    // ── 枠の割り当て直し ──
     if ((t - _alLastBindAt) > AREA_LIGHT_REBIND_INTERVAL || _alLastBindAt < 0) {
         _alLastBindAt = t;
-        const live = [];
-        for (const d of areaLightDefs) {
-            if (!_alDefVisible(d)) continue;
-            d.node.updateWorldMatrix(true, false);
-            _alTmpPos.setFromMatrixPosition(d.node.matrixWorld);
-            d._dist = _alTmpPos.distanceTo(cam.position);
-            live.push(d);
-        }
-        live.sort((a, b) => a._dist - b._dist);
-        for (let i = 0; i < areaLightSlots.length; i++) {
-            _alBinding[i] = live[i] || null;
-        }
+        _alRebind(cam);
+    }
+
+    // 念のための定期的な影の描き直し（1枠ずつ順番に）
+    const boundShadowSlots = areaLightSlots.filter(s => s.spot && s.def);
+    if (boundShadowSlots.length > 0 && t >= _alShadowRefreshAt) {
+        _alShadowRefreshAt = t + AREA_LIGHT_SHADOW_REFRESH / boundShadowSlots.length;
+        boundShadowSlots[_alShadowRefreshIdx++ % boundShadowSlots.length].shadowDirty = true;
     }
 
     // ── 枠へ反映 ──
-    for (let i = 0; i < areaLightSlots.length; i++) {
-        const slot = areaLightSlots[i];
-        const def  = _alBinding[i];
-        if (!def) { slot.root.visible = false; continue; }
+    let shadowRendersLeft = 1;   // 影マップの描き直しは1フレーム1枚まで（負荷の山を作らない）
+    for (const slot of areaLightSlots) {
+        const def = slot.def;
+        if (!def || !_alDefVisible(def)) {
+            slot.root.visible = false;
+            continue;
+        }
 
         // 定義のワールド変換をそのまま枠へ。スケールもワールドで取るので、
         // モデル全体の拡大率（physics.scale・modelOffset）が自動的に効く。
@@ -340,33 +439,53 @@ function updateAreaLights(t) {
         slot.root.position.copy(_alTmpPos);
         slot.root.quaternion.copy(_alTmpQuat);
         slot.root.visible = true;
+        slot.root.updateMatrixWorld(true);
 
         const w = Math.max(0.01, Math.abs(_alTmpScale.x));
         const h = Math.max(0.01, Math.abs(_alTmpScale.z));
-        const inten = _alDefIntensity(def);
-        const color = def.holder.color;
+        slot.fade = Math.min(1, slot.fade + dt / AREA_LIGHT_FADE_IN);
+        const fade = slot.fade * slot.fade * (3 - 2 * slot.fade);
+        const inten = _alDefIntensity(def) * fade;
 
         slot.rect.width  = w;
         slot.rect.height = h;
-        slot.rect.color.copy(color);
+        slot.rect.color.copy(def.color);
         slot.rect.intensity = slot.spot ? inten * (1 - AREA_LIGHT_SHADOW_SHARE) : inten;
 
         if (slot.spot) {
-            slot.spot.color.copy(color);
-            slot.spot.intensity = inten * AREA_LIGHT_SHADOW_SHARE;
-            // 届く範囲。面が大きいほど遠くまで照らす想定。shadow.camera.far は
-            // three.js側がこの値から決めるので、短すぎると影が途中で切れる。
-            const reach = Math.max(w, h) * 5 + 15;
-            slot.spot.distance = reach;
-            // 影の深度精度は far/near の比で決まる。船の甲板を丸ごと照らすような
-            // 大きな面だと far が数百mになるので、near を置き去りにすると
-            // 深度がつぶれてシャドウアクネ（縞）が出る。面のサイズに合わせて
+            const spot = slot.spot;
+            spot.color.copy(def.color);
+            // 基準距離 d0 で、面光源（全光量のとき）の照度 E のうち
+            // AREA_LIGHT_SHADOW_SHARE 分を SpotLight が受け持つように強さを決める。
+            //   面光源の正面の照度 ≒ L·A / (A/π + d²)   （同じ面積の円盤で近似）
+            //   SpotLight の照度    = I·π·(1 − d/D)^2    （従来ライティングの式）
+            const area = w * h;
+            const d0 = Math.max(1.5, Math.max(w, h) * AREA_LIGHT_MATCH_DIST);
+            const reach = d0 * AREA_LIGHT_SPOT_REACH;
+            const eRect = inten * area / (area / Math.PI + d0 * d0);
+            const fall = Math.pow(1 - d0 / reach, spot.decay);
+            spot.intensity = AREA_LIGHT_SHADOW_SHARE * eRect / (Math.PI * fall);
+            // 届く範囲。shadow.camera.far もこの値から決まる。
+            spot.distance = reach;
+            // 影の深度精度は far/near の比で決まるので、面の大きさに合わせて
             // near も動かし、比を常識的な範囲に保つ。
-            const near = Math.max(0.3, Math.min(w, h) * 0.05);
-            if (Math.abs(slot.spot.shadow.camera.near - near) > near * 0.1) {
-                slot.spot.shadow.camera.near = near;
-                slot.spot.shadow.camera.updateProjectionMatrix();
+            const near = Math.max(0.1, Math.min(w, h) * 0.05);
+            if (Math.abs(spot.shadow.camera.near - near) > near * 0.1) {
+                spot.shadow.camera.near = near;
+                spot.shadow.camera.updateProjectionMatrix();
+                slot.shadowDirty = true;
             }
+            // エリアライトをギズモ等で動かしたら描き直す
+            const sig = _alNodeSig(def.node);
+            if (sig !== slot.sig) { slot.sig = sig; slot.shadowDirty = true; }
+
+            if (slot.shadowDirty && shadowRendersLeft > 0) {
+                spot.shadow.needsUpdate = true;
+                slot.shadowDirty = false;
+                shadowRendersLeft--;
+            }
+            // 影マップを描き直さないフレームでも、行列だけは今の位置へ合わせる
+            spot.shadow.updateMatrices(spot);
         }
     }
 }

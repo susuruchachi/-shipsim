@@ -30,51 +30,13 @@ function updateWindowGlow(factor) {
     windowGlowMaterials.forEach((mat) => {
         mat.emissiveIntensity = mat.userData.baseEmissiveIntensity * eff;
     });
-    // 同じ係数で窓グローのPointLightも連動（windowGlowMultスライダーで輝度と照明が同時に変わる）
-    windowGlowLights.forEach(pl => {
-        pl.intensity = pl.userData.wgBaseIntensity * eff;
-    });
-
-    // v169: プロムナードライト（丸い照明カバー用の個別小型PointLight）も同じ係数で連動
-    promenadeLights.forEach(pl => {
-        pl.intensity = pl.userData.wgBaseIntensity * eff;
-    });
-
-    // v168: ライトプローブの強度も同じ係数で連動させる。SH係数自体（分布の形）は
-    // buildWindowGlowLights()で焼き込み済みなので、ここではintensity(全係数への
-    // 一律乗数)を書き換えるだけ——毎フレーム呼ばれても軽い処理。
-    if (windowGlowLightProbe) {
-        // wgProbeBaseIntensityは「フル点灯時にどれくらい底上げするか」の基準値。
-        // PointLightのwgBaseIntensity(18.0)とは役割が違う（プローブは面全体への
-        // 弱い底上げ、PointLightは局所的な強いアクセント）ため、別の低めの値にする。
-        windowGlowLightProbe.intensity = 1.2 * eff;
-    }
-
-    // v166: シャドウマップの再計算はintensity更新とは別にローテーション式で間引く
-    // （明るさのフェードは毎フレーム滑らかに、影の再計算だけを間引く）。
-    // wgShadowUpdateInterval フレームごとに1灯だけneedsUpdate=trueを立てて回す。
-    // 8灯 × interval フレームで一巡するので、intervalが大きいほど1灯あたりの
-    // 更新頻度は下がる（見た目には「船の動きに対して影の追従が少し遅れる」形になるが、
-    // 窓明かりの影自体は元々コントラストの弱いディテールなので目立ちにくい）。
-    const interval = (typeof perf !== 'undefined' && perf.wgShadowUpdateInterval) || 1;
-    if (interval <= 1) {
-        // high品質など間引き不要な設定では従来通り毎フレーム全灯更新
-        windowGlowLights.forEach(pl => { if (pl.castShadow) pl.shadow.needsUpdate = true; });
-    } else {
-        // 1フレームにつき1灯だけ更新し、8灯 × interval フレームで全灯が一巡する。
-        // 例：8灯・interval=3フレームなら、24フレームで8灯すべてが1回ずつ更新される
-        // （1灯あたりの実質更新間隔は24フレーム、うち「担当フレーム」は3フレームに1回巡ってくる）。
-        const numLights = windowGlowLights.length;
-        if (numLights > 0 && wgShadowFrameCounter % interval === 0) {
-            const slotToUpdate = Math.floor(wgShadowFrameCounter / interval) % numLights;
-            windowGlowLights.forEach(pl => {
-                if (pl.castShadow && pl.userData.wgShadowSlot === slotToUpdate) {
-                    pl.shadow.needsUpdate = true;
-                }
-            });
-        }
-    }
-    wgShadowFrameCounter++;
+    // 発光パネル（窓・灯具を面光源として扱うもの、26-glow-emitters.js）の明るさも
+    // 同じ係数で連動させる。windowGlowMultスライダーで、窓の輝きと周囲を照らす
+    // 光が同時に変わる。
+    if (typeof setAreaLightGlowFactor === 'function') setAreaLightGlowFactor(eff);
+    // 船内全体をほんのり底上げする環境光プローブ。SH係数（分布の形）は
+    // 組み立て時に焼き込み済みなので、ここでは全体の強さだけを書き換える。
+    if (windowGlowLightProbe) windowGlowLightProbe.intensity = 1.2 * eff;
 }
 
 function updateDayNightCycle(dayProgress) {

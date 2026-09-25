@@ -96,6 +96,10 @@ function renderWithBloom() {
 
     renderer.setRenderTarget(null);
     renderer.autoClear = true;
+    // 影マップは本描画のときだけ描き直す（04-scene-and-water-init.js 参照）。
+    // ブルーム抽出パスは前フレームの影マップを使うが、抽出されるのは発光面
+    // だけなので見た目には影響しない。
+    renderer.shadowMap.needsUpdate = true;
     renderer.render(scene, camera);
 
     renderer.autoClear = false;

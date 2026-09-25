@@ -79,6 +79,12 @@ function init() {
     // shadowMapSize経由でapplyShadowQualityFromPerf()が管理する
     // （sunLight自体はこの少し下で生成されるため、有効化はそちらで行う）。
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // 影マップの描画は1フレームに1回だけにする。three.js は既定では
+    // renderer.render() を呼ぶたびに影を描き直すが、このアプリは1フレームに
+    // ブルーム抽出・本描画・水面反射と何度もシーンを描くため、太陽の影
+    // （2048px）などを毎フレーム2〜3回描き直していた。本描画の直前にだけ
+    // needsUpdate を立てる（17-main-loop.js / 12-bloom-and-deck-lighting-fx.js）。
+    renderer.shadowMap.autoUpdate = false;
     // RectAreaLight（エリアライト）のサポートを有効化
     if (THREE.RectAreaLightUniformsLib) THREE.RectAreaLightUniformsLib.init();
     container.appendChild(renderer.domElement);
@@ -1808,6 +1814,13 @@ function loadEmbeddedOBJ() {
         const fallbackGroup = new THREE.Group();
         createTitanicModel(fallbackGroup);
         setCustomModel(fallbackGroup);
+        window.currentModelSource = null;
+    }
+    // 同梱モデル（アプリと一緒に置いてある ship_model.*）は保存領域へ複製せず、
+    // 「同梱モデル」という参照だけを船の設定に残す（27-model-store.js）。
+    // 同梱モデルを差し替えたとき、古い複製のほうが優先されてしまわないように。
+    function markEmbedded(c, buf) {
+        window.currentModelSource = { id: null, name: c.name, type: c.type, size: buf.byteLength, embedded: true };
     }
 
     function tryNext(index) {
@@ -1828,6 +1841,7 @@ function loadEmbeddedOBJ() {
                         modelOffset.ry = -90.0; syncModelOffsetUI();
                         applyGltfEmissiveStrengthExt(gltf.scene, gltf.parser && gltf.parser.json);
                         setCustomModel(gltf.scene);
+                        markEmbedded(c, buf);
                         statusText.innerText = 'Loaded: ' + c.name;
                     }, function(err) { tryNext(index + 1); });
                 } else {
@@ -1837,13 +1851,22 @@ function loadEmbeddedOBJ() {
                     if (!modelHasMesh(obj)) { tryNext(index + 1); return; }
                     modelOffset.ry = -90.0; syncModelOffsetUI();
                     setCustomModel(obj);
+                    markEmbedded(c, buf);
                     statusText.innerText = 'Loaded: ' + c.name;
                 }
             })
             .catch(function() { tryNext(index + 1); });
     }
 
-    tryNext(0);
+    // 前回使っていたモデルが保存されていれば、それを優先して読み込む
+    // （27-model-store.js）。無ければ従来どおり同梱モデルを探す。
+    if (typeof restoreAutosavedModel === 'function') {
+        restoreAutosavedModel()
+            .then((ok) => { if (!ok) tryNext(0); })
+            .catch(() => tryNext(0));
+    } else {
+        tryNext(0);
+    }
 }
 
 // 回転ギズモを X/Y/Z の単軸回転のみに制限する。

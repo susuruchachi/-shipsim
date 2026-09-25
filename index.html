@@ -821,6 +821,7 @@
         <div class="sp-section-title">ファイルに保存 / 読み込み (複数デバイス用)</div>
         <div style="font-size:10px;color:#888;margin-bottom:6px;">
           設定をファイル(.json)として書き出し、他のデバイスで読み込むことができます。
+          （.jsonにはモデル本体は入りません。モデルごと移すときは下のZIPを使ってください）
         </div>
         <div class="sp-row" style="gap:8px;">
           <button class="sp-add-btn" style="flex:1;" onclick="exportShipConfigFile()">⬇ ファイルに保存 (.json)</button>
@@ -828,6 +829,20 @@
         </div>
         <input type="file" id="ship-file-input" accept=".json,application/json" style="display:none;" onchange="importShipConfigFile(event)">
         <div id="ship-file-status" style="font-size:10px;color:#888;margin-top:4px;"></div>
+      </div>
+
+      <div class="sp-section">
+        <div class="sp-section-title">まとめて保存 / 読み込み (ZIP)</div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">
+          保存済みの船すべてを、設定とモデルごと1つのZIPに書き出します。
+          バックアップや、別の端末への引っ越しに使えます。
+        </div>
+        <div class="sp-row" style="gap:8px;">
+          <button class="sp-add-btn" style="flex:1;" onclick="exportAllShipsZip()">📦 全部ZIPで保存</button>
+          <button class="sp-add-btn" style="flex:1;" onclick="$('ship-zip-input').click()">📂 ZIPから読み込み</button>
+        </div>
+        <input type="file" id="ship-zip-input" accept=".zip,application/zip" style="display:none;" onchange="importShipsZip(event)">
+        <div id="ship-archive-status" style="font-size:10px;color:#888;margin-top:4px;"></div>
       </div>
     </div>
 
@@ -1019,6 +1034,9 @@
 <script src="js/23-underwater.js"></script>
 <script src="js/24-weather.js"></script>
 <script src="js/25-area-lights.js"></script>
+<script src="js/26-glow-emitters.js"></script>
+<script src="js/27-model-store.js"></script>
+<script src="js/28-ship-archive.js"></script>
 <script src="js/17-main-loop.js"></script>
 <script src="js/18-hull-wake-physics.js"></script>
 <script src="js/19-swe-fluid.js"></script>

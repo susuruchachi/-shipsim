@@ -1,3 +1,48 @@
+// GLB/glTF をバイト列から読み込んで表示する。ファイル選択からも、
+// 保存してあったモデルの復元（27-model-store.js）からも、この1本を通す。
+function loadGltfBuffer(buffer, name) {
+    return new Promise((resolve, reject) => {
+        const statusText = $('import-status');
+        modelOffset.ry = -90.0; syncModelOffsetUI();
+        pendingMTLMaterials = null; pendingMTLText = null; pendingOBJText = null;
+        const view = new DataView(buffer);
+        const isBinary = buffer.byteLength > 4 && view.getUint32(0, true) === 0x46546C67;
+        const manager = new THREE.LoadingManager();
+        manager.setURLModifier((url) => resolveTextureAlias(url) || url);
+        const loader = new THREE.GLTFLoader(manager);
+        const success = (gltf) => {
+            applyGltfEmissiveStrengthExt(gltf.scene, gltf.parser && gltf.parser.json);
+            setCustomModel(gltf.scene);
+            if (statusText) statusText.innerText = 'Loaded: ' + name;
+            window.lastLoadedModelName = name;
+            // Blenderのワット単位 → Three.js向けに自動スケーリング
+            glbLights.forEach((light) => {
+                if (light.isRectAreaLight) {
+                    // カスタムプロパティ経由は生成時に変換済み、
+                    // KHR_lights_punctual経由のRectAreaLightはないが念のため
+                    if (!light.userData.isAreaLight && light.intensity > 50) {
+                        light.intensity *= 0.02;
+                    }
+                } else if (light.isPointLight || light.isSpotLight) {
+                    if (light.intensity > 100) { light.intensity *= 0.001; }
+                } else if (light.isDirectionalLight) {
+                    if (light.intensity > 10) { light.intensity *= 0.1; }
+                }
+                light.userData.baseIntensity = light.intensity;
+            });
+            glbLightMaster = 1.0;
+            updateGlbLightsUI();
+            resolve(gltf);
+        };
+        const fail = (err) => {
+            if (statusText) statusText.innerText = 'Error: ' + name + ' を読み込めませんでした';
+            reject(err || new Error('glTF parse failed'));
+        };
+        if (isBinary) loader.parse(buffer, './', success, fail);
+        else loader.parse(new TextDecoder('utf-8').decode(buffer), './', success, fail);
+    });
+}
+
 function setupModelImport() {
     installTextureAliasResolver();
     setupTextureFolderLoader();
@@ -10,45 +55,25 @@ function setupModelImport() {
         statusText.innerText = 'Loading: ' + file.name + '...';
 
         if (ext === 'gltf' || ext === 'glb') {
-            modelOffset.ry = -90.0; syncModelOffsetUI();
-            pendingMTLMaterials = null; pendingMTLText = null; pendingOBJText = null;
             reader.onload = (ev) => {
-                const view = new DataView(ev.target.result);
-                let isBinary = ev.target.result.byteLength > 4 && view.getUint32(0, true) === 0x46546C67;
-                const manager = new THREE.LoadingManager();
-                manager.setURLModifier((url) => resolveTextureAlias(url) || url);
-                const loader = new THREE.GLTFLoader(manager);
-                const success = (gltf) => {
-                    applyGltfEmissiveStrengthExt(gltf.scene, gltf.parser && gltf.parser.json);
-                    setCustomModel(gltf.scene);
-                    statusText.innerText = 'Loaded: ' + file.name;
-                    window.lastLoadedModelName = file.name;
-                    // Blenderのワット単位 → Three.js向けに自動スケーリング
-                    glbLights.forEach((light) => {
-                        if (light.isRectAreaLight) {
-                            // カスタムプロパティ経由は生成時に変換済み、
-                            // KHR_lights_punctual経由のRectAreaLightはないが念のため
-                            if (!light.userData.isAreaLight && light.intensity > 50) {
-                                light.intensity *= 0.02;
-                            }
-                        } else if (light.isPointLight || light.isSpotLight) {
-                            if (light.intensity > 100) { light.intensity *= 0.001; }
-                        } else if (light.isDirectionalLight) {
-                            if (light.intensity > 10) { light.intensity *= 0.1; }
-                        }
-                        light.userData.baseIntensity = light.intensity;
-                    });
-                    glbLightMaster = 1.0;
-                    updateGlbLightsUI();
-                };
-                if (isBinary) loader.parse(ev.target.result, './', success, () => {});
-                else loader.parse(new TextDecoder('utf-8').decode(ev.target.result), './', success, () => {});
+                const buf = ev.target.result;
+                loadGltfBuffer(buf, file.name)
+                    // 読み込めたモデルは保存しておき、船の設定と結びつける（27-model-store.js）
+                    .then(() => { if (typeof rememberModelSource === 'function') rememberModelSource(file.name, ext, buf); })
+                    .catch(() => {});
             };
             reader.readAsArrayBuffer(file);
         } else if (ext === 'obj') {
             modelOffset.ry = -90.0; syncModelOffsetUI();
             reader.onload = (ev) => {
-                try { loadOBJ(ev.target.result, file.name); window.lastLoadedModelName = file.name; }
+                try {
+                    loadOBJ(ev.target.result, file.name);
+                    window.lastLoadedModelName = file.name;
+                    // OBJ単体は保存できる。MTL・テクスチャは別ファイルなので保存しない。
+                    if (typeof rememberModelSource === 'function') {
+                        rememberModelSource(file.name, 'obj', new TextEncoder().encode(ev.target.result).buffer);
+                    }
+                }
                 catch (e) { statusText.innerText = 'Error'; }
             };
             reader.readAsText(file);
