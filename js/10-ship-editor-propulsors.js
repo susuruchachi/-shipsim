@@ -354,6 +354,28 @@ const AXISVIEW_DEFAULT_FOV = 50;
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 let orthoHalfHeight = 50; // 正投影カメラの縦方向の半サイズ（リサイズ時のアスペクト再計算用に保持）
 
+// 横・上・正面から見るときに画面に収める範囲。
+// 以前は shipGroup 全体の外接箱を使っていたが、船から離れた所に置かれた小さな
+// 物（非表示の目印など）まで含まれて、Teutonic では船の長さ180mに対して
+// 外接箱が約7kmになり、ものすごく遠くから見る形になっていた。
+// 読み込んだ船のモデルの、表示されているメッシュだけで範囲を決める
+// （モデルが無いときは組み込みの船体など shipGroup の表示中メッシュ）。
+function _axisViewShipBox() {
+    const root = (typeof importedModelGroup !== 'undefined' && importedModelGroup && importedModelGroup.children.length > 0)
+        ? importedModelGroup : shipGroup;
+    root.updateWorldMatrix(true, true);
+    const box = new THREE.Box3(), b = new THREE.Box3();
+    const visibleChain = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
+    root.traverse((o) => {
+        if (!o.isMesh || !o.geometry || !visibleChain(o)) return;
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+        b.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+        box.union(b);
+    });
+    if (box.isEmpty()) box.setFromObject(shipGroup);
+    return box;
+}
+
 function setAxisView(mode) {
     if (!camera || !controls || !shipGroup) return;
     document.querySelectorAll('.sp-axisview-btn').forEach(b => b.classList.remove('active'));
@@ -387,7 +409,7 @@ function setAxisView(mode) {
 
     // 船体の現在のワールド空間バウンディングスフィアから、画角に収まるサイズを毎回計算する
     // （固定サイズだと船が大きいときに見切れる／小さいときに余白が大きすぎる、を防ぐ）
-    const box = new THREE.Box3().setFromObject(shipGroup);
+    const box = _axisViewShipBox();
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     const target = sphere.center.clone();
     const radius = Math.max(sphere.radius, 1 * physics.scale);

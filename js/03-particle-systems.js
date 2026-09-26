@@ -108,12 +108,13 @@ function createGlobalSmokeSystem() {
                 vec4 tex = texture2D(map, gl_PointCoord);
                 vec3 finalColor = color * lightFactor;
                 gl_FragColor = vec4(finalColor, tex.a * alpha);
-                #include <tonemapping_fragment>
-                #include <encodings_fragment>
                 {
+                    // 霧（海面と同じく、トーンマッピング・sRGB変換の前に混ぜる）
                     float fogD = uFogDensity * vFogDist;
                     gl_FragColor.rgb = mix(gl_FragColor.rgb, uFogColor, clamp(1.0 - exp(-fogD * fogD), 0.0, 1.0));
                 }
+                #include <tonemapping_fragment>
+                #include <encodings_fragment>
             }
         `
     });
@@ -277,12 +278,13 @@ function createBubbleSystem() {
                 }
                 if (a < 0.004) discard;
                 gl_FragColor = vec4(col * lightFactor, a);
-                #include <tonemapping_fragment>
-                #include <encodings_fragment>
                 {
+                    // 霧（海面と同じく、トーンマッピング・sRGB変換の前に混ぜる）
                     float fogD = uFogDensity * vFogDist;
                     gl_FragColor.rgb = mix(gl_FragColor.rgb, uFogColor, clamp(1.0 - exp(-fogD * fogD), 0.0, 1.0));
                 }
+                #include <tonemapping_fragment>
+                #include <encodings_fragment>
             }
         `
     });
@@ -552,12 +554,13 @@ function createWakeParticleSystem() {
                 }
                 vec3 col = vec3(0.9, 0.97, 1.0) * lightFactor;
                 gl_FragColor = vec4(col, tex.a * alpha);
-                #include <tonemapping_fragment>
-                #include <encodings_fragment>
                 {
+                    // 霧（海面と同じく、トーンマッピング・sRGB変換の前に混ぜる）
                     float fogD = uFogDensity * vFogDist;
                     gl_FragColor.rgb = mix(gl_FragColor.rgb, uFogColor, clamp(1.0 - exp(-fogD * fogD), 0.0, 1.0));
                 }
+                #include <tonemapping_fragment>
+                #include <encodings_fragment>
             }
         `
     });

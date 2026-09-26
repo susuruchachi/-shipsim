@@ -10,6 +10,31 @@
 //            閃光の間だけ環境光を持ち上げ、描画後に元へ戻す。
 //   ・空   : どんより暗い空・霧や雨で霞む空（05-sky-dome.js の uniform）。
 
+// ── 霧の色を、船体と海・空で揃える ──────────────────────────────────
+// three.js の標準マテリアル（船体など）は、色をトーンマッピング・sRGB変換した
+// **後**に霧を混ぜるので、霧の色だけが変換されないまま（暗いまま）画面に出る。
+// 一方、海面や空の自前シェーダーは変換の**前**に霧を混ぜている。そのため霧が
+// 濃いと、遠くの船だけが周りの霧より暗い「影絵」になっていた。
+// 標準の霧の処理を差し替えて、霧の色にも同じ変換（露出・トーンマッピング・
+// sRGB）を掛けてから混ぜる。霧に完全に溶けたとき、船も海も同じ色になる。
+if (THREE.ShaderChunk && THREE.ShaderChunk.fog_fragment) {
+    THREE.ShaderChunk.fog_fragment = `
+#ifdef USE_FOG
+    #ifdef FOG_EXP2
+        float fogFactor = 1.0 - exp( - fogDensity * fogDensity * fogDepth * fogDepth );
+    #else
+        float fogFactor = smoothstep( fogNear, fogFar, fogDepth );
+    #endif
+    vec3 fogOutColor = fogColor;
+    #if defined( TONE_MAPPING )
+        fogOutColor = toneMapping( fogOutColor );
+    #endif
+    fogOutColor = linearToOutputTexel( vec4( fogOutColor, 1.0 ) ).rgb;
+    gl_FragColor.rgb = mix( gl_FragColor.rgb, fogOutColor, fogFactor );
+#endif
+`;
+}
+
 // 画質ごとの雨粒の数
 const RAIN_DROPS_BY_QUALITY = { high: 8000, medium: 5000, low: 3000, verylow: 1500, ultralow: 800 };
 const RAIN_BOX = new THREE.Vector3(70, 40, 70);   // カメラのまわりの雨を降らせる範囲[m]
