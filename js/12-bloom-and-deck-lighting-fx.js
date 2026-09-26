@@ -30,6 +30,20 @@ function initBloomComposer() {
     bloomRenderPass = new THREE.RenderPass(scene, camera);
     bloomComposer.addPass(bloomRenderPass);
     bloomComposer.addPass(bloomPass);
+    // 抽出パスでシーンを描いた先（renderTarget2）の奥行きを、テクスチャとして
+    // 読めるようにしておく。霧の中の灯りのにじみ（26-glow-emitters.js）が、
+    // 灯りとカメラの間に壁などがあるかをこれで調べる。
+    try {
+        const rt = bloomComposer.renderTarget2;
+        if (renderer.capabilities.isWebGL2 || renderer.extensions.get('WEBGL_depth_texture')) {
+            rt.depthTexture = new THREE.DepthTexture(rt.width, rt.height);
+            rt.depthTexture.format = THREE.DepthFormat;
+            rt.depthTexture.type = renderer.capabilities.isWebGL2 ? THREE.UnsignedIntType : THREE.UnsignedShortType;
+            rt.depthTexture.minFilter = THREE.NearestFilter;
+            rt.depthTexture.magFilter = THREE.NearestFilter;
+            rt.dispose();   // 次に使うときに奥行きテクスチャ付きで作り直させる
+        }
+    } catch (e) { console.warn('[Bloom] 奥行きテクスチャを用意できませんでした:', e); }
 
     // --- ② ブルーム結果をキャンバスに加算で重ねるための全画面クアッド ---
     // renderer.render(scene, camera) でキャンバスへ直接描いた直後に、これを
@@ -122,6 +136,13 @@ function _renderBloomExtract() {
 
     if (scene.fog && savedFogColorHex !== null) scene.fog.color.setHex(savedFogColorHex);
     scene.traverse(restoreNoBloomObjects);
+}
+
+// 今のフレームのシーンの奥行き（ブルーム抽出パスで描いたもの）。無ければ null。
+// 抽出パスは本描画の直前に描くので、本描画中はこのフレームの奥行きになっている。
+function getSceneDepthTexture() {
+    if (!bloomEnabled || !bloomComposer || !bloomComposer.renderTarget2) return null;
+    return bloomComposer.renderTarget2.depthTexture || null;
 }
 
 function setBloomEnabled(enabled) {

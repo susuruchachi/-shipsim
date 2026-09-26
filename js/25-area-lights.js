@@ -95,6 +95,37 @@ const AREA_LIGHT_SPOT_ANGLE = Math.PI / 3;
 //  持たせると、光の -Z が親の +Y、光の X が親の X、光の Y が親の Z に一致する。
 const AREA_LIGHT_EMIT_ROT_X = Math.PI / 2;
 
+// ════════════════════════════════════════════════════════════════
+//  枠に入らなかった遠くの灯り（簡易の照明）
+// ════════════════════════════════════════════════════════════════
+//  面光源（RectAreaLight）は重いので、実際に点けられるのはカメラに近い数灯
+//  （上の AREA_LIGHT_BUDGET）だけ。それ以外の灯りは今まで何も照らさず、
+//  離れた所の甲板や天井が真っ暗で不自然だった。
+//  そこで枠に入らなかった灯りも、影なしの軽い計算で照らす：
+//    ・1灯あたり「面の正面の向き × 受ける面の向き × 距離の2乗で減る」だけ
+//      （面光源の小さい光源での近似と同じ明るさになるようにしてある）
+//    ・届く範囲を明るさから決め、それより遠くは計算しない
+//    ・影は無い代わりに届く範囲が短いので、壁の向こうへの漏れは目立ちにくい
+//  灯りの情報は小さな浮動小数テクスチャで船のマテリアルへ渡し（配列uniformの
+//  動的添字は一部端末でリンクに失敗するため）、船のマテリアルの光の計算の
+//  最後に足す。枠に入った灯りは枠のフェードに合わせて簡易側を消すので、
+//  入れ替わりで明るさが跳ねない。
+const FILL_LIGHT_MAX = { high: 48, medium: 32, low: 16, verylow: 8, ultralow: 0 };
+const FILL_TEX_W = 64;                 // テクスチャの幅（= 最大灯数）
+const FILL_LIGHT_MIN_E = 0.004;        // これより暗くなる距離で打ち切る（届く範囲）
+const FILL_LIGHT_MAX_RANGE = 60;       // 届く範囲の上限[m]
+const fillLightUniforms = {
+    uFillTex:   { value: null },
+    uFillCount: { value: 0 },
+};
+let _fillData = null;
+let _fillDefs = [];          // 簡易照明の候補（割り当て直しのたびに選ぶ）
+let _fillPatchDirty = true;  // 船のマテリアルへ簡易照明を仕込み直すか
+const _fillFrustum = new THREE.Frustum();
+const _fillProjView = new THREE.Matrix4();
+const _fillSphere = new THREE.Sphere();
+const _fillN = new THREE.Vector3();
+
 let areaLightDefs  = [];   // { kind:'empty'|'glow', node, holder, color, weight, mirrorOf, mirror, _dist }
 let areaLightSlots = [];   // { root, rect, spot, def, fade, shadowDirty, sig }
 let _alLastBindAt  = -1;
@@ -251,6 +282,7 @@ function buildAreaLights(model, empties) {
     });
 
     _alRebuildSlots(true);
+    _fillPatchDirty = true;
     return areaLightDefs;
 }
 
@@ -272,6 +304,7 @@ function setGlowAreaDefs(panels) {
     });
     _alRebuildSlots(false);
     _alLastBindAt = -1;   // 次のフレームですぐ割り当て直す
+    _fillPatchDirty = true;
 }
 
 // ── シンメトリー（左右対称コピー）──────────────────────────────
@@ -382,6 +415,135 @@ function _alRebind(cam) {
     const forPlain  = live.slice(shadowSlots.length, shadowSlots.length + plainSlots.length);
     _alAssignTier(shadowSlots, forShadow);
     _alAssignTier(plainSlots, forPlain);
+
+    // 簡易照明の候補：画面に届きうる灯りを近い順に（枠に入ったものも含める。
+    // 枠のフェードに合わせて簡易側を消すため）
+    const nFill = FILL_LIGHT_MAX[(typeof perf !== 'undefined' && perf.quality) || 'medium'] || 0;
+    _fillDefs = [];
+    if (nFill > 0) {
+        cam.updateMatrixWorld();
+        _fillProjView.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+        _fillFrustum.setFromProjectionMatrix(_fillProjView);
+        for (const d of live) {
+            if (_fillDefs.length >= nFill + areaLightSlots.length) break;
+            _alTmpPos.setFromMatrixPosition(d.node.matrixWorld);
+            _fillSphere.set(_alTmpPos, _fillRange(d));
+            if (_fillFrustum.intersectsSphere(_fillSphere)) _fillDefs.push(d);
+        }
+    }
+}
+
+// 簡易照明の明るさの係数 = 強さ × 面積（面光源の、小さい光源での近似）
+function _fillPower(def) {
+    def.node.matrixWorld.decompose(_alTmpPos, _alTmpQuat, _alTmpScale);
+    const area = Math.max(1e-4, Math.abs(_alTmpScale.x * _alTmpScale.z));
+    return { power: _alDefIntensity(def) * area, area };
+}
+// 届く範囲：明るさが FILL_LIGHT_MIN_E まで落ちる距離
+function _fillRange(def) {
+    const { power } = _fillPower(def);
+    return Math.min(FILL_LIGHT_MAX_RANGE, Math.sqrt(power / (Math.PI * FILL_LIGHT_MIN_E)));
+}
+
+function _fillEnsureTex() {
+    if (fillLightUniforms.uFillTex.value) return;
+    _fillData = new Float32Array(FILL_TEX_W * 3 * 4);
+    const tex = new THREE.DataTexture(_fillData, FILL_TEX_W, 3, THREE.RGBAFormat, THREE.FloatType);
+    tex.minFilter = THREE.NearestFilter;
+    tex.magFilter = THREE.NearestFilter;
+    tex.generateMipmaps = false;
+    tex.needsUpdate = true;
+    fillLightUniforms.uFillTex.value = tex;
+}
+
+// 毎フレーム：候補の灯りの位置・向き・明るさをカメラ座標でテクスチャに書く
+function _fillUpdate(cam) {
+    _fillEnsureTex();
+    const fadeOf = new Map();
+    for (const s of areaLightSlots) {
+        if (s.def && s.root.visible) fadeOf.set(s.def, s.fade * s.fade * (3 - 2 * s.fade));
+    }
+    const D = _fillData;
+    const view = cam.matrixWorldInverse;
+    let n = 0;
+    for (const d of _fillDefs) {
+        if (n >= FILL_TEX_W) break;
+        if (!_alDefVisible(d)) continue;
+        // 枠で照らしている分は簡易側から引く
+        const k = 1 - (fadeOf.get(d) || 0);
+        if (k < 0.01) continue;
+        d.node.updateWorldMatrix(true, false);
+        const { power, area } = _fillPower(d);
+        if (power <= 0) continue;
+        const range = Math.min(FILL_LIGHT_MAX_RANGE, Math.sqrt(power / (Math.PI * FILL_LIGHT_MIN_E)));
+        // 位置と面の向き（ローカル +Y）をカメラ座標へ
+        _alTmpPos.setFromMatrixPosition(d.node.matrixWorld).applyMatrix4(view);
+        _fillN.set(0, 1, 0).applyQuaternion(_alTmpQuat).transformDirection(view);
+        const r0 = n * 4, r1 = (FILL_TEX_W + n) * 4, r2 = (FILL_TEX_W * 2 + n) * 4;
+        D[r0] = _alTmpPos.x; D[r0 + 1] = _alTmpPos.y; D[r0 + 2] = _alTmpPos.z; D[r0 + 3] = range;
+        D[r1] = _fillN.x;    D[r1 + 1] = _fillN.y;    D[r1 + 2] = _fillN.z;    D[r1 + 3] = area;
+        D[r2] = d.color.r * power * k; D[r2 + 1] = d.color.g * power * k; D[r2 + 2] = d.color.b * power * k; D[r2 + 3] = 0;
+        n++;
+    }
+    fillLightUniforms.uFillCount.value = n;
+    fillLightUniforms.uFillTex.value.needsUpdate = true;
+}
+
+// 船のマテリアル（MeshStandardMaterial）に簡易照明を仕込む。既存の
+// onBeforeCompile（船体曲げなど）は先に呼んでから足す。
+function _fillPatchMaterial(mat) {
+    if (!mat || !mat.isMeshStandardMaterial || mat.userData.fillLightPatched) return;
+    mat.userData.fillLightPatched = true;
+    const prev = mat.onBeforeCompile;
+    const prevKey = mat.customProgramCacheKey;
+    mat.onBeforeCompile = function (shader, r) {
+        if (typeof prev === 'function') prev.call(this, shader, r);
+        shader.uniforms.uFillTex = fillLightUniforms.uFillTex;
+        shader.uniforms.uFillCount = fillLightUniforms.uFillCount;
+        shader.fragmentShader = shader.fragmentShader
+            .replace('#include <common>', `#include <common>
+uniform sampler2D uFillTex;
+uniform int uFillCount;`)
+            .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+{
+    // 枠に入らなかった遠くの灯りの簡易照明（25-area-lights.js）
+    for (int i = 0; i < ${FILL_TEX_W}; i++) {
+        if (i >= uFillCount) break;
+        float fu = (float(i) + 0.5) / ${FILL_TEX_W}.0;
+        vec4 lp = texture2D(uFillTex, vec2(fu, 0.5 / 3.0));
+        vec3 L = lp.xyz - geometry.position;
+        float d2 = dot(L, L);
+        if (d2 > lp.w * lp.w) continue;
+        vec4 ln = texture2D(uFillTex, vec2(fu, 1.5 / 3.0));
+        vec3 lc = texture2D(uFillTex, vec2(fu, 2.5 / 3.0)).rgb;
+        float d = sqrt(d2);
+        vec3 Ld = L / max(d, 1e-4);
+        float cosR = max(dot(geometry.normal, Ld), 0.0);   // 受ける面の向き
+        float cosL = max(dot(ln.xyz, -Ld), 0.0);           // 灯りの面の正面か
+        float win = 1.0 - d / lp.w; win *= win;             // 届く範囲の端で滑らかに0へ
+        float e = cosR * cosL * win / (PI * d2 + ln.w);
+        reflectedLight.directDiffuse += lc * e * material.diffuseColor;
+    }
+}`);
+    };
+    mat.customProgramCacheKey = function () {
+        const base = (typeof prevKey === 'function') ? prevKey.call(this) : '';
+        // 後から別のパッチ（船体曲げなど）がこの上に被さっても区別できるよう、
+        // 今の onBeforeCompile も鍵に含める（three.js はこの鍵でシェーダーを使い回す）
+        return 'fillLight|' + String(this.onBeforeCompile) + '|' + (typeof prev === 'function' ? prev.toString() : '') + '|' + base;
+    };
+    mat.needsUpdate = true;
+}
+
+function _fillPatchModel() {
+    _fillPatchDirty = false;
+    const root = (typeof importedModelGroup !== 'undefined' && importedModelGroup) ? importedModelGroup
+               : ((typeof shipGroup !== 'undefined') ? shipGroup : null);
+    if (!root) return;
+    root.traverse((o) => {
+        if (!o.isMesh || !o.material) return;
+        (Array.isArray(o.material) ? o.material : [o.material]).forEach(_fillPatchMaterial);
+    });
 }
 
 // 定義ノードの「船に対する」置き方のシグネチャ。ギズモ等でエリアライトを
@@ -395,7 +557,7 @@ function _alNodeSig(node) {
 function updateAreaLights(t) {
     const dt = (_alLastT < 0) ? 0 : Math.min(0.1, Math.max(0, t - _alLastT));
     _alLastT = t;
-    if (areaLightDefs.length === 0 || areaLightSlots.length === 0) return;
+    if (areaLightDefs.length === 0 || areaLightSlots.length === 0) { fillLightUniforms.uFillCount.value = 0; return; }
     const cam = (typeof camera !== 'undefined') ? camera : null;
     if (!cam) return;
 
@@ -488,6 +650,10 @@ function updateAreaLights(t) {
             spot.shadow.updateMatrices(spot);
         }
     }
+
+    // ── 枠に入らなかった灯りの簡易照明 ──
+    if (_fillPatchDirty) _fillPatchModel();
+    _fillUpdate(cam);
 }
 
 // UI/保存用。

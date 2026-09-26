@@ -325,11 +325,14 @@ function _glowBuildProbe(modelRoot, pts, color) {
 //   ・霧も雨も無いときは、近〜中距離ではほとんど出さない（澄んだ空気では
 //     灯りはにじまない）。ずっと遠くの船を眺めたときの「灯っている点」だけ残す
 //
-//  【奥行きの判定】にじみは空気が光っているもので、船体の表面に貼り付いて
-//  いるわけではない。船体と奥行きを比べると、スプライト（四角い板）が船体の
-//  曲面に切られて、船体の辺に沿った線が見えてしまう。そこで奥行きの判定は
-//  せず、代わりに「その灯りの面がカメラの方を向いているか」で隠す
-//  （船の向こう側の窓・内側を向いた灯りは出さない）。
+//  【隠れるかどうかの判定】にじみは空気が光っているもので、船体の表面に
+//  貼り付いているわけではない。画素ごとに船体と奥行きを比べると、スプライト
+//  （四角い板）が船体の曲面に切られて、船体の辺に沿った線が見えてしまう。
+//  そこで画素ごとの比較はせず、**灯りの中心（とその周り4点）**について、
+//  カメラとの間に壁などがあるかを、ブルーム抽出パスが描いたシーンの奥行き
+//  （12-bloom の getSceneDepthTexture）で調べ、にじみ全体を出す／隠す。
+//  あわせて「その灯りの面がカメラの方を向いているか」でも隠す。
+//  （ブルームを切っていて奥行きが無いときは、画素ごとの比較に戻す）
 const GLOW_HALO_SIZE_MUL   = 1.8;   // パネルの大きさに対するにじみの大きさ
 const GLOW_HALO_MIN_M      = 2.5;   // にじみの最小サイズ[m]
 const GLOW_HALO_MAX_M      = 14.0;  // にじみの最大サイズ[m]
@@ -375,6 +378,9 @@ function _glowBuildHalos(modelRoot, panels) {
             uWet:        { value: 0 },    // 霧・雨の度合い（0〜1）
             uDryNear:    { value: GLOW_HALO_DRY_NEAR },
             uDryFar:     { value: GLOW_HALO_DRY_FAR },
+            uSceneDepth: { value: null },
+            uHasDepth:   { value: 0 },
+            uInvViewport:{ value: new THREE.Vector2(1 / 800, 1 / 600) },
         },
         vertexShader: `
             attribute vec3 aColor;
@@ -382,8 +388,19 @@ function _glowBuildHalos(modelRoot, panels) {
             attribute vec3 aNormal;
             uniform float uStrength, uPixelScale, uNear, uFar, uSizeMul, uMinPx, uFogDensity;
             uniform float uWet, uDryNear, uDryFar;
+            uniform sampler2D uSceneDepth;
+            uniform float uHasDepth;
+            uniform vec2 uInvViewport;
             varying vec3 vColor;
             varying float vAlpha;
+            #ifdef USE_LOGDEPTHBUF
+                uniform float logDepthBufFC;
+                // シーンの奥行き（対数深度）→ カメラからの距離
+                float sceneDistAt(vec2 uv) {
+                    float d = texture2D(uSceneDepth, uv).r;
+                    return exp2(d * 2.0 / logDepthBufFC) - 1.0;
+                }
+            #endif
             void main() {
                 vec4 mv = modelViewMatrix * vec4(position, 1.0);
                 float dist = max(0.1, -mv.z);
@@ -406,6 +423,24 @@ function _glowBuildHalos(modelRoot, panels) {
                 vec3 wn = normalize(mat3(modelMatrix) * aNormal);
                 float facing = dot(wn, normalize(cameraPosition - wp.xyz));
                 vAlpha *= smoothstep(-0.05, 0.3, facing);
+                // 灯りとカメラの間に壁などがあれば隠す（中心とその周り4点で調べ、
+                // 隠れている割合だけ薄くする）
+                #ifdef USE_LOGDEPTHBUF
+                if (uHasDepth > 0.5 && vAlpha > 0.0) {
+                    vec2 uv = gl_Position.xy / gl_Position.w * 0.5 + 0.5;
+                    if (uv.x > 0.0 && uv.x < 1.0 && uv.y > 0.0 && uv.y < 1.0) {
+                        // 灯具の枠など、灯りのすぐ手前にある物では隠さない余裕
+                        float lim = dist - (0.6 + dist * 0.004);
+                        vec2 o = uInvViewport * gl_PointSize * 0.22;
+                        float vis = step(lim, sceneDistAt(uv))
+                                  + step(lim, sceneDistAt(uv + vec2(o.x, 0.0)))
+                                  + step(lim, sceneDistAt(uv - vec2(o.x, 0.0)))
+                                  + step(lim, sceneDistAt(uv + vec2(0.0, o.y)))
+                                  + step(lim, sceneDistAt(uv - vec2(0.0, o.y)));
+                        vAlpha *= vis / 5.0;
+                    }
+                }
+                #endif
             }`,
         fragmentShader: `
             varying vec3 vColor;
@@ -421,7 +456,7 @@ function _glowBuildHalos(modelRoot, panels) {
             }`,
         transparent: true,
         depthWrite: false,
-        depthTest: false,   // 奥行きの判定はしない（上の説明。面の向きで隠す）
+        depthTest: false,   // 画素ごとの奥行き比較はしない（上の説明。中心で隠れるか調べる）
         blending: THREE.AdditiveBlending,
     });
     glowHaloPoints = new THREE.Points(geom, mat);
@@ -449,6 +484,18 @@ function updateGlowHalos() {
     u.uSizeMul.value = 1 + wet * 0.9;
     u.uFogDensity.value = (typeof scene !== 'undefined' && scene && scene.fog && scene.fog.density) ? scene.fog.density : 0;
     u.uWet.value = THREE.MathUtils.smoothstep(wet, 0.05, 0.6);
+    // シーンの奥行き（ブルーム抽出パス）があれば、それで隠れるかを調べる。
+    // 無いとき（ブルームOFF）は画素ごとの奥行き比較に戻す。
+    const depthTex = (typeof getSceneDepthTexture === 'function') ? getSceneDepthTexture() : null;
+    u.uSceneDepth.value = depthTex;
+    u.uHasDepth.value = depthTex ? 1 : 0;
+    if (glowHaloPoints.material.depthTest !== !depthTex) {
+        glowHaloPoints.material.depthTest = !depthTex;
+    }
+    if (typeof renderer !== 'undefined' && renderer) {
+        const hPx = renderer.domElement.height, wPx = renderer.domElement.width;
+        u.uInvViewport.value.set(1 / Math.max(1, wPx), 1 / Math.max(1, hPx));
+    }
     // 水中からは見えない（水面の上の空気が光っているものなので）
     if ((window.underwaterAmount || 0) > 0.5) u.uStrength.value = 0;
     // 霧の中では近くでもにじみが見える

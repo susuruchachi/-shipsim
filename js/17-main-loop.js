@@ -790,6 +790,10 @@ function updateWaterReflection() {
     // 水面メッシュを一時的に非表示にして反射には映らないようにする
     const wasVisible = waterMesh.visible;
     waterMesh.visible = false;
+    // 霧の灯りのにじみは、メインカメラから見た奥行きで隠れるかを調べているので、
+    // 反射カメラの絵には描かない（反射では見当違いの所で隠れてしまうため）
+    const haloWasVisible = (typeof glowHaloPoints !== 'undefined' && glowHaloPoints) ? glowHaloPoints.visible : null;
+    if (haloWasVisible !== null) glowHaloPoints.visible = false;
 
     try {
         // 反射RTにレンダリング（bloom無しで直接render）
@@ -804,6 +808,7 @@ function updateWaterReflection() {
     } finally {
         // 例外が発生してもクリップ平面・waterMesh の状態を必ず元に戻す
         waterMesh.visible = wasVisible;
+        if (haloWasVisible !== null) glowHaloPoints.visible = haloWasVisible;
         renderer.clippingPlanes = [];
         renderer.localClippingEnabled = false;
     }
