@@ -382,6 +382,8 @@ function _startStrike(t, s) {
     if (Math.random() < 0.7) pulses.push({ t: 0.22 + Math.random() * 0.12, a: 0.85 });
     const bolt = (Math.random() < LIGHTNING_BOLT_CHANCE) ? _makeBolt(ground, cloudY) : null;
     _lightning.strike = { t0: t, pulses, dir, bolt, power: 0.6 + 0.4 * s };
+    // 雷鳴（35-audio-engine.js）。光ってから、距離に応じて遅れて鳴る
+    if (typeof audioThunder === 'function') audioThunder(Math.hypot(dist, cloudY * 0.5), s, !!bolt);
 }
 
 function _updateLightning(t, w) {

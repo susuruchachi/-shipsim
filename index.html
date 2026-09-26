@@ -285,6 +285,7 @@
 <div class="control-btn" id="btn-slower">▼</div>
 <div class="control-btn" id="btn-left">◀</div>
 <div class="control-btn" id="btn-right">▶</div>
+<div class="control-btn" id="btn-horn" title="汽笛（押している間・Hキー）">📯</div>
 
 <div id="settings-panel">
   <div id="settings-header">
@@ -300,6 +301,7 @@
     <button class="settings-tab" data-tab="funnels" onclick="switchTab('funnels')">🏭 煙突</button>
     <button class="settings-tab" data-tab="decklight" onclick="switchTab('decklight')">🔆 甲板照明</button>
     <button class="settings-tab" data-tab="viewpoint" onclick="switchTab('viewpoint')">🔭 視点</button>
+    <button class="settings-tab" data-tab="sound" onclick="switchTab('sound');renderSoundPanel()">🔊 音</button>
     <button class="settings-tab" data-tab="save" onclick="switchTab('save')">💾 保存</button>
     <button class="settings-tab" data-tab="perf" onclick="switchTab('perf')">⚡ 軽量化</button>
   </div>
@@ -994,6 +996,87 @@
       </div>
     </div>
 
+    <div class="settings-page" id="tab-sound">
+      <div class="sp-section">
+        <div class="sp-section-title">🔊 音量（この端末の設定）</div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="audio-enabled" checked onchange="setAudioSetting('enabled', this.checked)"> 音を出す</label>
+        </div>
+        <div class="sp-row"><span class="sp-label">全体:</span>
+          <input type="range" id="audio-master" class="sp-slider" min="0" max="1.5" step="0.05" value="0.8" oninput="setAudioSetting('master', this.value)"></div>
+        <div class="sp-row"><span class="sp-label">汽笛:</span>
+          <input type="range" id="audio-horn" class="sp-slider" min="0" max="1.5" step="0.05" value="1" oninput="setAudioSetting('horn', this.value)"></div>
+        <div class="sp-row"><span class="sp-label">機関:</span>
+          <input type="range" id="audio-engine" class="sp-slider" min="0" max="1.5" step="0.05" value="0.7" oninput="setAudioSetting('engine', this.value)"></div>
+        <div class="sp-row"><span class="sp-label">環境音:</span>
+          <input type="range" id="audio-env" class="sp-slider" min="0" max="1.5" step="0.05" value="0.7" oninput="setAudioSetting('env', this.value)"></div>
+        <div style="font-size:10px;color:#888;margin-top:4px;">
+          環境音：風・波・船首の波切り・航跡・雨（船内では屋根を打つ音）・雷鳴・波の打ち込み。<br>
+          船内ではこもって聞こえ、水中では全体がこもります。<br>
+          iPhone/iPad は画面に一度触れてから鳴り始めます（消音スイッチがONだと鳴らないことがあります）。
+        </div>
+      </div>
+      <div class="sp-section">
+        <div class="sp-section-title">📯 汽笛・ホーン（数の制限なし）</div>
+        <div class="sp-funnel-list" id="horn-list"></div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+          <select id="horn-add-type" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;">
+            <option value="steam_single">蒸気汽笛（単音）</option>
+            <option value="steam_chime">蒸気汽笛（チャイム・和音／客船）</option>
+            <option value="steam_organ">蒸気汽笛（オルガン管・太く低い）</option>
+            <option value="steam_bell">蒸気汽笛（ベル型・明るく高め）</option>
+            <option value="tyfon">タイフォン（Tyfon・空気式ホーン）</option>
+            <option value="airhorn">エアホーン（トランペット・和音／現代船）</option>
+            <option value="diaphone">ダイアフォン（霧笛・うなり付き）</option>
+            <option value="nautophone">ノートフォン（電磁式霧笛）</option>
+            <option value="electric">電気ホーン（振動板式）</option>
+            <option value="siren">サイレン（モーター式）</option>
+            <option value="bell">号鐘（船鐘）</option>
+            <option value="gong">ゴング（霧中号鐘・船尾）</option>
+          </select>
+          <button class="sp-add-btn" onclick="hornAdd()">＋ 汽笛を追加</button>
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:4px;">
+          位置(X/Y/Z)は煙突と同じ船の座標です。音はその場所から聞こえます（遠いほど小さく・まろやかに、音が届くまで遅れます）。<br>
+          画面の 📯 ボタン・Hキーで「📯ボタン・信号で鳴らす」にチェックした汽笛をまとめて、1〜9キーで番号の汽笛を鳴らせます。
+        </div>
+      </div>
+      <div class="sp-section">
+        <div class="sp-section-title">🚩 汽笛信号</div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+          <button class="sp-gizmo-btn" onclick="playHornSignal('L')">長音1回（出港・注意）</button>
+          <button class="sp-gizmo-btn" onclick="playHornSignal('S')">短音1回（右転）</button>
+          <button class="sp-gizmo-btn" onclick="playHornSignal('SS')">短音2回（左転）</button>
+          <button class="sp-gizmo-btn" onclick="playHornSignal('SSS')">短音3回（後進）</button>
+          <button class="sp-gizmo-btn" onclick="playHornSignal('SSSSS')">短音5回（警告）</button>
+          <button class="sp-gizmo-btn" onclick="playHornSignal('LLL')">長音3回（汽笛の挨拶）</button>
+          <button class="sp-remove-btn" onclick="stopHornSignal()">■ 止める</button>
+        </div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="horn-auto-fog" onchange="setHornAuto('fog', this.checked)"> 霧の中で自動の霧中信号（2分ごと・航行中は長音1回、停止中は長音2回）</label>
+        </div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="horn-auto-astern" onchange="setHornAuto('astern', this.checked)"> 前進中に後進をかけたら短音3回</label>
+        </div>
+      </div>
+      <div class="sp-section">
+        <div class="sp-section-title">⚙ 機関音</div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">形式:</span>
+          <select id="engine-sound-type" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;" onchange="setEngineSound('type', this.value)"></select>
+        </div>
+        <div class="sp-row"><span class="sp-label">音量:</span>
+          <input type="range" id="engine-sound-volume" class="sp-slider" min="0" max="1.5" step="0.05" value="1" oninput="setEngineSound('volume', this.value)"></div>
+        <div class="sp-xyz-row">
+          <span class="sp-axis-label">機関室 X:</span><input type="number" id="engine-sound-x" class="sp-xyz-input" value="0" step="0.1" oninput="setEngineSound('x', this.value)">
+          <span class="sp-axis-label">Y:</span><input type="number" id="engine-sound-y" class="sp-xyz-input" value="0" step="0.1" oninput="setEngineSound('y', this.value)">
+          <span class="sp-axis-label">Z:</span><input type="number" id="engine-sound-z" class="sp-xyz-input" value="0" step="0.1" oninput="setEngineSound('z', this.value)">
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:4px;">
+          音はスクリューの回転数に合わせて変わります（加速・逆転中は力強く）。船内にいると大きく聞こえます。
+        </div>
+      </div>
+    </div>
+
     <div class="settings-page" id="tab-perf">
       <div class="sp-section">
         <div class="sp-section-title">グラフィック品質</div>
@@ -1084,6 +1167,8 @@
 <script src="js/32-engine-propeller.js"></script>
 <script src="js/33-performance.js"></script>
 <script src="js/34-shelter.js"></script>
+<script src="js/35-audio-engine.js"></script>
+<script src="js/36-horns.js"></script>
 <script src="js/17-main-loop.js"></script>
 <script src="js/18-hull-wake-physics.js"></script>
 <script src="js/19-swe-fluid.js"></script>

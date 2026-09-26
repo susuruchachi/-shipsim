@@ -657,6 +657,8 @@ function animate() {
     // 更新するので、ここより前で呼ぶと影が1フレーム分船に置いていかれる。
     if (typeof updateAreaLights === 'function') updateAreaLights(t);
     if (typeof updateGlowHalos === 'function') updateGlowHalos();   // 遠景用の光のにじみ（26）
+    // 音（35-audio-engine.js / 36-horns.js）：機関・環境音・汽笛の位置と音量
+    if (typeof updateAudio === 'function') updateAudio(t);
     // 自動露出（30-auto-exposure.js）：目の慣れのように露出を少しずつ合わせる
     if (typeof applyAutoExposure === 'function') applyAutoExposure(t);
     // 水面の霧（04 の水面シェーダーは自前なので scene.fog を手で渡す）。

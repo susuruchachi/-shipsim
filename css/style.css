@@ -109,6 +109,8 @@
         #btn-left   { bottom: calc(60px + env(safe-area-inset-bottom)); right: 120px; }
         #btn-right  { bottom: calc(60px + env(safe-area-inset-bottom)); right: 30px; }
 
+        #btn-horn   { bottom: calc(210px + env(safe-area-inset-bottom)); left: 30px; font-size: 28px; }
+        body.menu-open #btn-horn { left: 310px; }
         body.menu-open #btn-faster { left: 310px; }
         body.menu-open #btn-slower { left: 310px; }
 

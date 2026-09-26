@@ -154,6 +154,8 @@ function collectShipConfig() {
             // 手動で細かく決めた天候（presetKey が 'custom' のとき使う）
             custom: Object.assign({}, window.weather.custom),
         } : null,
+        // 汽笛・機関音（36-horns.js）
+        sound: (typeof getShipSoundConfig === 'function') ? getShipSoundConfig() : null,
         // 位置・向き・月齢
         shipPos: { x: physics.cgWorldX, z: physics.cgWorldZ, heading: physics.heading },
         dayProgress: physics.dayProgress,
@@ -311,6 +313,8 @@ function applyShipConfig(cfg) {
         }
     }
 
+    // 汽笛・機関音。古い保存データには無いので、そのときは既定の汽笛に戻す
+    if (typeof applyShipSoundConfig === 'function') applyShipSoundConfig(cfg.sound || null);
     // ── 天候（24-weather.js）──────────────────────────────────────────
     // 天候がONだと風・波はそちらが毎フレーム上書きするので、この設定が
     // 保存していた風速・波の値は効かなくなる。天候機能より前に保存された
