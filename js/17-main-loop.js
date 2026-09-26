@@ -663,6 +663,11 @@ function animate() {
         window._waterUniforms.waterFogColor.value.copy(scene.fog.color);
         window._waterUniforms.waterFogDensity.value = scene.fog.density;
     }
+    // 煙・しぶき・スクリューの泡にも同じ霧を掛ける（03-particle-systems.js）
+    if (typeof particleFogUniforms !== 'undefined' && scene.fog) {
+        particleFogUniforms.uFogColor.value.copy(scene.fog.color);
+        particleFogUniforms.uFogDensity.value = scene.fog.density || 0;
+    }
 
     if (bloomEnabled && bloomComposer) {
         renderWithBloom();

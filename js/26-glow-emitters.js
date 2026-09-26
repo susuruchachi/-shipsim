@@ -320,19 +320,30 @@ function _glowBuildProbe(modelRoot, pts, color) {
 // そこで全パネルの位置に、加算合成の光点（ポイントスプライト）を置く。
 //   ・1回の描画で全パネル分を描くので、数百個あってもほぼ負荷にならない
 //   ・近くでは本物の面光源に任せてフェードアウトし、離れるほど見えてくる
-//   ・霧・雨のときは大きく明るくにじませ、灯りが空気中の水滴を照らして
+//   ・霧・雨のときは大きくにじませ、灯りが空気中の水滴を照らして
 //     光の玉ができる感じを出す（24-weather.js の haze / 雨量を使う）
+//   ・霧も雨も無いときは、近〜中距離ではほとんど出さない（澄んだ空気では
+//     灯りはにじまない）。ずっと遠くの船を眺めたときの「灯っている点」だけ残す
+//
+//  【奥行きの判定】にじみは空気が光っているもので、船体の表面に貼り付いて
+//  いるわけではない。船体と奥行きを比べると、スプライト（四角い板）が船体の
+//  曲面に切られて、船体の辺に沿った線が見えてしまう。そこで奥行きの判定は
+//  せず、代わりに「その灯りの面がカメラの方を向いているか」で隠す
+//  （船の向こう側の窓・内側を向いた灯りは出さない）。
 const GLOW_HALO_SIZE_MUL   = 1.8;   // パネルの大きさに対するにじみの大きさ
 const GLOW_HALO_MIN_M      = 2.5;   // にじみの最小サイズ[m]
 const GLOW_HALO_MAX_M      = 14.0;  // にじみの最大サイズ[m]
 const GLOW_HALO_FADE_NEAR  = 25.0;  // これより近いと見えない[m]（本物の面光源に任せる）
 const GLOW_HALO_FADE_FAR   = 90.0;  // これより遠いと完全に見える[m]
 const GLOW_HALO_STRENGTH   = 0.55;
+const GLOW_HALO_DRY_NEAR   = 300.0; // 霧・雨が無いとき、これより近いにじみは出さない[m]
+const GLOW_HALO_DRY_FAR    = 700.0; // 霧・雨が無いとき、これより遠いと遠景用の点として見える[m]
 
 function _glowBuildHalos(modelRoot, panels) {
     if (!panels.length) return;
     const n = panels.length;
     const pos = new Float32Array(n * 3), col = new Float32Array(n * 3), size = new Float32Array(n);
+    const nrm = new Float32Array(n * 3);   // 灯りの面の向き（カメラの方を向いているか見るため）
     const dir = new THREE.Vector3();
     const metersPerUnit = new THREE.Vector3().setFromMatrixScale(modelRoot.matrixWorld).x || 1;
     panels.forEach((p, i) => {
@@ -342,6 +353,7 @@ function _glowBuildHalos(modelRoot, panels) {
         pos[i * 3]     = node.position.x + dir.x * (0.3 / metersPerUnit);
         pos[i * 3 + 1] = node.position.y + dir.y * (0.3 / metersPerUnit);
         pos[i * 3 + 2] = node.position.z + dir.z * (0.3 / metersPerUnit);
+        nrm[i * 3] = dir.x; nrm[i * 3 + 1] = dir.y; nrm[i * 3 + 2] = dir.z;
         col[i * 3] = p.color.r; col[i * 3 + 1] = p.color.g; col[i * 3 + 2] = p.color.b;
         const sizeM = Math.max(node.scale.x, node.scale.z) * metersPerUnit * GLOW_HALO_SIZE_MUL;
         size[i] = THREE.MathUtils.clamp(sizeM, GLOW_HALO_MIN_M, GLOW_HALO_MAX_M);   // m
@@ -350,6 +362,7 @@ function _glowBuildHalos(modelRoot, panels) {
     geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geom.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
     geom.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
+    geom.setAttribute('aNormal', new THREE.BufferAttribute(nrm, 3));
     const mat = new THREE.ShaderMaterial({
         uniforms: {
             uStrength:   { value: 0 },
@@ -359,33 +372,22 @@ function _glowBuildHalos(modelRoot, panels) {
             uSizeMul:    { value: 1 },
             uMinPx:      { value: 6 },
             uFogDensity: { value: 0 },
+            uWet:        { value: 0 },    // 霧・雨の度合い（0〜1）
+            uDryNear:    { value: GLOW_HALO_DRY_NEAR },
+            uDryFar:     { value: GLOW_HALO_DRY_FAR },
         },
         vertexShader: `
             attribute vec3 aColor;
             attribute float aSize;
+            attribute vec3 aNormal;
             uniform float uStrength, uPixelScale, uNear, uFar, uSizeMul, uMinPx, uFogDensity;
+            uniform float uWet, uDryNear, uDryFar;
             varying vec3 vColor;
             varying float vAlpha;
-            // 対数深度バッファ対応（船体・水面と同じ深度で比べるため）。
-            // 以前はこれが無く、にじみの深度が常に「いちばん奥」になっていたので、
-            // 空の前でしか見えず、海面や船体と重なる所で消えていた。
-            #ifdef USE_LOGDEPTHBUF
-                uniform float logDepthBufFC;
-            #endif
             void main() {
                 vec4 mv = modelViewMatrix * vec4(position, 1.0);
                 float dist = max(0.1, -mv.z);
-                // にじみは灯りと目の間の空気が光っているものなので、灯りの手前
-                // （にじみの半径ぶん）に置いて深度を比べる。こうしないと、灯りの
-                // すぐ手前の海面にスプライトの下半分が隠れて、水平に切れて見える。
-                float halfSize = aSize * uSizeMul * 0.5;
-                float pulled = max(0.1, dist - min(halfSize, dist * 0.5));
-                vec4 mvNear = vec4(mv.xyz * (pulled / dist), 1.0);
-                gl_Position = projectionMatrix * mvNear;
-                #ifdef USE_LOGDEPTHBUF
-                    gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
-                    gl_Position.z *= gl_Position.w;
-                #endif
+                gl_Position = projectionMatrix * mv;
                 // 遠くでも「灯りがともっている」と分かるよう、見た目の大きさに下限を設ける
                 // （実寸どおりだと400m先の灯具は3ピクセルほどで、ほとんど見えない）
                 float px = aSize * uSizeMul * uPixelScale / dist;
@@ -397,6 +399,13 @@ function _glowBuildHalos(modelRoot, panels) {
                 // 式を少し弱めて使う：にじみ自体が霧の光なので、船体ほどは消えない）
                 float fd = dist * uFogDensity * 0.7;
                 vAlpha *= exp(-fd * fd);
+                // 霧・雨が無いときは、遠景用の点としてだけ出す
+                vAlpha *= mix(smoothstep(uDryNear, uDryFar, dist), 1.0, uWet);
+                // 灯りの面がカメラの方を向いていないもの（船の向こう側の窓など）は出さない
+                vec4 wp = modelMatrix * vec4(position, 1.0);
+                vec3 wn = normalize(mat3(modelMatrix) * aNormal);
+                float facing = dot(wn, normalize(cameraPosition - wp.xyz));
+                vAlpha *= smoothstep(-0.05, 0.3, facing);
             }`,
         fragmentShader: `
             varying vec3 vColor;
@@ -412,6 +421,7 @@ function _glowBuildHalos(modelRoot, panels) {
             }`,
         transparent: true,
         depthWrite: false,
+        depthTest: false,   // 奥行きの判定はしない（上の説明。面の向きで隠す）
         blending: THREE.AdditiveBlending,
     });
     glowHaloPoints = new THREE.Points(geom, mat);
@@ -438,6 +448,9 @@ function updateGlowHalos() {
     u.uStrength.value = glow * GLOW_HALO_STRENGTH * (1 + wet * 0.2);
     u.uSizeMul.value = 1 + wet * 0.9;
     u.uFogDensity.value = (typeof scene !== 'undefined' && scene && scene.fog && scene.fog.density) ? scene.fog.density : 0;
+    u.uWet.value = THREE.MathUtils.smoothstep(wet, 0.05, 0.6);
+    // 水中からは見えない（水面の上の空気が光っているものなので）
+    if ((window.underwaterAmount || 0) > 0.5) u.uStrength.value = 0;
     // 霧の中では近くでもにじみが見える
     u.uNear.value = GLOW_HALO_FADE_NEAR * (1 - Math.min(0.85, wet * 0.6));
     u.uFar.value  = GLOW_HALO_FADE_FAR  * (1 - Math.min(0.6, wet * 0.4));

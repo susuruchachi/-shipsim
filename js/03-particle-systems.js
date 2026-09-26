@@ -1,3 +1,11 @@
+// 煙・しぶき・スクリューの泡に掛ける霧（船体と同じ FogExp2）。
+// 以前はこれらの粒子だけ霧を受けず、濃い霧の中でも船体は霞むのに、
+// しぶきや泡・排煙だけがくっきり見えていた。3つの粒子で同じ値を共有し、
+// 描画の直前に scene.fog から写す（17-main-loop.js）。
+const particleFogUniforms = {
+    uFogColor:   { value: new THREE.Color(0, 0, 0) },
+    uFogDensity: { value: 0 },
+};
 // ----------------------------------------------------
 // GLOBAL SMOKE SYSTEM VARIABLES (WORLD SPACE)
 // ----------------------------------------------------
@@ -38,7 +46,9 @@ function createGlobalSmokeSystem() {
             color: { value: new THREE.Color(0xaaaaaa) },
             dens: { value: 0.6 },
             sizeScale: { value: 1.0 },
-            lightFactor: { value: 1.0 }
+            lightFactor: { value: 1.0 },
+            uFogColor: particleFogUniforms.uFogColor,
+            uFogDensity: particleFogUniforms.uFogDensity,
         },
         transparent: true,
         depthWrite: false,
@@ -56,10 +66,12 @@ function createGlobalSmokeSystem() {
             #ifdef USE_LOGDEPTHBUF
                 uniform float logDepthBufFC;
             #endif
+            varying float vFogDist;
             bool isPerspectiveMatrix(mat4 m) { return m[2][3] == -1.0; }
             void main() {
                 vAge = age; vRand = rand;
                 vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+                vFogDist = -mvPos.z;
                 // Smaller, more gradual growth avoids the "blobby" look on small/slow ships
                 float baseSize = (7.0 + 42.0 * age + rand * 16.0) * sizeScale;
                 gl_PointSize = baseSize * (300.0 / -mvPos.z);
@@ -78,6 +90,9 @@ function createGlobalSmokeSystem() {
             uniform vec3 color;
             uniform float dens;
             uniform float lightFactor;
+            uniform vec3 uFogColor;
+            uniform float uFogDensity;
+            varying float vFogDist;
             varying float vAge;
             varying float vRand;
             // v153-fix3: EXT_frag_depthに依存しない経路のみを使う。
@@ -95,6 +110,10 @@ function createGlobalSmokeSystem() {
                 gl_FragColor = vec4(finalColor, tex.a * alpha);
                 #include <tonemapping_fragment>
                 #include <encodings_fragment>
+                {
+                    float fogD = uFogDensity * vFogDist;
+                    gl_FragColor.rgb = mix(gl_FragColor.rgb, uFogColor, clamp(1.0 - exp(-fogD * fogD), 0.0, 1.0));
+                }
             }
         `
     });
@@ -153,7 +172,8 @@ function createBubbleSystem() {
 
     bubbleMat = new THREE.ShaderMaterial({
         // v153-fix2: WebGL2ではEXT_frag_depth拡張が存在しないため出し分ける（水面と同じ対策）。
-        uniforms: { sizeScale: { value: 1.0 }, lightFactor: { value: 1.0 }, uViewH: { value: 800 } },
+        uniforms: { sizeScale: { value: 1.0 }, lightFactor: { value: 1.0 }, uViewH: { value: 800 },
+                    uFogColor: particleFogUniforms.uFogColor, uFogDensity: particleFogUniforms.uFogDensity },
         transparent: true,
         depthWrite: false,
         depthTest: true,
@@ -172,6 +192,7 @@ function createBubbleSystem() {
             #ifdef USE_LOGDEPTHBUF
                 uniform float logDepthBufFC;
             #endif
+            varying float vFogDist;
             bool isPerspectiveMatrix(mat4 m) { return m[2][3] == -1.0; }
             void main() {
                 vAge = age; vKind = kind; vRnd = rnd;
@@ -182,6 +203,7 @@ function createBubbleSystem() {
                     return;
                 }
                 vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+                vFogDist = -mvPos.z;
                 // ワールドでの大きさ → 画面上の画素数（遠近に正しく合わせる）
                 float px = psize * projectionMatrix[1][1] * 0.5 * uViewH / max(0.1, -mvPos.z);
                 gl_PointSize = clamp(px, 1.5, 140.0);
@@ -196,6 +218,9 @@ function createBubbleSystem() {
         `,
         fragmentShader: `
             uniform float lightFactor;
+            uniform vec3 uFogColor;
+            uniform float uFogDensity;
+            varying float vFogDist;
             varying float vAge;
             varying float vKind;
             varying float vRnd;
@@ -254,6 +279,10 @@ function createBubbleSystem() {
                 gl_FragColor = vec4(col * lightFactor, a);
                 #include <tonemapping_fragment>
                 #include <encodings_fragment>
+                {
+                    float fogD = uFogDensity * vFogDist;
+                    gl_FragColor.rgb = mix(gl_FragColor.rgb, uFogColor, clamp(1.0 - exp(-fogD * fogD), 0.0, 1.0));
+                }
             }
         `
     });
@@ -370,6 +399,8 @@ function createWakeParticleSystem() {
             // animateWakeParticles()内で毎フレーム camera.aspect から更新される
             // （画面回転・リサイズにも自動追従）。
             uAspect:     { value: (window.innerWidth && window.innerHeight) ? (window.innerWidth / window.innerHeight) : 1.0 },
+            uFogColor:   particleFogUniforms.uFogColor,
+            uFogDensity: particleFogUniforms.uFogDensity,
         },
         transparent: true,
         depthWrite: false,
@@ -389,6 +420,7 @@ function createWakeParticleSystem() {
             #ifdef USE_LOGDEPTHBUF
                 uniform float logDepthBufFC;
             #endif
+            varying float vFogDist;
             bool isPerspectiveMatrix(mat4 m) { return m[2][3] == -1.0; }
             void main() {
                 vAge = age; vType = ptype;
@@ -398,6 +430,7 @@ function createWakeParticleSystem() {
                     return;
                 }
                 vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+                vFogDist = -mvPos.z;
 
                 float baseSize;
                 vAngle = 0.0;
@@ -484,6 +517,9 @@ function createWakeParticleSystem() {
             uniform sampler2D map;
             uniform sampler2D mapStreak;
             uniform float lightFactor;
+            uniform vec3 uFogColor;
+            uniform float uFogDensity;
+            varying float vFogDist;
             varying float vAge;
             varying float vType;
             varying float vAngle;
@@ -518,6 +554,10 @@ function createWakeParticleSystem() {
                 gl_FragColor = vec4(col, tex.a * alpha);
                 #include <tonemapping_fragment>
                 #include <encodings_fragment>
+                {
+                    float fogD = uFogDensity * vFogDist;
+                    gl_FragColor.rgb = mix(gl_FragColor.rgb, uFogColor, clamp(1.0 - exp(-fogD * fogD), 0.0, 1.0));
+                }
             }
         `
     });
