@@ -656,6 +656,7 @@ function buildPropMeshes() {
         else if (type === 'azipod') mesh = makeAzipod(x, y, z, size);
         else mesh = makeScrew(x, y, z, size);
         mesh.userData.dir = dir;
+        mesh.userData.size = size;   // 泡の出る半径を見た目に合わせるため（32-engine-propeller.js）
         mesh.userData.propIndex = propIndex;
         mesh.userData.isMirror = !!isMirror;
         mesh.traverse((c) => { if (c.isMesh) c.userData.noBloom = true; });

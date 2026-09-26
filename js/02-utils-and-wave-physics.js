@@ -249,8 +249,10 @@ function getWakeHeight(x, z, t) {
         const dxp = x - p.x, dzp = z - p.z;
         if (dxp * dxp + dzp * dzp > (maxDist + L) * (maxDist + L)) continue;
 
-        const sinH = Math.sin(p.headingRad);
-        const cosH = Math.cos(p.headingRad);
+        // 履歴1件ごとの向きの sin/cos は変わらないので、1回だけ計算して持っておく
+        if (p._sinH === undefined) { p._sinH = Math.sin(p.headingRad); p._cosH = Math.cos(p.headingRad); }
+        const sinH = p._sinH;
+        const cosH = p._cosH;
 
         // v103/v104: 船体内側マスク（実喫水線輪郭ベース）
         const lateralDist = Math.abs(dxp * cosH - dzp * sinH);
@@ -269,22 +271,22 @@ function getWakeHeight(x, z, t) {
             hullMask = THREE.MathUtils.lerp(1.0, lateralMask, withinHullLen);
         }
 
-        const sources = [
-            { x: p.x + sinH * L, z: p.z + cosH * L, isBow: true },
-            { x: p.x - sinH * L, z: p.z - cosH * L, isBow: false }
-        ];
-
+        // 波源は船首(s=0)と船尾(s=1)。以前は毎回 {x,z,isBow} のオブジェクトを
+        // 2つ作っていたが、泡の粒子ごと・履歴ごとに呼ばれるので大量のごみになり、
+        // スマホではガベージコレクションで周期的にカクつく原因になっていた。
         for (let s = 0; s < 2; s++) {
-            const src = sources[s];
-            const dx = x - src.x;
-            const dz = z - src.z;
+            const srcIsBow = (s === 0);
+            const srcX = srcIsBow ? p.x + sinH * L : p.x - sinH * L;
+            const srcZ = srcIsBow ? p.z + cosH * L : p.z - cosH * L;
+            const dx = x - srcX;
+            const dz = z - srcZ;
             const d2 = dx * dx + dz * dz;
 
             if (d2 > maxDist2) continue;
             const d = Math.sqrt(d2);
             if (d < 0.1) continue;
 
-            const fullness = src.isBow ? physics.bowFullness : physics.sternFullness;
+            const fullness = srcIsBow ? physics.bowFullness : physics.sternFullness;
             const waveSpeed = (3.0 + absSpeed * 0.2) * scaleRatio;
             const waveRadius = waveSpeed * dt;
             const distanceToWaveFront = d - waveRadius;
@@ -293,7 +295,7 @@ function getWakeHeight(x, z, t) {
 
             if (absDistToWaveFront < waveLength * 1.5) {
                 // v122: 「今の倍くらい」の要望でv121の値からさらに2倍(0.033→0.066, 0.024→0.048)
-                const ampFactor = src.isBow ? 0.066 : 0.048;
+                const ampFactor = srcIsBow ? 0.066 : 0.048;
                 const amp = absSpeed * ampFactor * fullness * scaleRatio * (1.0 - d / (90.0 * scaleRatio)) * (1.0 - dt / 15.0);
                 if (amp <= 0) continue;
 
@@ -318,7 +320,7 @@ function getWakeHeight(x, z, t) {
                     // 角度方向の絞り込み(V字稜線)自体は使うが、先端ブースト(bowTipBoost)は
                     // 今回の件と無関係なので復活させていない。
                     let h;
-                    if (src.isBow) {
+                    if (srcIsBow) {
                         const ridge = Math.exp(-absAngleDist * absAngleDist * (60.0 / fullness)) * sideGate;
                         const innerDip = smoothstepJS(0.0, 0.45, angleDist) * (1.0 - smoothstepJS(0.45, 1.1, angleDist)) * sideGate;
                         const bowProfile = ridge - innerDip * 0.35;
@@ -486,8 +488,26 @@ function getWaveCrestAndHeight(x, z, t) {
 }
 
 
+// 外洋波の高さだけ（getWaveCrestAndHeight から波頭の計算とオブジェクトの生成を
+// 省いた軽い版）。浮力・粒子など、高さしか要らない所から毎フレーム大量に呼ばれる。
+function getOceanHeight(x, z, t) {
+    const S = oceanWaveState;
+    if (S.t === null) updateOceanWaveState(t, 0, 0);
+    const dx = x - S.ax, dz = z - S.az, dtp = t - S.t;
+    const K = S.K, P = S.phi, W = OCEAN_WAVE_OMEGA;
+    const s1 = Math.sin(K[0] * dx + K[1] * dz + P[0] + W[0] * dtp);
+    const s2 = Math.sin(K[2] * dx + K[3] * dz + P[1] + W[1] * dtp);
+    const s3 = Math.sin(K[4] * dx + K[5] * dz + P[2] + W[2] * dtp);
+    const s4 = Math.sin(K[6] * dx + K[7] * dz + P[3] + W[3] * dtp);
+    const m1 = s1 > 0 ? s1 : 0, m2 = s2 > 0 ? s2 : 0;
+    const swellMul = (typeof physics.swellStrength === 'number') ? physics.swellStrength : 1.0;
+    const chopMul  = (typeof physics.chopStrength  === 'number') ? physics.chopStrength  : 1.0;
+    return physics.waveRoughness * (((m1 * m1) * 2.0 - 0.6) * 1.3 + ((m2 * m2) * 2.0 - 0.7) * 0.7
+        + s3 * 0.55 * swellMul + s4 * 0.5 * 0.22 * chopMul);
+}
+
 function getWaveHeight(x, z, t, excludeWake = false) {
-    const oceanWave = getWaveCrestAndHeight(x, z, t).height;
+    const oceanWave = getOceanHeight(x, z, t);
     const wakeWave = excludeWake ? 0 : getWakeHeight(x, z, t).y;
     return oceanWave + wakeWave;
 }

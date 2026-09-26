@@ -110,50 +110,63 @@ function createGlobalSmokeSystem() {
 // ====================================================
 //  SCREW BUBBLE SYSTEM
 // ====================================================
+// スクリューが水をかくと、羽根の先端（翼端渦）や羽根の背面で水が泡立ち、
+// 泡の雲がプロペラの後流（噴流）に乗って渦を巻きながら後ろへ流され、
+// 浮き上がって水面で白く湧き上がる（プロペラウォッシュの「ボイル」）。
+//   ・泡の出る位置と半径は、実際の羽根の形から求める（32-engine-propeller.js）
+//   ・泡の量と噴流の強さは、船の速度ではなく機関の回転数と「負荷」
+//     （加速中・逆転中ほど多い）で決める。後進では泡は前へ噴き出す
+//   ・1粒は「細かい泡の雲」を表す。水中の泡の雲(kind 0)が水面に着くと、
+//     水面で広がって消える湧き上がり(kind 1)に変わる
 let bubbleGeo, bubbleMat, bubblePoints;
-const MAX_BUBBLES = 800;
+const MAX_BUBBLES = 1600;
+// 画質ごとの同時に出せる泡の数
+const BUBBLE_CAP = { high: 1600, medium: 1100, low: 700, verylow: 420, ultralow: 260 };
 let bubbleIdx = 0;
-let bubbleData = [];
 let bubbleEmitAccum = 0;
+let bubbleFrame = 0;
+// 1粒ごとの状態（ゴミを出さないよう型付き配列で持つ）
+const bubbleVel  = new Float32Array(MAX_BUBBLES * 3);
+const bubbleLife = new Float32Array(MAX_BUBBLES);   // 寿命[秒]
+const bubbleSize0 = new Float32Array(MAX_BUBBLES);  // 出たときの大きさ（ワールド単位）
+const bubbleSurf = new Float32Array(MAX_BUBBLES);   // 真上の水面の高さ（数フレームごとに更新）
+const bubbleRise = new Float32Array(MAX_BUBBLES);   // 浮き上がる速さ
 
 function createBubbleSystem() {
-    function getBubbleTex() {
-        const c = document.createElement('canvas'); c.width = 64; c.height = 64;
-        const ctx = c.getContext('2d');
-        const g = ctx.createRadialGradient(32,32,2, 32,32,32);
-        g.addColorStop(0,   'rgba(255,255,255,1)');
-        g.addColorStop(0.4, 'rgba(210,240,255,0.8)');
-        g.addColorStop(0.8, 'rgba(180,220,255,0.3)');
-        g.addColorStop(1,   'rgba(180,220,255,0)');
-        ctx.fillStyle = g; ctx.fillRect(0,0,64,64);
-        return new THREE.CanvasTexture(c);
-    }
-
     bubbleGeo = new THREE.BufferGeometry();
     const posArr = new Float32Array(MAX_BUBBLES * 3);
     const ageArr = new Float32Array(MAX_BUBBLES);
-    // 全パーティクルを最初から画面外（y=-9999）に退避
+    const kindArr = new Float32Array(MAX_BUBBLES);
+    const sizeArr = new Float32Array(MAX_BUBBLES);
+    const rndArr = new Float32Array(MAX_BUBBLES);
     for (let i = 0; i < MAX_BUBBLES; i++) {
-        ageArr[i] = 999;
-        posArr[i*3]   = 0;
-        posArr[i*3+1] = -9999;
-        posArr[i*3+2] = 0;
-        bubbleData.push({ vx: 0, vy: 0, vz: 0, rand: Math.random() });
+        ageArr[i] = 999;          // 不活性
+        posArr[i * 3 + 1] = -9999;
+        rndArr[i] = Math.random();
     }
     bubbleGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
     bubbleGeo.setAttribute('age',      new THREE.BufferAttribute(ageArr, 1));
+    bubbleGeo.setAttribute('kind',     new THREE.BufferAttribute(kindArr, 1));
+    bubbleGeo.setAttribute('psize',    new THREE.BufferAttribute(sizeArr, 1));
+    bubbleGeo.setAttribute('rnd',      new THREE.BufferAttribute(rndArr, 1));
+    [ 'position', 'age', 'kind', 'psize' ].forEach(n => bubbleGeo.attributes[n].setUsage(THREE.DynamicDrawUsage));
 
     bubbleMat = new THREE.ShaderMaterial({
         // v153-fix2: WebGL2ではEXT_frag_depth拡張が存在しないため出し分ける（水面と同じ対策）。
-        uniforms: { map: { value: getBubbleTex() }, sizeScale: { value: 1.0 }, lightFactor: { value: 1.0 } },
+        uniforms: { sizeScale: { value: 1.0 }, lightFactor: { value: 1.0 }, uViewH: { value: 800 } },
         transparent: true,
         depthWrite: false,
         depthTest: true,
         blending: THREE.NormalBlending,
         vertexShader: `
             attribute float age;
-            uniform float sizeScale;
+            attribute float kind;
+            attribute float psize;
+            attribute float rnd;
+            uniform float uViewH;
             varying float vAge;
+            varying float vKind;
+            varying float vRnd;
             // 対数深度バッファ対応（waterMatと同じ理由）
             // v153-fix3: EXT_frag_depthに依存しない経路のみを使う。
             #ifdef USE_LOGDEPTHBUF
@@ -161,7 +174,7 @@ function createBubbleSystem() {
             #endif
             bool isPerspectiveMatrix(mat4 m) { return m[2][3] == -1.0; }
             void main() {
-                vAge = age;
+                vAge = age; vKind = kind; vRnd = rnd;
                 if (age > 1.0) {
                     // 不活性パーティクルはクリップ空間外に追い出す
                     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
@@ -169,11 +182,10 @@ function createBubbleSystem() {
                     return;
                 }
                 vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
-                // sizeScale: 船サイズに比例、ただし最小でも見えるサイズを確保
-                float basePx = (8.0 + 30.0 * age) * max(0.4, sizeScale);
-                gl_PointSize = basePx * (400.0 / -mvPos.z);
+                // ワールドでの大きさ → 画面上の画素数（遠近に正しく合わせる）
+                float px = psize * projectionMatrix[1][1] * 0.5 * uViewH / max(0.1, -mvPos.z);
+                gl_PointSize = clamp(px, 1.5, 140.0);
                 gl_Position = projectionMatrix * mvPos;
-                // v153-fix3: EXT_frag_depthに依存しない経路のみを使う。
                 #ifdef USE_LOGDEPTHBUF
                     if (isPerspectiveMatrix(projectionMatrix)) {
                         gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
@@ -183,21 +195,63 @@ function createBubbleSystem() {
             }
         `,
         fragmentShader: `
-            uniform sampler2D map;
             uniform float lightFactor;
             varying float vAge;
-            // v153-fix3: EXT_frag_depthに依存しない経路のみを使う。
+            varying float vKind;
+            varying float vRnd;
             #ifdef USE_LOGDEPTHBUF
                 uniform float logDepthBufFC;
             #endif
+            float h1(float n) { return fract(sin(n) * 43758.5453); }
+            float h2(vec2 q) { return fract(sin(dot(q, vec2(127.1, 311.7))) * 43758.5453); }
+            // なめらかなまだら模様（格子状に見えないよう、ずらした2段を重ねる）
+            float vnoise(vec2 q) {
+                vec2 i = floor(q), f = fract(q);
+                f = f * f * (3.0 - 2.0 * f);
+                return mix(mix(h2(i), h2(i + vec2(1.0, 0.0)), f.x),
+                           mix(h2(i + vec2(0.0, 1.0)), h2(i + vec2(1.0, 1.0)), f.x), f.y);
+            }
             void main() {
-                // v153-fix3: 対数深度は頂点シェーダー側でgl_Position.zに直接
-                // エンコード済み。フラグメント側で追加の書き込みは不要。
                 if (vAge > 1.0) discard;
-                float alpha = smoothstep(0.0, 0.12, vAge) * (1.0 - smoothstep(0.45, 1.0, vAge)) * 0.85;
-                vec4 tex = texture2D(map, gl_PointCoord);
-                vec3 col = vec3(0.88, 0.96, 1.0) * lightFactor;
-                gl_FragColor = vec4(col, tex.a * alpha);
+                vec2 p = gl_PointCoord * 2.0 - 1.0;
+                float d2 = dot(p, p);
+                if (d2 > 1.0) discard;
+                vec3 col;
+                float a;
+                if (vKind < 0.5) {
+                    // 水中の泡の雲：小さな泡の塊がいくつか集まった形（粒ごとに違う形）
+                    float s = 0.0;
+                    for (int k = 0; k < 4; k++) {
+                        float fk = float(k);
+                        vec2 c = (vec2(h1(vRnd * 91.7 + fk * 13.1), h1(vRnd * 37.3 + fk * 7.9)) - 0.5) * 0.9;
+                        float r = 0.16 + 0.16 * h1(vRnd * 17.1 + fk * 3.3);
+                        vec2 q = p - c;
+                        s += exp(-dot(q, q) / (r * r));
+                    }
+                    float halo = exp(-d2 * 2.5) * 0.35;
+                    float cloud = clamp(s * 0.55 + halo, 0.0, 1.0);
+                    // 出てすぐは濃く、流されるうちに細かく散って薄くなる
+                    a = cloud * smoothstep(0.0, 0.06, vAge) * (1.0 - smoothstep(0.35, 1.0, vAge)) * 0.55;
+                    col = mix(vec3(0.70, 0.88, 0.92), vec3(0.97, 1.0, 1.0), clamp(s * 0.6, 0.0, 1.0));
+                } else {
+                    // 水面の湧き上がり：中央が盛り上がって白く、広がるにつれて
+                    // 縁の方に泡が残り、青緑色（泡の混じった水）へ薄れていく
+                    float ang = atan(p.y, p.x);
+                    float wob = 0.12 * sin(ang * 3.0 + vRnd * 30.0) + 0.08 * sin(ang * 7.0 + vRnd * 57.0);
+                    float d = sqrt(d2) * (1.0 + wob);
+                    float body = 1.0 - smoothstep(0.55, 1.0, d);
+                    float rim = smoothstep(0.35, 0.75, d) * (1.0 - smoothstep(0.75, 1.0, d));
+                    float centre = 1.0 - smoothstep(0.0, 0.6, d);
+                    float foam = clamp(centre * (1.0 - vAge * 1.2) + rim * (0.5 + 0.5 * vAge), 0.0, 1.0);
+                    // 泡の細かいまだら
+                    vec2 nq = p * 3.2 + vec2(vRnd * 17.0, vRnd * 29.0);
+                    float grain = 0.55 + 0.45 * (0.65 * vnoise(nq) + 0.35 * vnoise(nq * 2.3 + 5.1));
+                    a = body * (0.4 + 0.6 * foam) * grain
+                        * smoothstep(0.0, 0.08, vAge) * pow(1.0 - vAge, 1.3) * 0.9;
+                    col = mix(vec3(0.42, 0.72, 0.70), vec3(0.95, 0.99, 1.0), foam);
+                }
+                if (a < 0.004) discard;
+                gl_FragColor = vec4(col * lightFactor, a);
                 #include <tonemapping_fragment>
                 #include <encodings_fragment>
             }
@@ -573,7 +627,7 @@ function animateWakeParticles(t, dt) {
             const px = posAttr.array[i*3], pz = posAttr.array[i*3+2];
             const distToShip2 = (px - shipCX) * (px - shipCX) + (pz - shipCZ) * (pz - shipCZ);
             const baseSurface = (typeof getWaveCrestAndHeight === 'function')
-                ? getWaveCrestAndHeight(px, pz, t).height : waterSurface;
+                ? getOceanHeight(px, pz, t) : waterSurface;
             const inWakeRange = distToShip2 <= wakeReachDist2 && typeof getWaveHeight === 'function';
             const interval = Math.max(1, perf.foamUpdateInterval || 1);
             const dueForUpdate = ((i + foamFrameCounter) % interval) === 0;
@@ -627,7 +681,7 @@ function animateWakeParticles(t, dt) {
 
         if (elapsedSinceSpawn >= SPLASH_COLLISION_GRACE) {
             const localSurface = (typeof getWaveCrestAndHeight === 'function')
-                ? getWaveCrestAndHeight(px, pz, t).height : waterSurface;
+                ? getOceanHeight(px, pz, t) : waterSurface;
             if (py <= localSurface) {
                 // 海面に着水した瞬間に消滅（水しぶきが海へ還った表現）
                 ageAttr.array[i] = 999;
@@ -719,7 +773,7 @@ function animateWakeParticles(t, dt) {
         posAttr.array[ii*3]   = emitX;
         // その地点の実際の波面高さ（海面と船体の境目）
         const emitSurface = (typeof getWaveCrestAndHeight === 'function')
-            ? getWaveCrestAndHeight(emitX, emitZ, t).height
+            ? getOceanHeight(emitX, emitZ, t)
             : waterSurface;
         posAttr.array[ii*3+1] = emitSurface + (isSpray ? sizeScale * 0.1 : 0);
         posAttr.array[ii*3+2] = emitZ;
@@ -764,201 +818,164 @@ function animateWakeParticles(t, dt) {
     velAttr.needsUpdate = true;
 }
 
-// 組み込みpropulsors用の疑似回転角（GLBパーツのpart.spinに相当するものが無いため自前で積算）
-let builtinPropSpin = 0;
+const _bubE1 = new THREE.Vector3(), _bubE2 = new THREE.Vector3(), _bubUp = new THREE.Vector3(0, 1, 0);
+
+// 1つの泡の雲を出す
+function _emitBubble(src, sgn, jetV, swirlV, shipVx, shipVz, sizeScale, t) {
+    const posA = bubbleGeo.attributes.position.array;
+    // 回転軸に垂直な基底 (e1, e2)
+    _bubE1.crossVectors(_bubUp, src.axisDir);
+    if (_bubE1.lengthSq() < 1e-6) _bubE1.set(1, 0, 0).cross(src.axisDir);
+    _bubE1.normalize();
+    _bubE2.crossVectors(src.axisDir, _bubE1).normalize();
+
+    // 羽根の先端寄り（翼端渦）から多く出す。羽根4枚のどれかの位置＋少しのばらつき
+    const blades = 4;
+    const ang = src.angle * src.handed + Math.floor(Math.random() * blades) / blades * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
+    const rr = src.radius * (src.paddle ? 1.0 : (0.55 + 0.45 * Math.sqrt(Math.random())));
+    const ca = Math.cos(ang), sa = Math.sin(ang);
+    const x = src.center.x + _bubE1.x * ca * rr + _bubE2.x * sa * rr;
+    const y = src.center.y + _bubE1.y * ca * rr + _bubE2.y * sa * rr;
+    const z = src.center.z + _bubE1.z * ca * rr + _bubE2.z * sa * rr;
+    // 水面より上の羽根からは出さない（外輪は水に入っている下側だけ）
+    const surf = getOceanHeight(x, z, t);
+    if (y > surf - 0.02 * src.radius) return;
+
+    const i = bubbleIdx;
+    posA[i * 3] = x; posA[i * 3 + 1] = y; posA[i * 3 + 2] = z;
+    bubbleGeo.attributes.age.array[i] = 0;
+    bubbleGeo.attributes.kind.array[i] = 0;
+    // 噴流（推力と逆向き）＋回転による渦（羽根の接線方向）。船の近くの水は船に
+    // 少し引きずられている（伴流）ので、船の速度の一部も持つ
+    const sw = swirlV * src.dir * src.handed;
+    const tx = (-sa * _bubE1.x + ca * _bubE2.x) * sw;
+    const ty = (-sa * _bubE1.y + ca * _bubE2.y) * sw;
+    const tz = (-sa * _bubE1.z + ca * _bubE2.z) * sw;
+    const jv = jetV * (0.7 + 0.6 * Math.random());
+    bubbleVel[i * 3]     = shipVx * 0.4 - src.axisDir.x * sgn * jv + tx;
+    bubbleVel[i * 3 + 1] =              - src.axisDir.y * sgn * jv + ty * 0.6;
+    bubbleVel[i * 3 + 2] = shipVz * 0.4 - src.axisDir.z * sgn * jv + tz;
+    bubbleLife[i] = 3.0 + 2.0 * Math.random();
+    bubbleSize0[i] = src.radius * (0.35 + 0.35 * Math.random());
+    bubbleSurf[i] = surf;
+    bubbleRise[i] = sizeScale * (1.6 + 1.6 * Math.random());
+    bubbleGeo.attributes.psize.array[i] = bubbleSize0[i];
+    bubbleIdx++;
+    if (bubbleIdx >= (BUBBLE_CAP[perf.quality] || 1100)) bubbleIdx = 0;
+}
 
 function animateBubbles(t, dt) {
     if (!bubbleGeo || !shipGroup) return;
-    const posAttr = bubbleGeo.attributes.position;
-    const ageAttr = bubbleGeo.attributes.age;
+    bubbleFrame++;
+    const posA  = bubbleGeo.attributes.position.array;
+    const ageA  = bubbleGeo.attributes.age.array;
+    const kindA = bubbleGeo.attributes.kind.array;
+    const sizeA = bubbleGeo.attributes.psize.array;
+    const cap = Math.min(MAX_BUBBLES, BUBBLE_CAP[perf.quality] || 1100);
+    if (bubbleIdx >= cap) bubbleIdx = 0;
 
-    const spd = Math.abs(physics.speed);
     const sizeScale = THREE.MathUtils.clamp(physics.scale / 22.0, 0.3, 6.0);
     bubbleMat.uniforms.sizeScale.value = sizeScale;
+    if (renderer) bubbleMat.uniforms.uViewH.value = renderer.domElement.height || 800;
 
-    // 水面高さ（簡易：Y=0付近が水面）
-    const waterSurface = 0.0;
-    const riseSpeed = 1.2 * sizeScale; // 水面へ浮上する速度
-    builtinPropSpin += physics.speed * 0.15 * dt; // animatePropellers内のpropMeshes回転と同じ角速度
-    // 船体回避：気泡は深いところ（スクリュー付近、船底の下）にいる間は
-    // 船体footprint判定の対象外とし、従来通りまっすぐ浮上させる
-    // （半幅モデルが船体の上下方向の形状を持たないため、深い場所で適用すると
-    // キール下の何もない開けた水中まで「船体内部」と誤判定してしまうため）。
-    // 水面に近づいた最後の一瞬だけ、船体に重ならないよう側方へ押し出す。
+    // 船体回避：水面に近づいた泡・水面の湧き上がりだけ、船体に重ならないよう
+    // 側方へ押し出す（深い所では半幅モデルが船体の上下方向の形を持たないため）
     const hullAvoidBand   = sizeScale * 1.5;
     const hullAvoidMargin = sizeScale * 0.12;
     const canAvoidHull = (typeof pushOutsideHull === 'function')
         && window.hullProfile && window.hullProfile.ready;
 
-    // Age & move existing particles
+    const dragUnder = Math.exp(-0.9 * dt);   // 水中：噴流・渦が周りの水に負けて弱まる
+    const dragSurf  = Math.exp(-0.6 * dt);   // 水面：広がりながら止まる
+    const turb = sizeScale * 1.2;            // 乱れ
+    let active = 0;
+
+    // 画質を下げた直後は上限より後ろの粒も残っているので、全部を動かす
     for (let i = 0; i < MAX_BUBBLES; i++) {
-        if (ageAttr.array[i] <= 1.0) {
-            ageAttr.array[i] += dt * (0.45 + bubbleData[i].rand * 0.3);
-            const py = posAttr.array[i*3+1];
-            // 水面より下にいる間は上向きに加速、水面に近づいたら速度を絞る
-            if (py < waterSurface - 0.3) {
-                bubbleData[i].vy += (riseSpeed - bubbleData[i].vy) * 4.0 * dt;
-            } else {
-                // 水面に到達したら横に広がりながらゆっくりフェード
-                bubbleData[i].vy *= Math.pow(0.15, dt);
-            }
-            posAttr.array[i*3]   += bubbleData[i].vx * dt;
-            // 水面を超えて浮上しないようクランプ（船に置き去りにされて水上に浮いて見えるのを防ぐ）
-            posAttr.array[i*3+1] = Math.min(py + bubbleData[i].vy * dt, waterSurface);
-            posAttr.array[i*3+2] += bubbleData[i].vz * dt;
+        if (ageA[i] > 1.0) continue;
+        active++;
+        const i3 = i * 3;
+        ageA[i] += dt / bubbleLife[i];
+        if (ageA[i] > 1.0) { ageA[i] = 999; posA[i3 + 1] = -9999; continue; }
+        const x = posA[i3], z = posA[i3 + 2];
 
-            if (canAvoidHull && posAttr.array[i*3+1] > waterSurface - hullAvoidBand) {
-                const corrected = pushOutsideHull(posAttr.array[i*3], posAttr.array[i*3+2], hullAvoidMargin);
-                if (corrected.pushed) {
-                    posAttr.array[i*3]   = corrected.x;
-                    posAttr.array[i*3+2] = corrected.z;
-                }
+        if (kindA[i] < 0.5) {
+            // ── 水中の泡の雲 ──
+            // 真上の水面の高さは、粒ごとにずらして3フレームに1回だけ求める
+            if ((i + bubbleFrame) % 3 === 0) bubbleSurf[i] = getOceanHeight(x, z, t);
+            bubbleVel[i3]     = bubbleVel[i3] * dragUnder + (Math.random() - 0.5) * turb * dt;
+            bubbleVel[i3 + 2] = bubbleVel[i3 + 2] * dragUnder + (Math.random() - 0.5) * turb * dt;
+            // 浮力：浮き上がる速さへ近づく
+            bubbleVel[i3 + 1] += (bubbleRise[i] - bubbleVel[i3 + 1]) * 1.8 * dt;
+            posA[i3]     += bubbleVel[i3] * dt;
+            posA[i3 + 1] += bubbleVel[i3 + 1] * dt;
+            posA[i3 + 2] += bubbleVel[i3 + 2] * dt;
+            // 散りながら広がる
+            sizeA[i] = bubbleSize0[i] * (1 + 1.6 * ageA[i]);
+            if (posA[i3 + 1] >= bubbleSurf[i] - 0.1 * sizeScale) {
+                // 水面に着いた：湧き上がりに変わる（泡が多く残っているほど大きく長く）
+                const remain = 1 - ageA[i];
+                kindA[i] = 1;
+                ageA[i] = 0;
+                bubbleLife[i] = (3.0 + 2.0 * Math.random()) * (0.6 + 0.4 * remain);
+                bubbleSize0[i] = sizeA[i] * (1.1 + 0.6 * remain);
+                bubbleVel[i3] *= 0.5; bubbleVel[i3 + 2] *= 0.5; bubbleVel[i3 + 1] = 0;
             }
+        } else {
+            // ── 水面の湧き上がり：水面に浮いたまま、広がって消える ──
+            bubbleVel[i3]     *= dragSurf;
+            bubbleVel[i3 + 2] *= dragSurf;
+            posA[i3]     += bubbleVel[i3] * dt;
+            posA[i3 + 2] += bubbleVel[i3 + 2] * dt;
+            posA[i3 + 1] = getOceanHeight(posA[i3], posA[i3 + 2], t) + 0.12 * sizeScale;
+            sizeA[i] = bubbleSize0[i] * (1 + 1.8 * Math.sqrt(ageA[i]));
+        }
+
+        if (canAvoidHull && posA[i3 + 1] > bubbleSurf[i] - hullAvoidBand && (i + bubbleFrame) % 2 === 0) {
+            const corrected = pushOutsideHull(posA[i3], posA[i3 + 2], hullAvoidMargin);
+            if (corrected.pushed) { posA[i3] = corrected.x; posA[i3 + 2] = corrected.z; }
         }
     }
 
-    // 放出源を集める: 組み込みpropulsors ＋ GLBスクリューパーツ
-    // center: 軸のワールド座標, axisDir: 回転軸のワールド方向(単位ベクトル), bladeRadius: 羽根半径, angle: 現在の回転角
-    const emitSources = []; // { center, axisDir, bladeRadius, angle, dir }
+    // ── 新しい泡を出す ──
+    const rpm = physics.propRpm || 0;
+    const absRpm = Math.abs(rpm);
+    const sources = (absRpm > 0.02 && typeof getPropEmitSources === 'function') ? getPropEmitSources() : null;
+    if (sources && sources.length > 0) {
+        const slip = (typeof getPropSlip === 'function') ? getPropSlip() : 0;
+        const racing = window._propRacingIntensity || 0;
+        const maxSpd = Math.max(0.1, physics.maxSpeed || 1);
+        // 泡の量：回転数と負荷（加速・逆転中は激しく泡立つ）。空転中も増える
+        const intensity = absRpm * (0.35 + 1.1 * slip) + racing * 0.6;
+        const ratePerSrc = 45 * Math.min(1.6, intensity);
+        // 泡が寿命（水中＋水面で合わせて最長8秒ほど）より先に使い回されて、
+        // 湧き上がりが途中で消えないよう、全体の出る数を抑える
+        const rate = Math.min(ratePerSrc * sources.length, cap / 8);
+        bubbleEmitAccum += rate * dt;
+        if (bubbleEmitAccum > 40) bubbleEmitAccum = 40;
 
-    if (spd > 0.2) {
-        // 組み込み推進器
-        if (propulsors && propulsors.length > 0) {
-            const sym = $('prop-symmetry') && $('prop-symmetry').checked;
-            // propMeshesの回転はローカルZ軸周り。ワールド方向はshipGroupの回転を適用して求める。
-            const localAxis = new THREE.Vector3(0, 0, 1);
-            const worldAxis = localAxis.clone().transformDirection(shipGroup.matrixWorld).normalize();
-            const bladeRadius = Math.max(0.5, physics.scale / 22.0) * 1.1; // propサイズに対する目安半径
-
-            propulsors.forEach(p => {
-                const lp = new THREE.Vector3(p.x, p.y, p.z);
-                const wp = lp.applyMatrix4(shipGroup.matrixWorld);
-                // 水面より上にあるスクリューからは泡を出さない
-                if (wp.y > 0.0) return;
-                emitSources.push({
-                    center: wp, axisDir: worldAxis,
-                    bladeRadius: bladeRadius * Math.max(0.5, p.size),
-                    angle: builtinPropSpin * (p.dir || 1),
-                    dir: p.dir || 1
-                });
-                // 対称側
-                if (sym && Math.abs(p.x) > 0.05) {
-                    const lp2 = new THREE.Vector3(-p.x, p.y, p.z);
-                    const wp2 = lp2.applyMatrix4(shipGroup.matrixWorld);
-                    if (wp2.y > 0.0) return;
-                    emitSources.push({
-                        center: wp2, axisDir: worldAxis,
-                        bladeRadius: bladeRadius * Math.max(0.5, p.size),
-                        angle: builtinPropSpin * -(p.dir || 1),
-                        dir: -(p.dir || 1)
-                    });
-                }
-            });
-        }
-
-        // GLBスクリューパーツ
-        if (glbMovableParts && glbMovableParts.length > 0) {
-            glbMovableParts.forEach(part => {
-                if (part.key !== 'screw' && part.key !== 'paddle') return;
-                if (part.disabled) return;
-                const obj = part.object;
-                if (!obj) return;
-                obj.updateMatrixWorld(true);
-                // 回転軸のワールド中心位置を取得
-                const worldPos = new THREE.Vector3();
-                obj.getWorldPosition(worldPos);
-                // 水面より上にあるスクリューからは泡を出さない
-                if (worldPos.y > 0.0) return;
-
-                const axis = part.spinAxis || 'x';
-                const localAxis = new THREE.Vector3(
-                    axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0
-                );
-                const worldAxis = localAxis.transformDirection(obj.parent ? obj.parent.matrixWorld : shipGroup.matrixWorld).normalize();
-
-                // 羽根半径をバウンディングボックスから推定
-                if (part._bladeRadius === undefined) {
-                    const box = new THREE.Box3().setFromObject(obj);
-                    const size = new THREE.Vector3();
-                    box.getSize(size);
-                    // 回転軸に垂直な2成分の最大値の半分を半径とする
-                    const dims = [size.x, size.y, size.z];
-                    dims[axis === 'x' ? 0 : axis === 'y' ? 1 : 2] = 0;
-                    part._bladeRadius = Math.max(0.3, Math.max(...dims) * 0.5);
-                }
-
-                emitSources.push({
-                    center: worldPos, axisDir: worldAxis,
-                    bladeRadius: part._bladeRadius,
-                    angle: part.spin || 0,
-                    dir: part.invert ? -1 : 1
-                });
-            });
-        }
-    }
-
-    if (emitSources.length > 0) {
-        // 密度を下げる（従来比で放出レートを抑える）
-        const emitRate = (0.6 + spd * 1.1) * emitSources.length;
-        bubbleEmitAccum += emitRate * dt;
-
+        const sgn = rpm >= 0 ? 1 : -1;
+        const jetV = absRpm * maxSpd * (0.25 + 0.6 * slip);
+        const spin = (typeof getPropSpinRate === 'function') ? Math.abs(getPropSpinRate()) : 0;
         const rotY = (physics.heading * Math.PI) / 180;
-        const dirSign = physics.speed >= 0 ? -1 : 1;
-        const shipVx = Math.sin(rotY) * physics.speed * 0.514;
-        const shipVz = Math.cos(rotY) * physics.speed * 0.514;
-
-        // axisDirに垂直な基底ベクトルを1本作るための仮の"up"
-        const tmpUp = new THREE.Vector3(0, 1, 0);
-
+        const shipVx = Math.sin(rotY) * physics.speed;
+        const shipVz = Math.cos(rotY) * physics.speed;
+        let n = 0;
         while (bubbleEmitAccum >= 1) {
             bubbleEmitAccum -= 1;
-            const src = emitSources[Math.floor(Math.random() * emitSources.length)];
-            const i = bubbleIdx;
-
-            // 回転軸に垂直な基底ベクトル(e1, e2)を作り、羽根先端の位置を求める
-            let e1 = new THREE.Vector3().crossVectors(tmpUp, src.axisDir);
-            if (e1.lengthSq() < 1e-6) e1.set(1, 0, 0).cross(src.axisDir); // axisDirがY軸とほぼ平行な場合の保険
-            e1.normalize();
-            const e2 = new THREE.Vector3().crossVectors(src.axisDir, e1).normalize();
-
-            // 羽根の枚数ぶんの位相のうちランダムに1枚を選び、回転角+その位相で先端位置を決める
-            // → 螺旋状に見えるよう、毎回わずかに角度を進めた位置から放出する
-            const bladeCount = 4;
-            const bladePhase = (Math.floor(Math.random() * bladeCount) / bladeCount) * Math.PI * 2;
-            const ang = src.angle + bladePhase;
-            const tipX = Math.cos(ang) * src.bladeRadius;
-            const tipY = Math.sin(ang) * src.bladeRadius;
-
-            const emitPos = src.center.clone()
-                .addScaledVector(e1, tipX)
-                .addScaledVector(e2, tipY);
-
-            posAttr.array[i*3]   = emitPos.x;
-            posAttr.array[i*3+1] = emitPos.y;   // 最初はスクリューの深さから出発
-            posAttr.array[i*3+2] = emitPos.z;
-            ageAttr.array[i] = 0;
-
-            // 螺旋の接線方向（回転方向）の初速を与え、渦を巻きながら後方へ流れるようにする
-            const tangent = new THREE.Vector3()
-                .addScaledVector(e1, -Math.sin(ang))
-                .addScaledVector(e2,  Math.cos(ang))
-                .multiplyScalar(src.dir * sizeScale * 0.6);
-
-            const swirlX =  Math.cos(rotY) * src.dir * sizeScale * 0.3 + tangent.x;
-            const swirlZ = -Math.sin(rotY) * src.dir * sizeScale * 0.3 + tangent.z;
-            bubbleData[i].vx = shipVx * 0.3 + dirSign * Math.sin(rotY) * spd * 0.2 * sizeScale + swirlX;
-            bubbleData[i].vy = 0.1 * sizeScale + tangent.y * 0.3; // 最初は遅め、浮力ループが加速させる
-            bubbleData[i].vz = shipVz * 0.3 + dirSign * Math.cos(rotY) * spd * 0.2 * sizeScale + swirlZ;
-            bubbleData[i].rand = Math.random();
-
-            bubbleIdx = (bubbleIdx + 1) % MAX_BUBBLES;
+            const src = sources[n++ % sources.length];
+            // 渦の速さ：羽根の先端の速さの一部（大きくなりすぎないよう抑える）
+            const swirlV = Math.min(spin * src.radius * 0.2, jetV * 0.8 + sizeScale) * Math.sign(rpm || 1);
+            _emitBubble(src, sgn, jetV, swirlV, shipVx, shipVz, sizeScale, t);
         }
     } else {
         bubbleEmitAccum = 0;
     }
 
-    posAttr.needsUpdate = true;
-    ageAttr.needsUpdate = true;
+    if (active > 0 || sources) {
+        bubbleGeo.attributes.position.needsUpdate = true;
+        bubbleGeo.attributes.age.needsUpdate = true;
+        bubbleGeo.attributes.kind.needsUpdate = true;
+        bubbleGeo.attributes.psize.needsUpdate = true;
+    }
 }
-
-

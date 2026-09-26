@@ -203,56 +203,111 @@ function _boltPoints(top, bottom, rough, depth, out) {
     _boltPoints(mid, bottom, rough, depth - 1, out);
 }
 
-// 折れ線を、カメラの方を向いた帯（三角形）にする
-function _ribbon(points, width, camPos, positions) {
-    const side = new THREE.Vector3(), seg = new THREE.Vector3(), toCam = new THREE.Vector3();
-    for (let i = 0; i < points.length - 1; i++) {
-        const a = points[i], b = points[i + 1];
-        seg.subVectors(b, a).normalize();
+// 折れ線を、カメラの方を向いた1本のつながった帯にする。
+// 以前は線分ごとに別々の四角形を作っていたため、折れ目で四角形が重なったり
+// 隙間が空いたりして、周りの薄い光が「つぎはぎ」に見えていた。ここでは
+// 折れ目の頂点を前後の線分で共有し（向きは前後の平均）、帯の幅方向の位置
+// (across: -1〜1) を持たせて、光の減り方をシェーダーで滑らかに付ける。
+// 周りのにじみは太い帯を重ねず、明るい芯をブルームでにじませて出す。
+//   taper: 終点での太さの割合（枝分かれの先は細くなる）
+function _ribbon(points, width, camPos, taper, positions, across, indices) {
+    const n = points.length;
+    if (n < 2) return;
+    const base = positions.length / 3;
+    const tan = new THREE.Vector3(), d0 = new THREE.Vector3(), d1 = new THREE.Vector3();
+    const side = new THREE.Vector3(), toCam = new THREE.Vector3(), p = new THREE.Vector3();
+    for (let i = 0; i < n; i++) {
+        const a = points[i];
+        if (i > 0) d0.subVectors(a, points[i - 1]).normalize(); else d0.set(0, 0, 0);
+        if (i < n - 1) d1.subVectors(points[i + 1], a).normalize(); else d1.set(0, 0, 0);
+        tan.addVectors(d0, d1);
+        if (tan.lengthSq() < 1e-8) tan.copy(i > 0 ? d0 : d1);
+        tan.normalize();
         toCam.subVectors(camPos, a).normalize();
-        side.crossVectors(seg, toCam).normalize().multiplyScalar(width * 0.5);
-        const a1 = a.clone().add(side), a2 = a.clone().sub(side);
-        const b1 = b.clone().add(side), b2 = b.clone().sub(side);
-        positions.push(a1.x, a1.y, a1.z, a2.x, a2.y, a2.z, b1.x, b1.y, b1.z);
-        positions.push(b1.x, b1.y, b1.z, a2.x, a2.y, a2.z, b2.x, b2.y, b2.z);
+        side.crossVectors(tan, toCam);
+        if (side.lengthSq() < 1e-8) side.set(1, 0, 0);
+        side.normalize();
+        // 折れ目では帯が細らないよう少し広げる（広げすぎない）
+        const segDir = (i < n - 1) ? d1 : d0;
+        const sideSeg = new THREE.Vector3().crossVectors(segDir, toCam).normalize();
+        const miter = 1 / Math.max(0.6, Math.abs(side.dot(sideSeg)));
+        const w = width * 0.5 * miter * (1 + (taper - 1) * (i / (n - 1)));
+        p.copy(a).addScaledVector(side, w);  positions.push(p.x, p.y, p.z); across.push(1);
+        p.copy(a).addScaledVector(side, -w); positions.push(p.x, p.y, p.z); across.push(-1);
+        if (i < n - 1) {
+            const k = base + i * 2;
+            indices.push(k, k + 1, k + 2, k + 2, k + 1, k + 3);
+        }
     }
 }
+
+const _boltVS = `
+    attribute float across;
+    varying float vAcross;
+    // 対数深度バッファ対応（03-particle-systems.js の泡と同じ方法）
+    #ifdef USE_LOGDEPTHBUF
+        uniform float logDepthBufFC;
+    #endif
+    void main() {
+        vAcross = across;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        #ifdef USE_LOGDEPTHBUF
+            gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
+            gl_Position.z *= gl_Position.w;
+        #endif
+    }`;
+const _boltFS = `
+    uniform vec3 uCore;
+    uniform vec3 uHalo;
+    uniform float uOpacity;
+    varying float vAcross;
+    #ifdef USE_LOGDEPTHBUF
+        uniform float logDepthBufFC;
+    #endif
+    void main() {
+        float x = vAcross;
+        // 芯：白く細く強い光（ブルームでにじむ）。周り：青白い光が滑らかに消える
+        float core = exp(-x * x * 45.0);
+        float halo = exp(-x * x * 4.0) * (1.0 - x * x);
+        gl_FragColor = vec4((uCore * core + uHalo * halo) * uOpacity, 1.0);
+    }`;
 
 function _makeBolt(ground, cloudY) {
     const top = new THREE.Vector3(ground.x + (Math.random() - 0.5) * 120, cloudY, ground.z + (Math.random() - 0.5) * 120);
     const main = [top.clone()];
     _boltPoints(top, ground, 0.35, 6, main);
-    const core = [], glow = [];
+    const pos = [], acr = [], idx = [];
     const cam = camera.position;
-    _ribbon(main, 3.5, cam, core);
-    _ribbon(main, 22, cam, glow);
-    // 枝分かれ 1〜2本
+    _ribbon(main, 16, cam, 0.8, pos, acr, idx);
+    // 枝分かれ 1〜2本（先へ行くほど細い）
     const branches = 1 + (Math.random() < 0.5 ? 1 : 0);
     for (let b = 0; b < branches; b++) {
         const from = main[Math.floor(main.length * (0.2 + Math.random() * 0.4))];
         const to = from.clone().add(new THREE.Vector3((Math.random() - 0.5) * 260, -(80 + Math.random() * 180), (Math.random() - 0.5) * 260));
         const pts = [from.clone()];
         _boltPoints(from, to, 0.4, 4, pts);
-        _ribbon(pts, 2.0, cam, core);
-        _ribbon(pts, 12, cam, glow);
+        _ribbon(pts, 10, cam, 0.25, pos, acr, idx);
     }
     const group = new THREE.Group();
-    const mk = (arr, color, opacity) => {
-        const g = new THREE.BufferGeometry();
-        g.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3));
-        const m = new THREE.MeshBasicMaterial({
-            color, transparent: true, opacity, depthWrite: false, fog: false, toneMapped: false,
-            blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
-        });
-        const mesh = new THREE.Mesh(g, m);
-        mesh.frustumCulled = false;
-        group.add(mesh);
-        return m;
-    };
-    const coreMat = mk(core, new THREE.Color(2.4, 2.5, 3.0), 1.0);
-    const glowMat = mk(glow, new THREE.Color(0.35, 0.4, 0.75), 0.5);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('across', new THREE.Float32BufferAttribute(acr, 1));
+    g.setIndex(idx);
+    const mat = new THREE.ShaderMaterial({
+        uniforms: {
+            uCore: { value: new THREE.Color(2.6, 2.7, 3.2) },
+            uHalo: { value: new THREE.Color(0.22, 0.26, 0.55) },
+            uOpacity: { value: 1.0 },
+        },
+        vertexShader: _boltVS, fragmentShader: _boltFS,
+        transparent: true, depthWrite: false, fog: false,
+        blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.frustumCulled = false;
+    group.add(mesh);
     scene.add(group);
-    return { group, coreMat, glowMat };
+    return { group, mat };
 }
 
 function _disposeBolt(bolt) {
@@ -294,8 +349,7 @@ function _updateLightning(t, w) {
         flash *= L.strike.power;
         if (L.strike.bolt) {
             const vis = Math.min(1, flash * 1.3);
-            L.strike.bolt.coreMat.opacity = vis;
-            L.strike.bolt.glowMat.opacity = vis * 0.5;
+            L.strike.bolt.mat.uniforms.uOpacity.value = vis;
         }
         if (age > 0.9) { _disposeBolt(L.strike.bolt); L.strike = null; }
     }

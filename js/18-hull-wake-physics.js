@@ -2241,7 +2241,7 @@ function getWakeHeightVisual(wx, wz, t) {
     // ※ hullDisp は「その瞬間の海面（波の高さ）を基準にした押しのけ量」にする。
     //   呼び出し元 updateWater() が waveData.height + wake.y を posAttr.setY するため、
     //   ここでは { y: hullDisp, foam:0 } を返すと
-    //   頂点Y = getWaveCrestAndHeight().height + hullDisp になる（波に乗った凹み）。
+    //   頂点Y = getOceanHeight() + hullDisp になる（波に乗った凹み）。
     const hullDisp = _getHullDisplacement(wx, wz);
     if (hullDisp < -0.005) {
         return { y: hullDisp, foam: 0 };

@@ -1,6 +1,18 @@
 function animate() {
     requestAnimationFrame(animate);
-    const dt = Math.min(clock.getDelta(), 0.02);
+    // 描画頻度の上限（33-performance.js）。120Hz 表示の端末などで、必要以上に
+    // 描いて発熱→性能低下するのを防ぐ。描かないフレームは経過時間を消費しない
+    // （clock.getDelta() を呼ばない）ので、次に描くフレームの dt に繰り越される。
+    const _frameNow = performance.now();
+    if (typeof perfShouldRenderFrame === 'function' && !perfShouldRenderFrame(_frameNow)) return;
+    if (typeof perfRecordFrame === 'function') perfRecordFrame(_frameNow);
+    // 1フレームで進める時間の上限。止まった直後に巨大な一歩を踏まないための
+    // もの。描画の上限を30fpsにしたときは1フレームが0.033秒になるので、
+    // それに合わせて広げる（広げないとゲーム内の時間がスローになる）。
+    // 物理はこの中で0.02秒刻みのサブステップに分けて計算する。
+    const _dtCap = (typeof perfGovernor !== 'undefined' && perfGovernor.fpsCap)
+        ? Math.max(0.02, 1.1 / perfGovernor.fpsCap) : 0.02;
+    const dt = Math.min(clock.getDelta(), _dtCap);
     if (dt <= 0) return;
     const t = clock.getElapsedTime();
     // 物理早送り倍率を適用したdt（見た目・時刻はdtのまま、船の動き・加速・揺れだけ早送り）
@@ -129,9 +141,15 @@ function animate() {
         const maxSpd = physics.maxSpeed;
         const speeds = { '-3': -maxSpd * 0.5, '-2': -maxSpd * 0.3, '-1': -maxSpd * 0.15, '0': 0.0, '1': maxSpd * 0.3, '2': maxSpd * 0.6, '3': maxSpd };
         physics.targetSpeed = isDesignMode ? 0.0 : speeds[physics.telegraphState];
+        // スクリューの回転数は、機関指令（テレグラフ）を目標に加減速する
+        // （32-engine-propeller.js）。推力もこの回転数で決まるので、後進を
+        // かけると先にスクリューが逆転し、その力で船が止まってから後ろへ進む。
+        if (typeof updatePropRpm === 'function') updatePropRpm(subDt, isDesignMode);
+        const propTargetSpeed = (typeof getPropThrustTargetSpeed === 'function')
+            ? getPropThrustTargetSpeed() : physics.targetSpeed;
         // 推進器の加速度（船首尾軸に沿った推力）。この後の heave 計算で、
         // 船体ピッチ角だけ傾けて鉛直成分も加えるために保持しておく。
-        const thrustAccMag = (physics.targetSpeed - physics.speed) * (0.3 / physics.mass);
+        const thrustAccMag = (propTargetSpeed - physics.speed) * (0.3 / physics.mass);
         physics.speed += thrustAccMag * subDt;
         physics.speed = THREE.MathUtils.clamp(physics.speed, -maxSpd * 0.5, maxSpd);
 
@@ -996,6 +1014,14 @@ function updateUI() {
         '0': 'STOP (停止)', '1': 'SLOW (微速前進)', '2': 'HALF (半速前進)', '3': 'FULL (全速前進)'
     };
     $('ui-telegraph').innerText = `Telegraph: ${labels[physics.telegraphState]}`;
+    const _eng = $('ui-engine');
+    if (_eng) {
+        const r = physics.propRpm || 0;
+        const pct = Math.round(Math.abs(r) * 100);
+        _eng.innerText = (Math.abs(r) < 0.005)
+            ? `Screw    : STOP${(typeof _engineReverseHold !== 'undefined' && _engineReverseHold > 0) ? ' (逆転操作中)' : ''}`
+            : `Screw    : ${r > 0 ? 'AHEAD' : 'ASTERN'} ${pct}%`;
+    }
     $('ui-speed').innerText = `Speed    : ${Math.abs(physics.speed).toFixed(1)} kn`;
 
     let rudderStr = '0.0°';

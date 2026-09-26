@@ -9,6 +9,12 @@
 //   2. 8×8 画素に縮めながら各画素で明るさを平均（GPU）
 //   3. その 64 画素だけを読み出す（AE_INTERVAL 秒に1回）
 // という手順で、読み出す量を最小にしている。
+// さらに読み出しは「非同期」で行う（WebGL2）。普通の readPixels は、GPUが
+// それまでに頼まれた描画を全部終えるまでCPUを止めてしまい、CPUとGPUが
+// 交互にしか働けなくなる（数百msおきにカクつく原因になる）。そこで読み出しを
+// バッファへ予約だけしておき、GPUが終わったこと（フェンス）を次のフレーム
+// 以降で確かめてから受け取る。WebGL1 の端末では従来の読み出しを間隔を
+// 空けて行う。
 // 平均は「明るさの対数の平均」（幾何平均）で取り、画面の中央ほど重みを
 // 大きくする。窓の灯りや太陽のような小さな明るい点に引きずられないため。
 //
@@ -34,6 +40,7 @@ const autoExposure = {
     _lastT: -1,
     _src: null, _srcW: 0, _srcH: 0,
     _rt: null, _scene: null, _cam: null, _buf: null,
+    _pbo: null, _sync: null,   // 非同期読み出し用（WebGL2）
 };
 window.autoExposure = autoExposure;
 
@@ -105,53 +112,91 @@ function applyAutoExposure(t) {
     renderer.toneMappingExposure = base * A.mul;
 }
 
+// 64画素の明るさから、目標の露出倍率を決め直す
+function _aeConsume(buf) {
+    const A = autoExposure;
+    // 中央重視の幾何平均
+    let sw = 0, sl = 0;
+    for (let y = 0; y < 8; y++) {
+        for (let x = 0; x < 8; x++) {
+            const l = buf[(y * 8 + x) * 4] / 255;
+            const dx = x - 3.5, dy = y - 3.5;
+            const wgt = Math.exp(-(dx * dx + dy * dy) / (2 * 2.6 * 2.6));
+            sl += wgt * Math.log(l + 0.02);
+            sw += wgt;
+        }
+    }
+    const meas = Math.exp(sl / sw) - 0.02;
+    A.measured = meas;
+    // 夜は暗めを目標に（窓の発光を自動点灯させる昼夜係数と同じもの）
+    const night = (typeof lightingNightFactor === 'number') ? lightingNightFactor : 0;
+    const target = AE_TARGET_DAY + (AE_TARGET_NIGHT - AE_TARGET_DAY) * night;
+    // 表示上の明るさは露出の 1/2.2 乗くらいで効くので、比を 1.5 乗して直す。
+    // 1回で直しすぎないよう、1回あたりの修正は 0.6〜1.7 倍に抑える。
+    const ratio = Math.min(1.7, Math.max(0.6, Math.pow(target / Math.max(0.01, meas), 1.5)));
+    A.desired = Math.min(AE_MUL_MAX, Math.max(AE_MUL_MIN, A.mul * ratio));
+}
+
+// 予約しておいた非同期読み出しが終わっていれば受け取る（WebGL2）
+function _aePollAsync() {
+    const A = autoExposure;
+    if (!A._sync) return;
+    const gl = renderer.getContext();
+    const st = gl.clientWaitSync(A._sync, 0, 0);
+    if (st === gl.TIMEOUT_EXPIRED) return;          // まだGPUが終わっていない
+    gl.deleteSync(A._sync);
+    A._sync = null;
+    if (st === gl.WAIT_FAILED) return;
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, A._pbo);
+    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, A._buf);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    _aeConsume(A._buf);
+}
+
 // 描画の直後に呼ぶ：ときどき画面の明るさを測って、目標の露出倍率を決め直す
 function sampleAutoExposure(t) {
     const A = autoExposure;
     if (!A.enabled || typeof renderer === 'undefined' || !renderer) return;
-    if (t - A._lastSample < AE_INTERVAL && A._lastSample >= 0) return;
+    const isGL2 = renderer.capabilities && renderer.capabilities.isWebGL2;
+    if (isGL2) _aePollAsync();
+    if (A._sync) return;   // 前回の読み出しを待っている間は次を頼まない
+    const interval = isGL2 ? AE_INTERVAL : AE_INTERVAL * 4;   // WebGL1 は同期読み出しなので間隔を空ける
+    if (t - A._lastSample < interval && A._lastSample >= 0) return;
     A._lastSample = t;
     try {
         _aeSetup();
         const size = renderer.getDrawingBufferSize(new THREE.Vector2());
         const w = Math.max(1, Math.floor(size.x)), h = Math.max(1, Math.floor(size.y));
         _aeEnsureSource(w, h);
-        // 今の画面（既定のフレームバッファ）をテクスチャへコピー
+        // 今の画面（既定のフレームバッファ）をテクスチャへコピー（GPUの中だけで済む）
         renderer.setRenderTarget(null);
         renderer.copyFramebufferToTexture(new THREE.Vector2(0, 0), A._src);
         // 8×8 に縮める
         A._mat.uniforms.tSrc.value = A._src;
         const prevAutoClear = renderer.autoClear;
-        const prevTone = renderer.toneMapping;
         renderer.autoClear = true;
         renderer.setRenderTarget(A._rt);
         renderer.render(A._scene, A._cam);
-        renderer.readRenderTargetPixels(A._rt, 0, 0, 8, 8, A._buf);
+        if (isGL2) {
+            // 8×8 を読み出し用バッファへ「予約」するだけ（CPUは待たない）
+            const gl = renderer.getContext();
+            if (!A._pbo) {
+                A._pbo = gl.createBuffer();
+                gl.bindBuffer(gl.PIXEL_PACK_BUFFER, A._pbo);
+                gl.bufferData(gl.PIXEL_PACK_BUFFER, 8 * 8 * 4, gl.STREAM_READ);
+            } else {
+                gl.bindBuffer(gl.PIXEL_PACK_BUFFER, A._pbo);
+            }
+            gl.readPixels(0, 0, 8, 8, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+            A._sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+            gl.flush();
+        } else {
+            renderer.readRenderTargetPixels(A._rt, 0, 0, 8, 8, A._buf);
+            _aeConsume(A._buf);
+        }
         renderer.setRenderTarget(null);
         renderer.autoClear = prevAutoClear;
-        renderer.toneMapping = prevTone;
-
-        // 中央重視の幾何平均
-        let sw = 0, sl = 0;
-        for (let y = 0; y < 8; y++) {
-            for (let x = 0; x < 8; x++) {
-                const l = A._buf[(y * 8 + x) * 4] / 255;
-                const dx = x - 3.5, dy = y - 3.5;
-                const wgt = Math.exp(-(dx * dx + dy * dy) / (2 * 2.6 * 2.6));
-                sl += wgt * Math.log(l + 0.02);
-                sw += wgt;
-            }
-        }
-        const meas = Math.exp(sl / sw) - 0.02;
-        A.measured = meas;
-
-        // 夜は暗めを目標に（窓の発光を自動点灯させる昼夜係数と同じもの）
-        const night = (typeof lightingNightFactor === 'number') ? lightingNightFactor : 0;
-        const target = AE_TARGET_DAY + (AE_TARGET_NIGHT - AE_TARGET_DAY) * night;
-        // 表示上の明るさは露出の 1/2.2 乗くらいで効くので、比を 1.5 乗して直す。
-        // 1回で直しすぎないよう、1回あたりの修正は 0.6〜1.7 倍に抑える。
-        const ratio = Math.min(1.7, Math.max(0.6, Math.pow(target / Math.max(0.01, meas), 1.5)));
-        A.desired = Math.min(AE_MUL_MAX, Math.max(AE_MUL_MIN, A.mul * ratio));
     } catch (e) {
         // この環境でフレームバッファのコピーができない場合は自動露出を止める
         console.warn('[AutoExposure] 無効化しました:', e);

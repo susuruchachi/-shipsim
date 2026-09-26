@@ -76,6 +76,25 @@ function restoreNoBloomObjects(obj) {
 // ①noBloom対象を黒く塗りつぶしてブルーム抽出 → ②元に戻す →
 // ③renderer.render()でキャンバスへ直接描画 → ④ブルーム結果を加算で重ねる。
 function renderWithBloom() {
+    // 光のにじみの抽出は、シーン全体をもう1回描く重い処理なので1フレームおきに
+    // 行う（33-performance.js）。抽出しないフレームは前回の結果をそのまま重ねる。
+    const doExtract = (typeof perfShouldRenderBloomExtract !== 'function') || perfShouldRenderBloomExtract();
+    if (doExtract) _renderBloomExtract();
+
+    renderer.setRenderTarget(null);
+    renderer.autoClear = true;
+    // 影マップは本描画のときだけ描き直す（04-scene-and-water-init.js 参照）。
+    // ブルーム抽出パスは前フレームの影マップを使うが、抽出されるのは発光面
+    // だけなので見た目には影響しない。
+    renderer.shadowMap.needsUpdate = true;
+    renderer.render(scene, camera);
+
+    renderer.autoClear = false;
+    renderer.render(bloomOverlayScene, bloomOverlayCamera);
+    renderer.autoClear = true;
+}
+
+function _renderBloomExtract() {
     scene.traverse(darkenNoBloomObjects);
 
     // v87: ブルーム抽出パスの間だけ霧の色を黒に差し替える。
@@ -93,18 +112,6 @@ function renderWithBloom() {
 
     if (scene.fog && savedFogColorHex !== null) scene.fog.color.setHex(savedFogColorHex);
     scene.traverse(restoreNoBloomObjects);
-
-    renderer.setRenderTarget(null);
-    renderer.autoClear = true;
-    // 影マップは本描画のときだけ描き直す（04-scene-and-water-init.js 参照）。
-    // ブルーム抽出パスは前フレームの影マップを使うが、抽出されるのは発光面
-    // だけなので見た目には影響しない。
-    renderer.shadowMap.needsUpdate = true;
-    renderer.render(scene, camera);
-
-    renderer.autoClear = false;
-    renderer.render(bloomOverlayScene, bloomOverlayCamera);
-    renderer.autoClear = true;
 }
 
 function setBloomEnabled(enabled) {
@@ -663,11 +670,14 @@ function animateSmoke(t, dt) {
 }
 
 function animatePropellers(t, dt) {
-    const spd = physics.speed;
+    // スクリューの回転の速さは、船の速度ではなく機関の回転数から決める
+    // （32-engine-propeller.js）。以前は組み込みの推進器だけ「1フレームあたり」で
+    // 回していたため、フレームレートで回転の速さが変わっていた。
+    const spinRate = (typeof getPropSpinRate === 'function') ? getPropSpinRate() : physics.speed * 1.5;
     propMeshes.forEach(g => {
         const dir = g.userData.dir || 1;
         if (g.userData.isProp) {
-            g.rotation.z += spd * 0.15 * dir;
+            g.rotation.z += spinRate * dir * (dt || 0);   // GLBのスクリューと同じ速さ
         }
     });
 
@@ -683,7 +693,7 @@ function animatePropellers(t, dt) {
             const pv = part.pivotOffset || new THREE.Vector3();
 
             if (part.key === 'screw' || part.key === 'paddle') {
-                part.spin = (part.spin || 0) + spd * 1.5 * invert * (dt || 0);
+                part.spin = (part.spin || 0) + spinRate * invert * (dt || 0);
 
                 // 回転軸 (basePos + pivotOffset) を中心に回転させる。
                 // モデル自体の原点は basePos のまま変わらない。

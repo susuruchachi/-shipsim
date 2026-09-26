@@ -155,8 +155,13 @@ function applyPerfPreset(name) {
     if (!preset) return;
     perf.quality = name;
     Object.assign(perf, preset);
+    if (typeof perfResetScale === 'function') perfResetScale();   // 自動の解像度調整をやり直す（33-performance.js）
     if (renderer) {
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, perf.pixelRatio));
+        const pr = Math.min(window.devicePixelRatio || 1, perf.pixelRatio);
+        renderer.setPixelRatio(pr);
+        // ブルームの作業用バッファも同じ解像度にする（以前は画質を変えても
+        // ブルーム側だけ起動時の解像度のままだった）
+        if (typeof bloomComposer !== 'undefined' && bloomComposer && bloomComposer.setPixelRatio) bloomComposer.setPixelRatio(pr);
     }
     applyShadowQualityFromPerf();
     if (globalSmokeGeo) {

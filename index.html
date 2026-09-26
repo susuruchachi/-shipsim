@@ -46,6 +46,7 @@
     </div>
     <div style="font-weight: bold; border-bottom: 1px solid #ffffff; padding-bottom: 4px; margin-bottom: 10px; text-align: center; font-size: 14px; color: #00ffcc;">=== TELEMETRY ===</div>
     <div id="ui-telegraph">Telegraph: STOP</div>
+    <div id="ui-engine">Screw    : STOP</div>
     <div id="ui-speed">Speed    : 0.0 kn</div>
     <div id="ui-rudder">Rudder   : 0.0°</div>
     <div id="ui-heading">Heading  : 0°</div>
@@ -1009,6 +1010,20 @@
         <div style="font-size:10px;color:#888;margin-top:6px;">
           煙パーティクル数・航跡の長さ・画面解像度を一括調整します（海面の重さには影響しません）。
         </div>
+        <div class="sp-row" style="margin-top:8px;">
+          <span class="sp-label">描画の上限:</span>
+          <select id="perf-fps-cap" style="flex:1;background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;" onchange="setFpsCap(this.value)">
+            <option value="60" selected>60fps（推奨）</option>
+            <option value="30">30fps（省電力・発熱を抑える）</option>
+            <option value="0">制限なし</option>
+          </select>
+        </div>
+        <div class="sp-row">
+          <label style="display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer;">
+            <input type="checkbox" id="perf-auto-res" checked onchange="setAutoResolution(this.checked)">
+            重くなったら解像度を自動で少し下げる（発熱で遅くなっても滑らかさを保つ）
+          </label>
+        </div>
       </div>
 
       <div class="sp-section">
@@ -1066,6 +1081,8 @@
 <script src="js/29-weather-fx.js"></script>
 <script src="js/30-auto-exposure.js"></script>
 <script src="js/31-pwa-install.js"></script>
+<script src="js/32-engine-propeller.js"></script>
+<script src="js/33-performance.js"></script>
 <script src="js/17-main-loop.js"></script>
 <script src="js/18-hull-wake-physics.js"></script>
 <script src="js/19-swe-fluid.js"></script>
