@@ -713,6 +713,8 @@ const _reflBiasMatrix = new THREE.Matrix4().set(
 const _reflTextureMatrix = new THREE.Matrix4();
 function updateWaterReflection() {
     if (!waterReflectionRT || !waterReflectionCamera || !waterMesh) return;
+    // 海面を非表示にしているときは反射も要らない（以前は船ごと描き直し続けていた）
+    if (!waterMesh.visible) return;
 
     // 海面リアリティー設定で反射そのものを無効化している場合はスキップ。
     // ただし reflectionStrength を 0 にしてシェーダーが古いRTを描画しないようにする。
@@ -834,7 +836,9 @@ function updateSunShadowFollow() {
     if (waterMesh && waterMesh.material.uniforms && waterMesh.material.uniforms.sunShadowMap) {
         const u = waterMesh.material.uniforms;
         const hasMap = !!(perf.shadowsEnabled && sunLight.shadow && sunLight.shadow.map);
-        u.sunShadowActive.value = hasMap;
+        // 夜（太陽の光がほぼ無い）は影を読んでも見た目が変わらないので読まない
+        // （海面の全画素で影マップを9回ずつ読むのを省く）
+        u.sunShadowActive.value = hasMap && sunLight.intensity > 0.02;
         if (hasMap) {
             u.sunShadowMap.value = sunLight.shadow.map.texture;
             u.sunShadowMatrix.value = sunLight.shadow.matrix;

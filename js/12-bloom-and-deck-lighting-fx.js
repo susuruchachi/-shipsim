@@ -86,10 +86,10 @@ function restoreNoBloomObjects(obj) {
 // ①noBloom対象を黒く塗りつぶしてブルーム抽出 → ②元に戻す →
 // ③renderer.render()でキャンバスへ直接描画 → ④ブルーム結果を加算で重ねる。
 function renderWithBloom() {
-    // 光のにじみの抽出は、シーン全体をもう1回描く重い処理なので1フレームおきに
-    // 行う（33-performance.js）。抽出しないフレームは前回の結果をそのまま重ねる。
-    const doExtract = (typeof perfShouldRenderBloomExtract !== 'function') || perfShouldRenderBloomExtract();
-    if (doExtract) _renderBloomExtract();
+    // 光のにじみの抽出は毎フレーム行う。以前、軽くするために1フレームおきに
+    // したところ、視点を動かすと前のフレームのにじみが古い位置に重なり、
+    // 窓の光が残像のようにぶれて見えた。
+    _renderBloomExtract();
 
     renderer.setRenderTarget(null);
     renderer.autoClear = true;

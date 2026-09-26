@@ -988,6 +988,7 @@ function createWater() {
             uniform float     bowFullnessU;
             uniform float     sternFullnessU;
             uniform int       wakeCount;
+            uniform float     uBloomDark;   // ブルーム抽出パス（黒く塗るだけ）では引き波・法線の計算を省く
             uniform vec4      wakeXZTH[MAX_WAKE];   // x, z, t, headingRad
             uniform float     wakeSpeed[MAX_WAKE];
             // 【反射方式修正】反射カメラ視点への投影行列（ワールド座標→反射RTのテクスチャ座標）
@@ -1154,30 +1155,28 @@ function createWater() {
                 float sinH = sin(ph.w);
                 float cosH = cos(ph.w);
 
-                // v104: 楕円近似(半幅一定)だと船首の絞り込み形状を再現できず、
-                // 先端付近で波が船体内側まで入り込んでしまっていた。
-                // 喫水線輪郭の砕け波(bow spray)と同じ実データ(hullWidthsU)を使い、
-                // その場所ごとの実際の半幅で判定するよう変更。
-                // 中心線（船首方位ベクトル）に対する観測点の横距離・前後位置を求め、
-                // 船体が実際に存在する前後範囲内でだけ、その位置での実喫水線半幅より
-                // 内側の波の寄与を滑らかにゼロへ絞る。
-                // これを全域に適用すると、船首点そのもの（V字の頂点、中心線上）まで
-                // マスクされてしまい、肝心の「めくり上げの始点」が消えてしまうため、
-                // 船体の前後範囲の外ではマスクをかけない。
-                // 右舷方向ベクトル = 船首方向(sinH, cosH)を90°回転した(cosH, -sinH)
-                float lateralDist = abs(dxp * cosH - dzp * sinH);
-                float alongDist   = dxp * sinH + dzp * cosH; // 船首方向への射影（船首側+、船尾側-）
-                float alongNorm   = clamp(alongDist / max(0.01, hullHalfLenU), -1.0, 1.0);
-                float hullW       = hullHalfWidthAt(alongNorm);
-                float withinHullLen = 1.0 - smoothstep(hullHalfLenU * 0.98, hullHalfLenU * 1.08, abs(alongDist));
-                // v124: 0.9〜1.3では際の遷移帯が広く、船体のすぐ内側でもマスクが
-                // 完全に0にならず、波が薄く透けて見える原因になっていた
-                // (v121/v122で振幅を上げ、v123で船首波を持続的に立たせたことで
-                // この薄い透け残りが目立つようになった)。withinHullLenと同じ
-                // 0.98〜1.08の狭い帯に絞り、実喫水線のすぐ内側は確実に0にする。
-                float lateralMask = smoothstep(hullW * 0.98, hullW * 1.08, lateralDist);
-                float hullMask = mix(1.0, lateralMask, withinHullLen);
+                // ── 軽い判定を先に（重さ対策）──
+                // 以前は、波源ごとに船体の半幅の探索（24回のループ）などの重い計算を
+                // 先に行ってから「その点が波の輪の中か」を調べていた。海面の頂点ごとに
+                // 最大32個の波源について毎回これを行うため、船が動いて航跡の履歴が
+                // たまるほど重くなっていた（バックグラウンドから戻った直後は履歴が
+                // 空なので軽く、走るうちに重くなる）。
+                // 波が立つのは、波源から「波の輪」（半径 waveSpeed·dt、幅 ±1.5波長）の
+                // 中だけなので、まずそれを調べ、外なら何もせず返す。船体の半幅による
+                // 絞り込みは、実際に波が立つ点で、かつ船体の前後の範囲内のときだけ行う。
+                float waveSpeed = (3.0 + absSpeed * 0.2) * scaleRatio;
+                float waveRadius = waveSpeed * dt;
+                float pitchWavelenScale = clamp(1.8 / sqrt(max(0.05, pitchOmegaU)), 0.5, 4.0);
+                float waveLenBase = (5.0 + absSpeed * 0.3) * scaleRatio * pitchWavelenScale;
+                {
+                    float bandMax = waveLenBase * sqrt(max(bowFullnessU, sternFullnessU)) * 1.5;
+                    float dp = sqrt(dxp * dxp + dzp * dzp);
+                    // 船首・船尾の波源は中心から±L。どちらの輪にも入らなければ寄与なし
+                    if (dp + L < waveRadius - bandMax || dp - L > waveRadius + bandMax) return vec2(0.0);
+                }
 
+                float sumH = 0.0;      // 船体による絞り込み前の高さ
+                float sumFoam = 0.0;
                 for (int s = 0; s < 2; s++) {
                     float sx, sz;
                     bool isBow;
@@ -1192,17 +1191,12 @@ function createWater() {
                     if (d < 0.1) continue;
 
                     float fullness  = isBow ? bowFullnessU : sternFullnessU;
-                    float waveSpeed = (3.0 + absSpeed * 0.2) * scaleRatio;
-                    float waveRadius = waveSpeed * dt;
                     float distanceToWaveFront = d - waveRadius;
                     float absDistToWaveFront = abs(distanceToWaveFront);
                     // v105: ケルビン波が波打つ周期は、船がピッチ(縦揺れ)する周期に由来する
                     // という考えに基づき、船のピッチ自然角周波数(pitchOmegaU)で波長を
-                    // スケールする。ωが小さい(=大型・重い船でピッチがゆっくり)ほど
-                    // 波長が長くなる。1.8は中型船的な基準角周波数の目安値。
-                    float pitchWavelenScale = clamp(1.8 / sqrt(max(0.05, pitchOmegaU)), 0.5, 4.0);
-                    float waveLength = (5.0 + absSpeed * 0.3) * scaleRatio * sqrt(fullness) * pitchWavelenScale;
-
+                    // スケールする（pitchWavelenScale、上で計算）。
+                    float waveLength = waveLenBase * sqrt(fullness);
                     if (absDistToWaveFront < waveLength * 1.5) {
                         // v122: 「今の倍くらい」の要望でv121の値からさらに2倍(0.033→0.066, 0.024→0.048)
                         float ampFactor = isBow ? 0.066 : 0.048;
@@ -1248,16 +1242,46 @@ function createWater() {
                                     hh = amp * sin(phase) * angleEnvelope;
                                 }
 
-                                wakeY += hh * hullMask;
+                                sumH += hh;
 
                                 if (hh > 0.02 && absDistToWaveFront < waveLength * 0.5) {
-                                    wakeFoam += (hh / waveLength) * angleEnvelope * (19.0 + absSpeed * 0.6) * hullMask;
+                                    sumFoam += (hh / waveLength) * angleEnvelope * (19.0 + absSpeed * 0.6);
                                 }
                             }
                         }
                     }
                 }
-                return vec2(wakeY, wakeFoam);
+
+                // 波が立たない点では、船体による絞り込みも要らない
+                if (sumH == 0.0 && sumFoam == 0.0) return vec2(0.0);
+
+                // v104: 楕円近似(半幅一定)だと船首の絞り込み形状を再現できず、
+                // 先端付近で波が船体内側まで入り込んでしまっていた。
+                // 喫水線輪郭の砕け波(bow spray)と同じ実データ(hullWidthsU)を使い、
+                // その場所ごとの実際の半幅で判定するよう変更。
+                // 中心線（船首方位ベクトル）に対する観測点の横距離・前後位置を求め、
+                // 船体が実際に存在する前後範囲内でだけ、その位置での実喫水線半幅より
+                // 内側の波の寄与を滑らかにゼロへ絞る。
+                // これを全域に適用すると、船首点そのもの（V字の頂点、中心線上）まで
+                // マスクされてしまい、肝心の「めくり上げの始点」が消えてしまうため、
+                // 船体の前後範囲の外ではマスクをかけない。
+                // 右舷方向ベクトル = 船首方向(sinH, cosH)を90°回転した(cosH, -sinH)
+                float alongDist   = dxp * sinH + dzp * cosH; // 船首方向への射影（船首側+、船尾側-）
+                float withinHullLen = 1.0 - smoothstep(hullHalfLenU * 0.98, hullHalfLenU * 1.08, abs(alongDist));
+                // 船体の前後の範囲外では絞り込み不要（半幅の探索もしない）
+                if (withinHullLen <= 0.0) return vec2(sumH, sumFoam);
+                float lateralDist = abs(dxp * cosH - dzp * sinH);
+                float alongNorm   = clamp(alongDist / max(0.01, hullHalfLenU), -1.0, 1.0);
+                float hullW       = hullHalfWidthAt(alongNorm);
+                // v124: 0.9〜1.3では際の遷移帯が広く、船体のすぐ内側でもマスクが
+                // 完全に0にならず、波が薄く透けて見える原因になっていた
+                // (v121/v122で振幅を上げ、v123で船首波を持続的に立たせたことで
+                // この薄い透け残りが目立つようになった)。withinHullLenと同じ
+                // 0.98〜1.08の狭い帯に絞り、実喫水線のすぐ内側は確実に0にする。
+                float lateralMask = smoothstep(hullW * 0.98, hullW * 1.08, lateralDist);
+                float hullMask = mix(1.0, lateralMask, withinHullLen);
+
+                return vec2(sumH * hullMask, sumFoam * hullMask);
             }
 
             vec2 wakeHF(vec2 xz, float t) {
@@ -1364,8 +1388,10 @@ function createWater() {
                         sweH = s.r * sweScale;
                         vSWEFoam = clamp(length(s.gb) * 0.12 - 0.1, 0.0, 1.0);
                     }
-                } else {
+                } else if (uBloomDark < 0.5) {
                     // SWEが無効な場合のみ解析的な引き波（Kelvin wake）を加算。
+                    // （ブルーム抽出パスでは省く：窓の光を隠すのは大きなうねりで、
+                    //  引き波の高さの差は見分けがつかないため）
                     // ここがいわゆる「引き波系」で、軽量化しても見た目の正確さを保つ部分。
                     vec2 wk = wakeHF(wp.xz, time);
                     oceanH += wk.x;
@@ -1387,11 +1413,16 @@ function createWater() {
                 vReflectUv = textureMatrix * wp;
 
                 // 法線: 大きいうねりの傾きを有限差分で近似（メッシュ解像度に依存しない見た目の滑らかさ）
-                float eps = 0.6;
-                float hX = oceanWaveHC(wp.xz + vec2(eps, 0.0), time, h, w).x - oceanH;
-                float hZ = oceanWaveHC(wp.xz + vec2(0.0, eps), time, h, w).x - oceanH;
-                vec3 approxNormal = normalize(vec3(-hX / eps, 1.0, -hZ / eps));
-                vNormal   = normalize(normalMatrix * approxNormal);
+                // （ブルーム抽出パスは黒く塗るだけなので法線は要らない）
+                if (uBloomDark < 0.5) {
+                    float eps = 0.6;
+                    float hX = oceanWaveHC(wp.xz + vec2(eps, 0.0), time, h, w).x - oceanH;
+                    float hZ = oceanWaveHC(wp.xz + vec2(0.0, eps), time, h, w).x - oceanH;
+                    vec3 approxNormal = normalize(vec3(-hX / eps, 1.0, -hZ / eps));
+                    vNormal   = normalize(normalMatrix * approxNormal);
+                } else {
+                    vNormal = vec3(0.0, 1.0, 0.0);
+                }
 
                 gl_Position = projectionMatrix * viewMatrix * wp;
                 vScreenPos  = gl_Position;
@@ -1572,6 +1603,12 @@ function createWater() {
             vec3 shipLightContribution(vec3 worldPos, vec3 viewDir, vec3 n, vec3 lPos, vec3 lColor, float lInt) {
                 // ライトが水面より上にある場合のみ反射（水中は除外）
                 if (lPos.y < 0.0) return vec3(0.0);
+                // 遠くて届かない灯りは、反射の計算（べき乗など）をせずに返す。
+                // 画面の海面の全画素×最大16灯ぶん毎回計算していたので、これだけで軽くなる。
+                vec3  toL    = lPos - worldPos;
+                float dist2  = dot(toL, toL);
+                float atten0 = 1.0 / (dist2 * 0.004 + 1.0);
+                if (atten0 * lInt < 0.0015) return vec3(0.0);
                 // ライトを水面に鏡像（y反転）
                 vec3 mirrorPos = vec3(lPos.x, -lPos.y, lPos.z);
                 vec3 toMirror  = normalize(mirrorPos - worldPos);

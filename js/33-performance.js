@@ -13,8 +13,8 @@
 //    電池の消耗が大きく減る。30fps（省電力）も選べる
 //  ・実際のフレーム時間を見て、重くなってきたら内部解像度を少し下げ、余裕が
 //    戻れば元へ上げる（動的解像度）。熱で遅くなっても滑らかさを保つ
-//  ・ブルーム（光のにじみ）の抽出は、シーン全体をもう1回描く重い処理なので
-//    1フレームおきにする（光のにじみは1フレーム遅れても見分けがつかない）
+//  （ブルームの抽出を1フレームおきにするのは、視点を動かすと光が残像のように
+//    ぶれて見えたのでやめた。12-bloom-and-deck-lighting-fx.js 参照）
 
 const perfGovernor = {
     fpsCap: 60,            // 0 = 制限なし
@@ -95,11 +95,6 @@ function _perfAdjustResolution(now) {
     } else {
         G._goodSince = -1;
     }
-}
-
-// ブルームの抽出をこのフレームで行うか（1フレームおき）
-function perfShouldRenderBloomExtract() {
-    return (perfGovernor._frameNo & 1) === 0;
 }
 
 // 画質設定を変えたとき（applyPerfPreset）は倍率をリセットする
