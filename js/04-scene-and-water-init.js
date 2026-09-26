@@ -396,6 +396,12 @@ function createWater() {
     }
 
     const waterUniforms = {
+        // ブルーム（光のにじみ）の抽出パスで、水面を黒く塗るとき 1。
+        // 以前は抽出パスの間だけ水面を別の黒いマテリアルに差し替えていたが、
+        // それだと波の形（頂点シェーダーで動かしている）が無くなって平らな
+        // 水面になり、波の陰に隠れている窓の光まで抽出され、海面から透けて
+        // にじんで見えていた。このシェーダーのまま黒く塗れば波で正しく隠れる。
+        uBloomDark: { value: 0.0 },
         normalMap1: { value: wNorm1 },
         normalMap2: { value: wNorm2 },
         normalMap3: { value: wNorm3 },
@@ -1429,6 +1435,7 @@ function createWater() {
             // 船体反射テクスチャ
             uniform sampler2D reflectionTex;
             uniform float     reflectionStrength;
+            uniform float     uBloomDark;
             // 太陽シャドウ（v83: 自前サンプリング。Three.js標準のreceiveShadowは
             // 完全自前シェーダーには自動適用されないため、手動で判定する）
             uniform sampler2D sunShadowMap;
@@ -1582,6 +1589,8 @@ function createWater() {
             }
 
             void main() {
+                // ブルーム抽出パス：波の形のまま黒く塗るだけ（重い計算は飛ばす）
+                if (uBloomDark > 0.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
                 // v153-fix3: 対数深度は頂点シェーダー側でgl_Position.zに直接エンコード
                 // 済み（EXT_frag_depthを使わない経路）。フラグメント側で追加の
                 // 書き込みは不要になった。

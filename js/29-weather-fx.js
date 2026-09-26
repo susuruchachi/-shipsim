@@ -82,6 +82,11 @@ function _buildRain() {
             varying vec3 vColor;
             varying float vAlpha;
             varying float vWorldY;
+            // 対数深度バッファ対応（船体・水面と同じ深度で比べるため。無いと雨が
+            // 空の前にしか描かれず、海面や船と重なる所で消えてしまう）
+            #ifdef USE_LOGDEPTHBUF
+                uniform float logDepthBufFC;
+            #endif
             void main() {
                 // 雨量に応じて使う雨粒の数を変える（aSeed.w が雨量より小さいものだけ）
                 if (aSeed.w > uAmount) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vAlpha = 0.0; return; }
@@ -103,6 +108,10 @@ function _buildRain() {
                 float dist = length(p - uCamPos);
                 vAlpha = (1.0 - smoothstep(8.0, uBox.x * 0.5, dist)) * mix(1.0, 0.25, aEnd);
                 gl_Position = projectionMatrix * viewMatrix * vec4(world, 1.0);
+                #ifdef USE_LOGDEPTHBUF
+                    gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
+                    gl_Position.z *= gl_Position.w;
+                #endif
             }`,
         fragmentShader: `
             varying vec3 vColor;

@@ -358,17 +358,34 @@ function _glowBuildHalos(modelRoot, panels) {
             uFar:        { value: GLOW_HALO_FADE_FAR },
             uSizeMul:    { value: 1 },
             uMinPx:      { value: 6 },
+            uFogDensity: { value: 0 },
         },
         vertexShader: `
             attribute vec3 aColor;
             attribute float aSize;
-            uniform float uStrength, uPixelScale, uNear, uFar, uSizeMul, uMinPx;
+            uniform float uStrength, uPixelScale, uNear, uFar, uSizeMul, uMinPx, uFogDensity;
             varying vec3 vColor;
             varying float vAlpha;
+            // 対数深度バッファ対応（船体・水面と同じ深度で比べるため）。
+            // 以前はこれが無く、にじみの深度が常に「いちばん奥」になっていたので、
+            // 空の前でしか見えず、海面や船体と重なる所で消えていた。
+            #ifdef USE_LOGDEPTHBUF
+                uniform float logDepthBufFC;
+            #endif
             void main() {
                 vec4 mv = modelViewMatrix * vec4(position, 1.0);
                 float dist = max(0.1, -mv.z);
-                gl_Position = projectionMatrix * mv;
+                // にじみは灯りと目の間の空気が光っているものなので、灯りの手前
+                // （にじみの半径ぶん）に置いて深度を比べる。こうしないと、灯りの
+                // すぐ手前の海面にスプライトの下半分が隠れて、水平に切れて見える。
+                float halfSize = aSize * uSizeMul * 0.5;
+                float pulled = max(0.1, dist - min(halfSize, dist * 0.5));
+                vec4 mvNear = vec4(mv.xyz * (pulled / dist), 1.0);
+                gl_Position = projectionMatrix * mvNear;
+                #ifdef USE_LOGDEPTHBUF
+                    gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
+                    gl_Position.z *= gl_Position.w;
+                #endif
                 // 遠くでも「灯りがともっている」と分かるよう、見た目の大きさに下限を設ける
                 // （実寸どおりだと400m先の灯具は3ピクセルほどで、ほとんど見えない）
                 float px = aSize * uSizeMul * uPixelScale / dist;
@@ -376,6 +393,10 @@ function _glowBuildHalos(modelRoot, panels) {
                 vColor = aColor;
                 // 下限で大きく見せているぶん、少しだけ明るさを抑える
                 vAlpha = uStrength * smoothstep(uNear, uFar, dist) * mix(0.75, 1.0, clamp(px / uMinPx - 1.0, 0.0, 1.0));
+                // 霧が濃いと、遠くの灯りのにじみも霧に溶けて薄れる（船体と同じ FogExp2 の
+                // 式を少し弱めて使う：にじみ自体が霧の光なので、船体ほどは消えない）
+                float fd = dist * uFogDensity * 0.7;
+                vAlpha *= exp(-fd * fd);
             }`,
         fragmentShader: `
             varying vec3 vColor;
@@ -412,8 +433,11 @@ function updateGlowHalos() {
     const rain = (w && w.enabled && typeof w.rain === 'number') ? w.rain : 0;    // 0〜1
     const fog  = (w && w.enabled && typeof w.fog === 'number') ? w.fog : 0;      // 0〜1
     const wet = Math.min(1.5, haze * 0.25 + rain * 0.6 + fog * 1.0);
-    u.uStrength.value = glow * GLOW_HALO_STRENGTH * (1 + wet * 0.9);
-    u.uSizeMul.value = 1 + wet * 1.2;
+    // にじみが大きくなるぶん面積で明るく見えるので、1点あたりの明るさはほぼ据え置く
+    // （以前は大きさ2.8倍×明るさ2.4倍で、霧の中ではまぶしすぎた）
+    u.uStrength.value = glow * GLOW_HALO_STRENGTH * (1 + wet * 0.2);
+    u.uSizeMul.value = 1 + wet * 0.9;
+    u.uFogDensity.value = (typeof scene !== 'undefined' && scene && scene.fog && scene.fog.density) ? scene.fog.density : 0;
     // 霧の中では近くでもにじみが見える
     u.uNear.value = GLOW_HALO_FADE_NEAR * (1 - Math.min(0.85, wet * 0.6));
     u.uFar.value  = GLOW_HALO_FADE_FAR  * (1 - Math.min(0.6, wet * 0.4));

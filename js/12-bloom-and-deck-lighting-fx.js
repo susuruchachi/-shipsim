@@ -52,6 +52,12 @@ function initBloomComposer() {
 // Points（煙突の煙・スクリューの泡・引き波など）はMeshと違って同じ手法でマテリアルを
 // 差し替えられないため、抽出パスの間だけ visible=false にして除外する。
 function darkenNoBloomObjects(obj) {
+    // 水面は自前のシェーダーのまま黒く塗る（差し替えると波の形が消えて平らになり、
+    // 波に隠れた窓の光まで抽出されてしまうため。04-scene-and-water-init.js 参照）
+    if (obj.isMesh && obj.userData.noBloom && obj.material && obj.material.uniforms && obj.material.uniforms.uBloomDark) {
+        obj.material.uniforms.uBloomDark.value = 1.0;
+        return;
+    }
     if (obj.isMesh && obj.userData.noBloom && obj.material !== noBloomDarkMaterial) {
         noBloomMaterialCache.set(obj.uuid, obj.material);
         obj.material = noBloomDarkMaterial;
@@ -63,6 +69,10 @@ function darkenNoBloomObjects(obj) {
 
 // ブルーム抽出パスの直後に元のマテリアルへ戻す。
 function restoreNoBloomObjects(obj) {
+    if (obj.isMesh && obj.material && obj.material.uniforms && obj.material.uniforms.uBloomDark) {
+        obj.material.uniforms.uBloomDark.value = 0.0;
+        return;
+    }
     const mat = noBloomMaterialCache.get(obj.uuid);
     if (mat) {
         obj.material = mat;
