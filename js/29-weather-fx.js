@@ -69,6 +69,13 @@ function _buildRain() {
         uLightCount:{ value: 0 },
         uLightR2:   { value: RAIN_LIGHT_RADIUS * RAIN_LIGHT_RADIUS },
     };
+    // 屋根の下（船内・屋根付きの甲板）には降らせない（34-shelter.js の屋根の高さ地図）
+    const SH = (typeof shelterUniforms !== 'undefined') ? shelterUniforms : null;
+    uniforms.uRoofTex = SH ? SH.uRoofTex : { value: null };
+    uniforms.uRoofInv = SH ? SH.uRoofInv : { value: new THREE.Matrix4() };
+    uniforms.uRoofMin = SH ? SH.uRoofMin : { value: new THREE.Vector2() };
+    uniforms.uRoofExt = SH ? SH.uRoofExt : { value: new THREE.Vector2(1, 1) };
+    uniforms.uRoofOn  = SH ? SH.uRoofOn  : { value: 0 };
     const mat = new THREE.ShaderMaterial({
         uniforms,
         vertexShader: `
@@ -79,6 +86,10 @@ function _buildRain() {
             uniform vec3 uLightPos[${RAIN_LIGHT_MAX}];
             uniform vec3 uLightCol[${RAIN_LIGHT_MAX}];
             uniform int uLightCount;
+            uniform sampler2D uRoofTex;
+            uniform mat4 uRoofInv;
+            uniform vec2 uRoofMin, uRoofExt;
+            uniform float uRoofOn;
             varying vec3 vColor;
             varying float vAlpha;
             varying float vWorldY;
@@ -93,6 +104,15 @@ function _buildRain() {
                 vec3 minC = uCamPos - uBox * 0.5;
                 vec3 p = aSeed.xyz * uBox + uOffset;
                 p = minC + mod(p - minC, uBox);          // 箱からはみ出したら反対側へ
+                // 屋根の下の雨粒は描かない（船内・屋根付きの甲板の中で雨が見えないように）
+                if (uRoofOn > 0.5) {
+                    vec3 lp = (uRoofInv * vec4(p, 1.0)).xyz;
+                    vec2 ruv = (lp.xz - uRoofMin) / uRoofExt;
+                    if (ruv.x > 0.0 && ruv.x < 1.0 && ruv.y > 0.0 && ruv.y < 1.0) {
+                        float roof = texture2D(uRoofTex, ruv).r;
+                        if (lp.y < roof) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vAlpha = 0.0; return; }
+                    }
+                }
                 vec3 world = p - uStreakDir * uStreakLen * aEnd;
                 vWorldY = world.y;
 
@@ -393,14 +413,24 @@ function updateWeatherFx(t) {
 function applyWeatherFxRenderOverrides() {
     _fxSaved = null;
     const f = window.lightningFlash || 0;
-    if (f < 0.005) return;
-    _fxSaved = { amb: ambientLight.intensity, hemi: hemiLight.intensity };
-    ambientLight.intensity += f * 0.22;
-    hemiLight.intensity += f * 0.4;
+    // 船内（34-shelter.js）では霧を薄くする。船室の中まで霧で霞まないように。
+    const indoor = window.shelterIndoor || 0;
+    const cutFog = indoor > 0.005 && scene.fog;
+    if (f < 0.005 && !cutFog) return;
+    _fxSaved = { amb: ambientLight.intensity, hemi: hemiLight.intensity, fog: scene.fog ? scene.fog.density : null };
+    if (f >= 0.005) {
+        ambientLight.intensity += f * 0.22;
+        hemiLight.intensity += f * 0.4;
+    }
+    if (cutFog) {
+        const cut = (typeof SHELTER_FOG_CUT !== 'undefined') ? SHELTER_FOG_CUT : 0.8;
+        scene.fog.density *= 1 - cut * indoor;
+    }
 }
 function restoreWeatherFxRenderOverrides() {
     if (!_fxSaved) return;
     ambientLight.intensity = _fxSaved.amb;
     hemiLight.intensity = _fxSaved.hemi;
+    if (_fxSaved.fog !== null && scene.fog) scene.fog.density = _fxSaved.fog;
     _fxSaved = null;
 }

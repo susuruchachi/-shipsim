@@ -646,6 +646,8 @@ function animate() {
     // 描画の直前に置くことで、この1フレームぶんの上書きだけで完結する
     // （状態の退避・復元が不要になり、時刻変化との競合も起きない）。
     // 雨・雷・空の曇り/霞（29-weather-fx.js）。雷の閃光は描画の間だけ光を上書きする。
+    // 船内・屋根の下か（34-shelter.js）。雨と霧の見た目の前に決める。
+    if (typeof updateShelter === 'function') updateShelter(t);
     if (typeof updateWeatherFx === 'function') updateWeatherFx(t);
     if (typeof applyWeatherFxRenderOverrides === 'function') applyWeatherFxRenderOverrides();
     if (typeof updateUnderwater === 'function') updateUnderwater(t);

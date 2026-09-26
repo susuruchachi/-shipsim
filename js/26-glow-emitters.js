@@ -477,7 +477,8 @@ function updateGlowHalos() {
     const haze = (w && w.enabled) ? Math.max(0, (w.haze || 1) - 1) : 0;         // 晴れ0 〜 嵐≒2.8
     const rain = (w && w.enabled && typeof w.rain === 'number') ? w.rain : 0;    // 0〜1
     const fog  = (w && w.enabled && typeof w.fog === 'number') ? w.fog : 0;      // 0〜1
-    const wet = Math.min(1.5, haze * 0.25 + rain * 0.6 + fog * 1.0);
+    // 船内（34-shelter.js）では、室内の空気は霧っていないのでにじませない
+    const wet = Math.min(1.5, haze * 0.25 + rain * 0.6 + fog * 1.0) * (1 - (window.shelterIndoor || 0));
     // にじみが大きくなるぶん面積で明るく見えるので、1点あたりの明るさはほぼ据え置く
     // （以前は大きさ2.8倍×明るさ2.4倍で、霧の中ではまぶしすぎた）
     u.uStrength.value = glow * GLOW_HALO_STRENGTH * (1 + wet * 0.2);
