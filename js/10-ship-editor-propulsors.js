@@ -125,6 +125,11 @@ function toggleGizmo(type, index = -1, mode = 'translate') {
         if (entry) { targetMesh = entry.marker; btnId = `gizmo-viewpoint_lookout-${index}`; }
     }
 
+    // 他のファイルが登録する目印（汽笛・機関室の位置など。36-horns.js）
+    if (!targetMesh && typeof getExtraGizmoTarget === 'function') {
+        const ex = getExtraGizmoTarget(type, index);
+        if (ex && ex.mesh) { targetMesh = ex.mesh; btnId = ex.btnId || btnId; }
+    }
     if (!targetMesh) return;
 
     if (currentGizmoTarget === targetMesh && currentGizmoMode === mode) {
@@ -153,6 +158,7 @@ function toggleGizmo(type, index = -1, mode = 'translate') {
 function onGizmoChange() {
     if (!currentGizmoTarget) return;
     const pos = currentGizmoTarget.position;
+    if (typeof onExtraGizmoChange === 'function' && onExtraGizmoChange(currentGizmoType, currentGizmoIndex, currentGizmoTarget)) return;
 
     if (currentGizmoType === 'pivot') {
         const _old = (typeof _captureModelOffsetTransform === 'function') ? _captureModelOffsetTransform() : null;
@@ -718,3 +724,67 @@ function updateRudder3D() {
     syncSettingsVisibility();
 }
 
+
+// ════════════════════════════════════════════════════════════════
+//  目印（視点・重心・舵・回転軸・音の位置など）を画面上で一定の大きさにする
+// ════════════════════════════════════════════════════════════════
+// 目印は船の座標で作ってあるので、船が大きいと巨大になり、ズームしても
+// 大きさが変わらず、中心がどこか分かりにくくギズモも掴みにくかった。
+// カメラからの距離に合わせて毎フレーム拡大率を変え、画面上ではいつも
+// 小さな一定の大きさ（画面の高さの約2%）で見えるようにする。
+// ギズモの矢印が透けて見えるよう、目印は少し半透明にする。
+const MARKER_SCREEN_FRACTION = 0.022;   // 画面の高さに対する目印の大きさ（半径）
+let _markerList = [], _markerListAt = -1;
+const _mkWp = new THREE.Vector3(), _mkWs = new THREE.Vector3();
+function _collectMarkers() {
+    _markerList = [];
+    if (typeof shipGroup === 'undefined' || !shipGroup) return;
+    shipGroup.traverse((o) => {
+        const ud = o.userData || {};
+        if (ud.isViewpointMarker || ud.screenSizeMarker || ud.isGlbPivotMarker
+            || (typeof cgMarker !== 'undefined' && o === cgMarker) || (typeof rudderMarker !== 'undefined' && o === rudderMarker)) {
+            _markerList.push(o);
+        }
+    });
+    for (const o of _markerList) {
+        if (o.userData._mkR) continue;
+        // 大きさの基準：自分（と子）の形の外接球の半径（拡大率1のとき）
+        let r = 0;
+        o.traverse((c) => {
+            if (!c.geometry) return;
+            if (!c.geometry.boundingSphere) c.geometry.computeBoundingSphere();
+            if (c.geometry.boundingSphere) r = Math.max(r, c.geometry.boundingSphere.radius + (c === o ? 0 : c.position.length()));
+            if (c.material && c !== o && !c.userData._mkFaded) {
+                c.userData._mkFaded = true;
+                if (c.material.opacity === undefined || c.material.opacity >= 1) { c.material.transparent = true; c.material.opacity = 0.75; }
+            }
+        });
+        o.userData._mkR = Math.max(1e-4, r);
+        o.userData._mkBase = o.scale.x || 1;
+        if (o.material && !o.userData._mkFaded) {
+            o.userData._mkFaded = true;
+            if (o.material.opacity === undefined || o.material.opacity >= 1) { o.material.transparent = true; o.material.opacity = 0.75; }
+        }
+    }
+}
+function updateMarkerScales() {
+    if (typeof camera === 'undefined' || !camera) return;
+    const now = performance.now();
+    if (now - _markerListAt > 1000) { _markerListAt = now; _collectMarkers(); }
+    // 画面の高さ[ワールド単位]：透視は距離に比例、正投影は固定
+    const persp = !!camera.isPerspectiveCamera;
+    const k = persp ? 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) : (camera.top - camera.bottom) / (camera.zoom || 1);
+    for (const o of _markerList) {
+        if (!o.visible || !o.parent) continue;
+        o.getWorldPosition(_mkWp);
+        const viewH = persp ? k * _mkWp.distanceTo(camera.position) : k;
+        const want = viewH * MARKER_SCREEN_FRACTION;       // 画面上の半径（ワールド単位）
+        o.parent.getWorldScale(_mkWs);
+        const parentScale = Math.max(1e-6, _mkWs.x);
+        const s = want / (o.userData._mkR * parentScale);
+        // 元の大きさより大きくはしない（遠くでも元の大きさが上限。近づくと小さく）
+        const sc = Math.min(o.userData._mkBase, s);
+        if (Math.abs(o.scale.x - sc) > sc * 0.01) o.scale.setScalar(sc);
+    }
+}
+window.updateMarkerScales = updateMarkerScales;

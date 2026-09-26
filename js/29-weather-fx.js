@@ -31,6 +31,18 @@ if (THREE.ShaderChunk && THREE.ShaderChunk.fog_fragment) {
     #endif
     fogOutColor = linearToOutputTexel( vec4( fogOutColor, 1.0 ) ).rgb;
     gl_FragColor.rgb = mix( gl_FragColor.rgb, fogOutColor, fogFactor );
+    #if defined( STANDARD ) && defined( FOG_EXP2 )
+        // 発光面（窓・灯具）は霧の中でも遠くまで見える：光は物の色より霧に
+        // 溶けにくいので、発光のぶんだけ、ずっと薄い霧として足し戻す
+        float fogDE = fogDensity * 0.3 * fogDepth;
+        float fogFactorE = 1.0 - exp( - fogDE * fogDE );
+        vec3 emOut = totalEmissiveRadiance;
+        #if defined( TONE_MAPPING )
+            emOut = toneMapping( emOut );
+        #endif
+        emOut = linearToOutputTexel( vec4( emOut, 1.0 ) ).rgb;
+        gl_FragColor.rgb += emOut * max( 0.0, fogFactor - fogFactorE );
+    #endif
 #endif
 `;
 }

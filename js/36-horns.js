@@ -52,6 +52,7 @@ function _defaultShipSound() {
         horns: [_defaultHorn('steam_chime')],
         engine: { type: 'steam_recip', volume: 1 },
         enginePos: { x: 0, y: 0, z: 0 },
+        engineSym: false,   // 左右対称の2か所から鳴らす（推進器のシンメトリーと同じ）
     };
 }
 function _defaultHorn(type) {
@@ -62,7 +63,8 @@ function _defaultHorn(type) {
         x = 0; y = +(f.y + (f.ry || 1) * 0.9).toFixed(2); z = +(f.z + (f.rx || 0.3) * 1.1).toFixed(2);
     }
     const T = HORN_TYPES[type] || HORN_TYPES.steam_chime;
-    return { name: T.label.replace(/（.*$/, ''), type, notes: T.notes.slice(), volume: 1, x, y, z, main: true };
+    const fogType = type === 'diaphone' || type === 'nautophone' || type === 'bell' || type === 'gong';
+    return { name: T.label.replace(/（.*$/, ''), type, notes: T.notes.slice(), volume: 1, x, y, z, main: !fogType, fog: fogType };
 }
 
 // ── 音名 ⇔ 周波数 ─────────────────────────────────────────────
@@ -346,19 +348,31 @@ function _mainHornIdx() {
 }
 function hornPressMain() { _mainHornIdx().forEach(hornPress); }
 function hornReleaseMain() { _mainHornIdx().forEach(hornRelease); }
+// 霧中信号に使う汽笛（「霧中信号用」にチェックしたもの。無ければ 📯 用）
+function _fogHornIdx() {
+    const idx = [];
+    shipSound.horns.forEach((h, i) => { if (h.fog) idx.push(i); });
+    return idx.length ? idx : _mainHornIdx();
+}
+function hornPressFog() { _fogHornIdx().forEach(hornPress); }
+function hornReleaseFog() { _fogHornIdx().forEach(hornRelease); }
+window.hornPressFog = hornPressFog;
+window.hornReleaseFog = hornReleaseFog;
 window.hornPressMain = hornPressMain;
 window.hornReleaseMain = hornReleaseMain;
 
 // 信号（長音・短音の組み合わせ）を吹鳴する。pattern: 'L','S' の並び
 let _signalTimers = [];
-function playHornSignal(pattern, repeatGap) {
+function playHornSignal(pattern, role) {
     if (!audioEnsure()) return;
     stopHornSignal();
+    const press = role === 'fog' ? hornPressFog : hornPressMain;
+    const release = role === 'fog' ? hornReleaseFog : hornReleaseMain;
     let t = 0;
     for (const ch of pattern) {
         const d = ch === 'L' ? HORN_LONG : HORN_SHORT;
-        _signalTimers.push(setTimeout(hornPressMain, t * 1000));
-        _signalTimers.push(setTimeout(hornReleaseMain, (t + d) * 1000));
+        _signalTimers.push(setTimeout(press, t * 1000));
+        _signalTimers.push(setTimeout(release, (t + d) * 1000));
         t += d + (ch === 'L' ? 2.0 : HORN_GAP);
     }
 }
@@ -403,7 +417,7 @@ function updateHorns(t, dt) {
     if (hornAuto.fog && foggy) {
         const nowMs = performance.now();
         if (nowMs > hornAuto._nextFog) {
-            if (hornAuto._nextFog > 0) playHornSignal(Math.abs(physics.speed || 0) > 0.5 ? 'L' : 'LL');
+            if (hornAuto._nextFog > 0) playHornSignal(Math.abs(physics.speed || 0) > 0.5 ? 'L' : 'LL', 'fog');
             hornAuto._nextFog = nowMs + 120000;
         }
     } else {
@@ -428,6 +442,8 @@ function applyShipSoundConfig(s) {
     shipSound.horns = (s && Array.isArray(s.horns)) ? s.horns.map(h => Object.assign(_defaultHorn(h.type || 'steam_single'), h)) : d.horns;
     shipSound.engine = Object.assign(d.engine, (s && s.engine) || {});
     shipSound.enginePos = Object.assign(d.enginePos, (s && s.enginePos) || {});
+    shipSound.engineSym = !!(s && s.engineSym);
+    _soundMarkersDirty = true;
     renderSoundPanel();
 }
 window.getShipSoundConfig = getShipSoundConfig;
@@ -477,12 +493,14 @@ function renderSoundPanel() {
                     <input type="range" class="sp-slider" min="0" max="1.5" step="0.05" value="${h.volume != null ? h.volume : 1}" oninput="shipSound.horns[${i}].volume=parseFloat(this.value)">
                 </div>
                 <div class="sp-xyz-row">
-                    <span class="sp-axis-label">X:</span><input type="number" class="sp-xyz-input" value="${h.x}" step="0.05" oninput="shipSound.horns[${i}].x=parseFloat(this.value)||0">
-                    <span class="sp-axis-label">Y:</span><input type="number" class="sp-xyz-input" value="${h.y}" step="0.05" oninput="shipSound.horns[${i}].y=parseFloat(this.value)||0">
-                    <span class="sp-axis-label">Z:</span><input type="number" class="sp-xyz-input" value="${h.z}" step="0.05" oninput="shipSound.horns[${i}].z=parseFloat(this.value)||0">
+                    <span class="sp-axis-label">X:</span><input type="number" id="horn-x-${i}" class="sp-xyz-input" value="${h.x}" step="0.05" oninput="shipSound.horns[${i}].x=parseFloat(this.value)||0">
+                    <span class="sp-axis-label">Y:</span><input type="number" id="horn-y-${i}" class="sp-xyz-input" value="${h.y}" step="0.05" oninput="shipSound.horns[${i}].y=parseFloat(this.value)||0">
+                    <span class="sp-axis-label">Z:</span><input type="number" id="horn-z-${i}" class="sp-xyz-input" value="${h.z}" step="0.05" oninput="shipSound.horns[${i}].z=parseFloat(this.value)||0">
                 </div>
                 <div class="sp-row" style="gap:8px;flex-wrap:wrap;">
-                    <label class="sp-toggle"><input type="checkbox" ${h.main ? 'checked' : ''} onchange="shipSound.horns[${i}].main=this.checked"> 📯ボタン・信号で鳴らす</label>
+                    <label class="sp-toggle"><input type="checkbox" ${h.main ? 'checked' : ''} onchange="shipSound.horns[${i}].main=this.checked"> 📯ボタン・操船信号用</label>
+                    <label class="sp-toggle"><input type="checkbox" ${h.fog ? 'checked' : ''} onchange="shipSound.horns[${i}].fog=this.checked"> 霧中信号用（霧笛）</label>
+                    <button class="sp-gizmo-btn" id="gizmo-horn-${i}" onclick="toggleGizmo('horn', ${i})">📍 ギズモ</button>
                     <button class="sp-gizmo-btn horn-test-btn" data-horn="${i}">🔊 押している間 鳴らす${i < 9 ? `（${i + 1}キー）` : ''}</button>
                 </div>`;
             list.appendChild(card);
@@ -499,11 +517,13 @@ function renderSoundPanel() {
     const ev = document.getElementById('engine-sound-volume');
     if (ev) ev.value = shipSound.engine.volume != null ? shipSound.engine.volume : 1;
     ['x', 'y', 'z'].forEach((k) => { const el = document.getElementById('engine-sound-' + k); if (el) el.value = shipSound.enginePos[k]; });
+    const es = document.getElementById('engine-sound-sym'); if (es) es.checked = !!shipSound.engineSym;
     // 端末ごとの設定
     const S = audio.settings;
     const set = (id, v, prop = 'value') => { const el = document.getElementById(id); if (el) el[prop] = v; };
     set('audio-enabled', S.enabled, 'checked');
     set('audio-master', S.master); set('audio-horn', S.horn); set('audio-engine', S.engine); set('audio-env', S.env);
+    set('audio-bridge', S.bridge != null ? S.bridge : 0.8);
     set('horn-auto-fog', hornAuto.fog, 'checked');
     set('horn-auto-astern', hornAuto.astern, 'checked');
 }
@@ -512,6 +532,7 @@ window.renderSoundPanel = renderSoundPanel;
 function hornAdd() {
     const sel = document.getElementById('horn-add-type');
     shipSound.horns.push(_defaultHorn(sel ? sel.value : 'steam_single'));
+    _soundMarkersDirty = true;
     renderSoundPanel();
 }
 function hornRemove(i) {
@@ -519,6 +540,8 @@ function hornRemove(i) {
     if (R) { R.presses = 1; hornRelease(i); if (R.em) R.em.disconnect(); }
     _hornRuntime.splice(i, 1);
     shipSound.horns.splice(i, 1);
+    if (typeof disableGizmo === 'function') disableGizmo();
+    _soundMarkersDirty = true;
     renderSoundPanel();
 }
 function hornSetType(i, type) {
@@ -546,9 +569,75 @@ function hornRemoveNote(i, j) {
 function setEngineSound(key, v) {
     if (key === 'type') shipSound.engine.type = v;
     else if (key === 'volume') shipSound.engine.volume = parseFloat(v) || 0;
+    else if (key === 'sym') shipSound.engineSym = !!v;
     else shipSound.enginePos[key] = parseFloat(v) || 0;
 }
 Object.assign(window, { hornAdd, hornRemove, hornSetType, hornSetNote, hornAddNote, hornRemoveNote, setEngineSound, setHornAuto });
+
+// ════════════════════════════════════════════════════════════════
+//  音の位置の目印とギズモ（船体設定を開いている間だけ表示）
+// ════════════════════════════════════════════════════════════════
+//  汽笛：黄色の角錐、機関室：赤い立方体（シンメトリーのときは反対側に薄い印）
+let _soundMarkers = { horns: [], engine: null, engineMirror: null };
+let _soundMarkersDirty = true;
+function _mkSoundMarker(color, geo) {
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.9 }));
+    m.renderOrder = 999;
+    m.userData.isViewpointMarker = true;   // モデル差し替え時の一括削除から除外
+    m.userData.screenSizeMarker = true;    // 画面上で一定の大きさ（10-ship-editor の updateMarkerScales）
+    return m;
+}
+function _rebuildSoundMarkers() {
+    _soundMarkersDirty = false;
+    if (typeof shipGroup === 'undefined' || !shipGroup) return;
+    for (const m of _soundMarkers.horns) if (m.parent) m.parent.remove(m);
+    [_soundMarkers.engine, _soundMarkers.engineMirror].forEach(m => { if (m && m.parent) m.parent.remove(m); });
+    _soundMarkers.horns = shipSound.horns.map(() => { const m = _mkSoundMarker(0xffd23c, new THREE.ConeGeometry(0.12, 0.3, 4)); shipGroup.add(m); return m; });
+    _soundMarkers.engine = _mkSoundMarker(0xff4444, new THREE.BoxGeometry(0.25, 0.25, 0.25)); shipGroup.add(_soundMarkers.engine);
+    _soundMarkers.engineMirror = _mkSoundMarker(0xff4444, new THREE.BoxGeometry(0.25, 0.25, 0.25));
+    _soundMarkers.engineMirror.material.opacity = 0.35; shipGroup.add(_soundMarkers.engineMirror);
+}
+function _updateSoundMarkers() {
+    if (_soundMarkersDirty || _soundMarkers.horns.length !== shipSound.horns.length
+        || (_soundMarkers.engine && typeof shipGroup !== 'undefined' && _soundMarkers.engine.parent !== shipGroup)) _rebuildSoundMarkers();
+    const panel = document.getElementById('settings-panel');
+    const show = !!(panel && panel.classList.contains('open'));
+    const dragging = typeof currentGizmoType !== 'undefined' ? currentGizmoType : null;
+    shipSound.horns.forEach((h, i) => {
+        const m = _soundMarkers.horns[i]; if (!m) return;
+        m.visible = show;
+        if (!(dragging === 'horn' && currentGizmoIndex === i)) m.position.set(h.x, h.y, h.z);
+    });
+    const e = _soundMarkers.engine, em = _soundMarkers.engineMirror, p = shipSound.enginePos;
+    if (e) { e.visible = show; if (dragging !== 'engine') e.position.set(p.x, p.y, p.z); }
+    if (em) { em.visible = show && !!shipSound.engineSym && Math.abs(p.x) > 1e-3; em.position.set(-p.x, p.y, p.z); }
+}
+// 10-ship-editor-propulsors.js の toggleGizmo / onGizmoChange から呼ばれる
+function getExtraGizmoTarget(type, index) {
+    if (type === 'horn') { _updateSoundMarkers(); return { mesh: _soundMarkers.horns[index], btnId: `gizmo-horn-${index}` }; }
+    if (type === 'engine') { _updateSoundMarkers(); return { mesh: _soundMarkers.engine, btnId: 'gizmo-engine' }; }
+    return null;
+}
+function onExtraGizmoChange(type, index, target) {
+    const p = target.position;
+    const r = (v) => Math.round(v * 1000) / 1000;
+    if (type === 'horn' && shipSound.horns[index]) {
+        const h = shipSound.horns[index];
+        h.x = r(p.x); h.y = r(p.y); h.z = r(p.z);
+        ['x', 'y', 'z'].forEach(k => { const el = document.getElementById(`horn-${k}-${index}`); if (el) el.value = h[k]; });
+        return true;
+    }
+    if (type === 'engine') {
+        const e = shipSound.enginePos;
+        e.x = r(p.x); e.y = r(p.y); e.z = r(p.z);
+        ['x', 'y', 'z'].forEach(k => { const el = document.getElementById('engine-sound-' + k); if (el) el.value = e[k]; });
+        return true;
+    }
+    return false;
+}
+window.getExtraGizmoTarget = getExtraGizmoTarget;
+window.updateSoundMarkers = _updateSoundMarkers;
+window.onExtraGizmoChange = onExtraGizmoChange;
 
 // 押している間だけ鳴らすボタン（タッチ・マウス両対応）
 function _bindHold(el, down, up) {

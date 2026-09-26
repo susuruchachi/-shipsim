@@ -25,7 +25,7 @@ const audio = {
     master: null, comp: null, muffle: null,
     buses: {},
     noise: null, brown: null,
-    settings: { enabled: true, master: 0.8, horn: 1.0, engine: 0.7, env: 0.7 },
+    settings: { enabled: true, master: 0.8, horn: 1.0, engine: 0.7, env: 0.7, bridge: 0.8 },
     env: null, engine: null, engineType: null,
     lastT: -1, lastSlam: 0,
     _camRight: new THREE.Vector3(), _tmp: new THREE.Vector3(),
@@ -84,7 +84,7 @@ function _audioSetupGraph(c) {
     audio.muffle.Q.value = 0.5;
     audio.muffle.connect(audio.master);
 
-    for (const k of ['horn', 'engine', 'env']) {
+    for (const k of ['horn', 'engine', 'env', 'bridge']) {
         const g = c.createGain();
         g.connect(audio.muffle);
         audio.buses[k] = g;
@@ -126,6 +126,7 @@ function applyAudioVolumes() {
     audio.buses.horn.gain.setTargetAtTime(S.horn, now, 0.05);
     audio.buses.engine.gain.setTargetAtTime(S.engine, now, 0.05);
     audio.buses.env.gain.setTargetAtTime(S.env, now, 0.05);
+    audio.buses.bridge.gain.setTargetAtTime(S.bridge != null ? S.bridge : 0.8, now, 0.05);   // テレグラフのベルなど（37-bridge-controls.js）
     if (_audioOffline()) return;
     if (!S.enabled && audio.ctx.state === 'running') audio.ctx.suspend();
     if (S.enabled && audio.ctx.state === 'suspended' && document.visibilityState === 'visible') audio.ctx.resume();
@@ -168,6 +169,7 @@ class AudioEmitter {
         if (this.pan) { this.gain.connect(this.pan); this.pan.connect(dest); }
         else this.gain.connect(dest);
         this._first = true;
+        this._delay = 0; this._lastNow = 0;
     }
     update(worldPos, extraGain = 1) {
         if (typeof camera === 'undefined' || !camera) return;
@@ -177,10 +179,21 @@ class AudioEmitter {
         const g = this.ref / (this.ref + this.rolloff * Math.max(0, d - this.ref)) * extraGain;
         const delay = Math.min(AUDIO_MAX_DELAY, d / AUDIO_SPEED_OF_SOUND);
         const cutoff = Math.max(500, Math.min(18000, 18000 * Math.exp(-d / 2200)));
-        const tc = this._first ? 0.001 : 0.08;
+        // 音の遅れ：変化の速さを抑える。遅れが変わる速さがそのまま音程の変化
+        // （ドップラー効果）になるので、視点を勢いよく動かしたときに音程が
+        // 大きく揺れないよう、音程の変化を約1.5%までに抑える。視点を別の場所へ
+        // 一瞬で移したとき（大きな差）は、追いかけずにその場で合わせる。
+        const step = this._first ? 0 : Math.max(0, now - this._lastNow);
+        this._lastNow = now;
+        if (this._first || Math.abs(delay - this._delay) > 0.8) this._delay = delay;
+        else {
+            const lim = 0.015 * step;
+            this._delay += Math.max(-lim, Math.min(lim, delay - this._delay));
+        }
+        const tc = this._first ? 0.001 : 0.05;
         this._first = false;
         this.gain.gain.setTargetAtTime(g, now, 0.05);
-        this.delay.delayTime.setTargetAtTime(delay, now, tc);
+        this.delay.delayTime.setTargetAtTime(this._delay, now, tc);
         this.lp.frequency.setTargetAtTime(cutoff, now, 0.1);
         if (this.pan) {
             audio._camRight.set(1, 0, 0).applyQuaternion(camera.quaternion);
@@ -200,11 +213,25 @@ function audioShipPoint(x, y, z, out) {
 }
 
 // 狭いパルスの周期波形（リズムのある音の「ドッ・ドッ」を作るのに使う）
-function _audioPulseWave(n) {
+// phase：1周期のうち、どれだけ遅らせるか（0〜1）。n が小さいほど幅の広いパルス
+function _audioPulseWave(n, phase = 0) {
     const c = audio.ctx;
     const real = new Float32Array(n + 1), imag = new Float32Array(n + 1);
-    for (let k = 1; k <= n; k++) real[k] = (n - k + 1) / n;   // なめらかな（リンギングの無い）パルス
+    for (let k = 1; k <= n; k++) {
+        const a = (n - k + 1) / n;   // なめらかな（リンギングの無い）パルス
+        real[k] = a * Math.cos(2 * Math.PI * k * phase);
+        imag[k] = a * Math.sin(2 * Math.PI * k * phase);
+    }
     return c.createPeriodicWave(real, imag);
+}
+// 低音を小さなスピーカーでも感じられるよう、倍音を足す歪み
+function _audioSat(amount, dest) {
+    const ws = audio.ctx.createWaveShaper();
+    const n = 1024, curve = new Float32Array(n);
+    for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; curve[i] = Math.tanh(x * amount) / Math.tanh(amount); }
+    ws.curve = curve;
+    if (dest) ws.connect(dest);
+    return ws;
 }
 
 function _mkGain(v, dest) { const g = audio.ctx.createGain(); g.gain.value = v; if (dest) g.connect(dest); return g; }
@@ -282,7 +309,9 @@ function audioThunder(dist, power, hasBolt) {
     if (!audio.ctx || (audio.ctx.state !== 'running' && !_audioOffline()) || !audio.env) return;
     const delay = Math.min(8, dist / AUDIO_SPEED_OF_SOUND);
     const near = Math.max(0, 1 - dist / 1500);
-    const vol = (0.35 + 0.65 * near) * (0.6 + 0.4 * (power || 1));
+    const vol = 1.7 * (0.4 + 0.6 * near) * (0.6 + 0.4 * (power || 1));
+    // 腹に響く低い「ドーン」（遠くても低音はよく届く）
+    audioBurst(audio.env.outdoor, { when: delay + 0.05, dur: 3.5 + near * 2, attack: 0.15, gain: 0.9 * vol, type: 'lowpass', freq: 70 + near * 40, q: 0.7, kind: 'brown' });
     const dest = audio.env.outdoor;
     if (hasBolt && near > 0.3) {
         // 近い落雷は「バリッ」という裂ける音から始まる
@@ -407,6 +436,7 @@ function _audioDisposeEngine() {
     if (!N) return;
     for (const n of N.nodes) { try { if (n.stop) n.stop(); } catch (e) { /* ignore */ } try { n.disconnect(); } catch (e) { /* ignore */ } }
     if (N.em) N.em.disconnect();
+    if (N.em2) N.em2.disconnect();
     audio.engine = null;
 }
 
@@ -419,7 +449,10 @@ function _audioBuildEngine(type) {
     const keep = (n) => { nodes.push(n); return n; };
     const em = new AudioEmitter(audio.buses.engine, 30, 1);
     const out = keep(_mkGain(1, em.input));
-    const N = { type, em, out, nodes, p: {} };
+    // シンメトリー配置：左右2か所の機関室から同じ音を出す（それぞれ半分の大きさ）
+    const em2 = new AudioEmitter(audio.buses.engine, 30, 1);
+    out.connect(em2.input);
+    const N = { type, em, em2, out, nodes, p: {} };
     const noise = (k) => keep(audioNoiseSource(k));
 
     // どの形式にも：補機・ボイラーの連続音（止まっていても鳴る）
@@ -427,25 +460,38 @@ function _audioBuildEngine(type) {
     noise('white').connect(keep(_mkFilter('highpass', 2500, 0.5, N.p.aux)));
     N.p.hum = keep(_mkGain(0.03, out));
     keep(_mkOsc('sine', 60, N.p.hum));
+    // どの形式にも：船体を伝わる低い唸り（重さ）
+    N.p.body = keep(_mkGain(0, out));
+    const bodySat = keep(_audioSat(2.2, N.p.body));
+    noise('brown').connect(keep(_mkFilter('lowpass', 110, 0.7, keep(_mkGain(1.6, bodySat)))));
+    N.p.bodyOsc = keep(_mkOsc('sine', 34, keep(_mkGain(0.7, bodySat))));
 
     if (type === 'steam_recip' || type === 'combined') {
-        // 「シュッ・ドッ」：ピストンの往復ごとの蒸気の出入りと、クランクの振動
+        // 「ガッシュン、ガッシュン」：クランクが回るたびの重い衝撃（ガッ）と、
+        // 少し遅れて吐き出される蒸気（シュン）。1回転に2回。
+        // 小さなスピーカーでも重さが伝わるよう、低音は歪ませて倍音を足す。
         N.p.beat = keep(_mkOsc('sine', 1, null));
-        N.p.beat.setPeriodicWave(_audioPulseWave(10));
-        N.p.chuff = keep(_mkGain(0, out));
-        noise('white').connect(keep(_mkFilter('bandpass', 260, 0.9, N.p.chuff)));
+        N.p.beat.setPeriodicWave(_audioPulseWave(16));                 // 衝撃：鋭いパルス
+        N.p.exh = keep(_mkOsc('sine', 1, null));
+        N.p.exh.setPeriodicWave(_audioPulseWave(5, 0.16));             // 排気：少し遅れた幅広いパルス
         N.p.thump = keep(_mkGain(0, out));
-        keep(_mkOsc('sine', 46, N.p.thump));
-        N.p.beatDepthC = keep(_mkGain(0, N.p.chuff.gain));
+        const sat = keep(_audioSat(3.2, N.p.thump));
+        keep(_mkOsc('sine', 41, keep(_mkGain(1, sat))));
+        keep(_mkOsc('sine', 62, keep(_mkGain(0.6, sat))));
+        noise('brown').connect(keep(_mkFilter('lowpass', 240, 0.8, keep(_mkGain(1.4, sat)))));
+        N.p.chuff = keep(_mkGain(0, out));
+        noise('white').connect(keep(_mkFilter('bandpass', 850, 0.6, N.p.chuff)));
+        noise('brown').connect(keep(_mkFilter('bandpass', 320, 0.7, keep(_mkGain(1.5, N.p.chuff)))));
         N.p.beatDepthT = keep(_mkGain(0, N.p.thump.gain));
-        N.p.beat.connect(N.p.beatDepthC); N.p.beat.connect(N.p.beatDepthT);
-        // 弁やクロスヘッドの「カチャ」（1回転に2回）
-        N.p.clankOsc = keep(_mkOsc('sine', 1, null));
-        N.p.clankOsc.setPeriodicWave(_audioPulseWave(24));
+        N.p.beatDepthC = keep(_mkGain(0, N.p.chuff.gain));
+        N.p.beat.connect(N.p.beatDepthT);
+        N.p.exh.connect(N.p.beatDepthC);
+        // 弁・クロスヘッドの金属音「カシャ」（衝撃と同時）
+        N.p.clankOsc = N.p.beat;
         N.p.clank = keep(_mkGain(0, out));
-        noise('white').connect(keep(_mkFilter('bandpass', 2200, 3, N.p.clank)));
+        noise('white').connect(keep(_mkFilter('bandpass', 1300, 4, N.p.clank)));
         N.p.clankDepth = keep(_mkGain(0, N.p.clank.gain));
-        N.p.clankOsc.connect(N.p.clankDepth);
+        N.p.beat.connect(N.p.clankDepth);
     }
     if (type === 'steam_turbine' || type === 'combined' || type === 'gas_turbine') {
         N.p.whine = keep(_mkGain(0, out));
@@ -463,7 +509,8 @@ function _audioBuildEngine(type) {
         N.p.beat = keep(_mkOsc('sine', 1, null));
         N.p.beat.setPeriodicWave(_audioPulseWave(14));
         N.p.thump = keep(_mkGain(0, out));
-        keep(_mkOsc('sine', 38, N.p.thump));
+        keep(_mkOsc('sine', 38, keep(_audioSat(3, N.p.thump))));
+        keep(_mkOsc('sine', 57, keep(_mkGain(0.5, keep(_audioSat(3, N.p.thump))))));
         N.p.knock = keep(_mkGain(0, out));
         noise('brown').connect(keep(_mkFilter('lowpass', 420, 0.8, N.p.knock)));
         N.p.beatDepthT = keep(_mkGain(0, N.p.thump.gain));
@@ -476,6 +523,8 @@ function _audioBuildEngine(type) {
         N.p.fireLp = keep(_mkFilter('lowpass', 300, 1.2, N.p.fire));
         N.p.fireOsc = keep(_mkOsc('sawtooth', 40, N.p.fireLp));
         N.p.fireOsc2 = keep(_mkOsc('square', 20, keep(_mkGain(0.35, N.p.fireLp))));
+        // 爆発の半分の高さの低音（重さ）
+        N.p.fireSub = keep(_mkOsc('sine', 20, keep(_mkGain(0.8, keep(_audioSat(2.5, N.p.fire))))));
         N.p.rattle = keep(_mkGain(0, out));
         noise('white').connect(keep(_mkFilter('bandpass', 1300, 1.5, N.p.rattle)));
         N.p.rattleAm = keep(_mkOsc('sine', 40, null));
@@ -507,7 +556,12 @@ function _audioUpdateEngine(t, dt) {
     const r = Math.min(1, Math.abs(physics.propRpm || 0));
     const slip = (typeof getPropSlip === 'function') ? getPropSlip() : 0;
     const load = Math.min(1, r * (0.6 + 0.8 * slip));             // 加速・逆転中ほど苦しそうに
-    const run = (T.idle || 0) + (1 - (T.idle || 0)) * r;           // 機関の回転（アイドリング込み）
+    // 機関終了（テレグラフの F.W.E.）の後は、アイドリングもゆっくり止まる
+    const liveTarget = (physics.telegraphAnswerSpecial === 'fwe' && r < 0.02) ? 0 : 1;
+    audio._engLive = (audio._engLive === undefined) ? liveTarget
+        : audio._engLive + (liveTarget - audio._engLive) * Math.min(1, (dt || 0) / (liveTarget ? 3 : 6));
+    const live = audio._engLive;
+    const run = (T.idle || 0) * live + (1 - (T.idle || 0)) * r;    // 機関の回転（アイドリング込み）
     const revHz = (T.maxRpm || 60) / 60 * run;
     const set = (param, v, tc = 0.15) => param.setTargetAtTime(v, now, tc);
     const vol = (shipSound && shipSound.engine && Number.isFinite(shipSound.engine.volume)) ? shipSound.engine.volume : 1;
@@ -515,22 +569,27 @@ function _audioUpdateEngine(t, dt) {
     // 機関室の位置（煙突の下あたり、船体の中）。船内にいると大きく聞こえる
     const indoor = window.shelterIndoor || 0;
     const ep = (typeof shipSound !== 'undefined' && shipSound.enginePos) ? shipSound.enginePos : { x: 0, y: 0, z: 0 };
-    N.em.update(audioShipPoint(ep.x, ep.y, ep.z, audio._tmpE || (audio._tmpE = new THREE.Vector3())), vol * (0.35 + 0.65 * indoor));
+    const sym = !!(typeof shipSound !== 'undefined' && shipSound.engineSym && Math.abs(ep.x) > 1e-3);
+    const eg = vol * (0.55 + 0.45 * indoor) * (sym ? 0.5 : 1);
+    N.em.update(audioShipPoint(ep.x, ep.y, ep.z, audio._tmpE || (audio._tmpE = new THREE.Vector3())), eg);
+    N.em2.update(audioShipPoint(-ep.x, ep.y, ep.z, audio._tmpE2 || (audio._tmpE2 = new THREE.Vector3())), sym ? eg : 0);
 
-    set(N.p.aux.gain, type === 'electric' ? 0.004 : 0.02 + 0.02 * r);
+    set(N.p.aux.gain, (type === 'electric' ? 0.004 : 0.02 + 0.02 * r) * (0.35 + 0.65 * live));   // 補機（発電機）は機関終了でも少し回る
     set(N.p.hum.gain, 0.025 + 0.03 * run);
+    // 重さ：回転と負荷で強まる（電気推進は静か）
+    const bodyAmt = type === 'electric' ? 0.25 : 1;
+    set(N.p.body.gain, bodyAmt * (0.05 + 0.22 * run + 0.12 * load));
+    set(N.p.bodyOsc.frequency, 26 + 16 * run, 0.5);
 
-    if (N.p.chuff) {
-        const beats = revHz * (T.beatsPerRev || 6);
+    if (N.p.chuff && N.p.exh) {
+        const beats = revHz * 2;   // 1回転に「ガッシュン」2回
         set(N.p.beat.frequency, Math.max(0.01, beats), 0.3);
-        set(N.p.clankOsc.frequency, Math.max(0.01, revHz * 2), 0.3);
+        set(N.p.exh.frequency, Math.max(0.01, beats), 0.3);
         const on = r > 0.01 ? 1 : 0;
-        // パルスは短いので、深さは大きめに取る（1拍ごとの「シュッ・ドッ」をはっきり）
-        set(N.p.beatDepthC.gain, on * (0.5 + 1.1 * load));
-        set(N.p.beatDepthT.gain, on * (0.5 + 0.7 * load));
-        set(N.p.clankDepth.gain, on * 0.18 * (0.4 + r));
-        // 拍の合間も、蒸気の流れる音が低く続く
-        set(N.p.chuff.gain, on * 0.04 * (0.3 + r));
+        set(N.p.beatDepthT.gain, on * (0.7 + 0.9 * load));
+        set(N.p.beatDepthC.gain, on * (0.35 + 0.6 * load));
+        set(N.p.clankDepth.gain, on * 0.1 * (0.4 + r));
+        set(N.p.chuff.gain, on * 0.02);
     }
     if (N.p.whine) {
         const gasT = type === 'gas_turbine';
@@ -553,6 +612,7 @@ function _audioUpdateEngine(t, dt) {
         const fire = revHz * (T.cylinders || 8) / 2;   // 4ストロークは2回転に1回爆発
         set(N.p.fireOsc.frequency, fire, 0.3);
         set(N.p.fireOsc2.frequency, fire / 2, 0.3);
+        set(N.p.fireSub.frequency, fire / 2, 0.3);
         set(N.p.fireLp.frequency, 180 + 500 * load + fire * 2, 0.3);
         set(N.p.fire.gain, 0.12 + 0.2 * load);
         set(N.p.rattleAm.frequency, fire, 0.3);

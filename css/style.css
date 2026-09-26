@@ -110,6 +110,18 @@
         #btn-right  { bottom: calc(60px + env(safe-area-inset-bottom)); right: 30px; }
 
         #btn-horn   { bottom: calc(210px + env(safe-area-inset-bottom)); left: 30px; font-size: 28px; }
+        /* 画面のテレグラフ・舵輪（37-bridge-controls.js） */
+        .bridge-widget {
+            position: absolute; z-index: 10; touch-action: none; pointer-events: auto;
+            bottom: calc(14px + env(safe-area-inset-bottom));
+            filter: drop-shadow(0 4px 10px rgba(0,0,0,0.5));
+            transition: left 0.3s ease-in-out;
+        }
+        #telegraph-widget { left: 14px; }
+        #wheel-widget { right: 14px; }
+        body.menu-open #telegraph-widget { left: 300px; }
+        body.hud-hidden .bridge-widget { display: none !important; }
+        body.hud-hidden #bow-stern-debug-hud, body.hud-hidden #btn-horn { display: none !important; }
         body.menu-open #btn-horn { left: 310px; }
         body.menu-open #btn-faster { left: 310px; }
         body.menu-open #btn-slower { left: 310px; }

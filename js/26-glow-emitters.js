@@ -330,7 +330,8 @@ function _glowBuildProbe(modelRoot, pts, color) {
 //  （四角い板）が船体の曲面に切られて、船体の辺に沿った線が見えてしまう。
 //  そこで画素ごとの比較はせず、**灯りの中心（とその周り4点）**について、
 //  カメラとの間に壁などがあるかを、ブルーム抽出パスが描いたシーンの奥行き
-//  （12-bloom の getSceneDepthTexture）で調べ、にじみ全体を出す／隠す。
+//  （下の _haloDepthPass：船だけの奥行きを1/4の解像度で描いたもの）で調べ、
+//  にじみ全体を出す／隠す。
 //  あわせて「その灯りの面がカメラの方を向いているか」でも隠す。
 //  （ブルームを切っていて奥行きが無いときは、画素ごとの比較に戻す）
 const GLOW_HALO_SIZE_MUL   = 1.8;   // パネルの大きさに対するにじみの大きさ
@@ -414,7 +415,7 @@ function _glowBuildHalos(modelRoot, panels) {
                 vAlpha = uStrength * smoothstep(uNear, uFar, dist) * mix(0.75, 1.0, clamp(px / uMinPx - 1.0, 0.0, 1.0));
                 // 霧が濃いと、遠くの灯りのにじみも霧に溶けて薄れる（船体と同じ FogExp2 の
                 // 式を少し弱めて使う：にじみ自体が霧の光なので、船体ほどは消えない）
-                float fd = dist * uFogDensity * 0.7;
+                float fd = dist * uFogDensity * 0.35;
                 vAlpha *= exp(-fd * fd);
                 // 霧・雨が無いときは、遠景用の点としてだけ出す
                 vAlpha *= mix(smoothstep(uDryNear, uDryFar, dist), 1.0, uWet);
@@ -467,6 +468,58 @@ function _glowBuildHalos(modelRoot, panels) {
     modelRoot.add(glowHaloPoints);
 }
 
+// ── にじみの隠れ判定用：船の奥行きだけを小さく描く ─────────────────
+// 船のメッシュだけを専用のレイヤーに入れ、色を書かない材質で 1/4 の解像度の
+// 画像に描いて、その奥行きをテクスチャとして使う。にじみが見えている間だけ、
+// 2フレームに1回描く（シーン全体を描き直すブルームよりずっと軽い）。
+const HALO_DEPTH_LAYER = 7;
+const _haloDepth = { rt: null, mat: null, key: '', frame: 0, w: 0, h: 0 };
+function _haloDepthPass() {
+    if (typeof renderer === 'undefined' || !renderer || typeof camera === 'undefined' || !camera) return null;
+    if (!renderer.capabilities.isWebGL2 && !renderer.extensions.get('WEBGL_depth_texture')) return null;
+    const root = (typeof importedModelGroup !== 'undefined' && importedModelGroup) ? importedModelGroup : null;
+    if (!root) return null;
+    // 船のメッシュをレイヤーに入れる（モデルが変わったら入れ直す）
+    let n = 0; root.traverse(o => { if (o.isMesh) n++; });
+    const key = root.uuid + ':' + n;
+    if (key !== _haloDepth.key) {
+        _haloDepth.key = key;
+        root.traverse(o => { if (o.isMesh) o.layers.enable(HALO_DEPTH_LAYER); });
+    }
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    const w = Math.max(64, Math.floor(size.x / 4)), h = Math.max(64, Math.floor(size.y / 4));
+    if (!_haloDepth.rt || _haloDepth.w !== w || _haloDepth.h !== h) {
+        if (_haloDepth.rt) _haloDepth.rt.dispose();
+        const rt = new THREE.WebGLRenderTarget(w, h, { depthBuffer: true });
+        rt.depthTexture = new THREE.DepthTexture(w, h);
+        rt.depthTexture.format = THREE.DepthFormat;
+        rt.depthTexture.type = renderer.capabilities.isWebGL2 ? THREE.UnsignedIntType : THREE.UnsignedShortType;
+        _haloDepth.rt = rt; _haloDepth.w = w; _haloDepth.h = h;
+        _haloDepth.frame = 0;
+    }
+    if (!_haloDepth.mat) _haloDepth.mat = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide });
+    if ((_haloDepth.frame++ & 1) === 0) {
+        const prevTarget = renderer.getRenderTarget();
+        const prevOverride = scene.overrideMaterial;
+        const prevMask = camera.layers.mask;
+        const prevShadow = renderer.shadowMap.autoUpdate, prevNeeds = renderer.shadowMap.needsUpdate;
+        const prevBg = scene.background;
+        scene.overrideMaterial = _haloDepth.mat;
+        scene.background = null;
+        camera.layers.set(HALO_DEPTH_LAYER);
+        renderer.shadowMap.autoUpdate = false; renderer.shadowMap.needsUpdate = false;
+        renderer.setRenderTarget(_haloDepth.rt);
+        renderer.clear(true, true, false);
+        renderer.render(scene, camera);
+        renderer.setRenderTarget(prevTarget);
+        camera.layers.mask = prevMask;
+        scene.overrideMaterial = prevOverride;
+        scene.background = prevBg;
+        renderer.shadowMap.autoUpdate = prevShadow; renderer.shadowMap.needsUpdate = prevNeeds;
+    }
+    return _haloDepth.rt.depthTexture;
+}
+
 // 毎フレーム（描画の直前）。昼夜・窓の発光の強さ・天候に合わせる。
 function updateGlowHalos() {
     if (!glowHaloPoints) return;
@@ -487,7 +540,7 @@ function updateGlowHalos() {
     u.uWet.value = THREE.MathUtils.smoothstep(wet, 0.05, 0.6);
     // シーンの奥行き（ブルーム抽出パス）があれば、それで隠れるかを調べる。
     // 無いとき（ブルームOFF）は画素ごとの奥行き比較に戻す。
-    const depthTex = (typeof getSceneDepthTexture === 'function') ? getSceneDepthTexture() : null;
+    const depthTex = glowHaloPoints.visible ? _haloDepthPass() : null;
     u.uSceneDepth.value = depthTex;
     u.uHasDepth.value = depthTex ? 1 : 0;
     if (glowHaloPoints.material.depthTest !== !depthTex) {

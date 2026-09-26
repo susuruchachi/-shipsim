@@ -155,7 +155,7 @@ function init() {
     createWakeParticleSystem();
     loadEmbeddedOBJ();
     initDeckLightPool();  // 甲板照明ライトプール初期化
-    initBloomComposer();  // ブルームポストプロセス初期化
+    if (bloomEnabled) initBloomComposer();  // ブルームポストプロセス初期化（使わないときは作業用の画像も作らない）
 
     physics.cgWorldX = shipGroup.position.x;
     physics.cgWorldZ = shipGroup.position.z;

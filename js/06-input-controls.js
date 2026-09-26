@@ -37,6 +37,8 @@ let _screenshotInProgress = false;
 function captureScreenshot() {
     if (_screenshotInProgress) return; // 連打防止
     _screenshotInProgress = true;
+    // 直前の数秒の動画も保存する（38-clip-recorder.js。設定でOFFにできる）
+    if (typeof saveRecentClip === 'function') saveRecentClip();
 
     // 現在のHUD状態を保存し、撮影用に一時的に非表示にする
     const wasHidden = isHudHidden();
@@ -114,7 +116,8 @@ function setupMobileControls() {
     // ── 視点固定モード用2本指パン ──
     // OrbitControlsより先にイベントを処理し、2本指のときだけ横取りする。
     let _panPrev = null; // 前フレームの2本指中心座標
-    const canvas = document.querySelector('canvas');
+    // 3D の描画面（画面のテレグラフ・舵輪も canvas なので、先頭の canvas ではなく renderer のものを使う）
+    const canvas = (typeof renderer !== 'undefined' && renderer) ? renderer.domElement : document.querySelector('canvas');
     if (canvas) {
         canvas.addEventListener('touchstart', (e) => {
             if (e.touches.length === 2 && cameraMode === 'chase') {

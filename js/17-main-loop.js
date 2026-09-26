@@ -130,7 +130,15 @@ function animate() {
     for (let _sub = 0; _sub < numSubsteps; _sub++) {
         // --- 舵 ---
         if (!isDesignMode) {
-            if (keys.a || touchLeft) physics.rudderAngle = Math.max(-35.0, physics.rudderAngle - 50 * subDt);
+            if (typeof bridgeWheelActive === 'function' && bridgeWheelActive()) {
+                // 舵輪（37-bridge-controls.js）：舵は舵輪の指示へ舵取機の速さで追いつき、
+                // 手を離してもその角度を保つ
+                const target = THREE.MathUtils.clamp(physics.helmOrder || 0, -35, 35);
+                const step = bridgeHelmRate() * subDt;
+                const d = target - physics.rudderAngle;
+                physics.rudderAngle += Math.abs(d) <= step ? d : Math.sign(d) * step;
+            }
+            else if (keys.a || touchLeft) physics.rudderAngle = Math.max(-35.0, physics.rudderAngle - 50 * subDt);
             else if (keys.d || touchRight) physics.rudderAngle = Math.min(35.0, physics.rudderAngle + 50 * subDt);
             else physics.rudderAngle += (0.0 - physics.rudderAngle) * 6 * subDt;
         } else {
@@ -140,7 +148,9 @@ function animate() {
         // --- 速度（テレグラフ追従） ---
         const maxSpd = physics.maxSpeed;
         const speeds = { '-3': -maxSpd * 0.5, '-2': -maxSpd * 0.3, '-1': -maxSpd * 0.15, '0': 0.0, '1': maxSpd * 0.3, '2': maxSpd * 0.6, '3': maxSpd };
-        physics.targetSpeed = isDesignMode ? 0.0 : speeds[physics.telegraphState];
+        // 機関は機関室が応答してから指令どおりに動かす（37-bridge-controls.js の telegraphAnswer）
+        const _tgOrder = Number.isFinite(physics.telegraphAnswer) ? physics.telegraphAnswer : physics.telegraphState;
+        physics.targetSpeed = isDesignMode ? 0.0 : speeds[_tgOrder];
         // スクリューの回転数は、機関指令（テレグラフ）を目標に加減速する
         // （32-engine-propeller.js）。推力もこの回転数で決まるので、後進を
         // かけると先にスクリューが逆転し、その力で船が止まってから後ろへ進む。
@@ -659,6 +669,11 @@ function animate() {
     if (typeof updateGlowHalos === 'function') updateGlowHalos();   // 遠景用の光のにじみ（26）
     // 音（35-audio-engine.js / 36-horns.js）：機関・環境音・汽笛の位置と音量
     if (typeof updateAudio === 'function') updateAudio(t);
+    // 画面のテレグラフ・舵輪（37-bridge-controls.js）
+    if (typeof updateBridge === 'function') updateBridge(t);
+    // 目印を画面上で一定の大きさに・音の位置の目印（10 / 36）
+    if (typeof updateSoundMarkers === 'function') updateSoundMarkers();
+    if (typeof updateMarkerScales === 'function') updateMarkerScales();
     // 自動露出（30-auto-exposure.js）：目の慣れのように露出を少しずつ合わせる
     if (typeof applyAutoExposure === 'function') applyAutoExposure(t);
     // 水面の霧（04 の水面シェーダーは自前なので scene.fog を手で渡す）。
@@ -1031,7 +1046,8 @@ function updateUI() {
         '-3': 'FULL ASTERN (全速後進)', '-2': 'HALF ASTERN (半速後進)', '-1': 'SLOW ASTERN (微速後進)',
         '0': 'STOP (停止)', '1': 'SLOW (微速前進)', '2': 'HALF (半速前進)', '3': 'FULL (全速前進)'
     };
-    $('ui-telegraph').innerText = `Telegraph: ${labels[physics.telegraphState]}`;
+    const _sp = physics.telegraphSpecial && window.TG_SPECIAL ? TG_SPECIAL[physics.telegraphSpecial] : null;
+    $('ui-telegraph').innerText = `Telegraph: ${_sp ? `${_sp.en} (${_sp.jp})` : labels[physics.telegraphState]}`;
     const _eng = $('ui-engine');
     if (_eng) {
         const r = physics.propRpm || 0;

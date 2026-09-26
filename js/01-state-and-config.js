@@ -62,7 +62,10 @@ let bloomComposer = null;      // EffectComposer（ブルーム抽出専用。�
 let bloomPass = null;          // UnrealBloomPass
 let bloomOverlayScene = null;  // ブルーム結果を加算合成するための全画面クアッド用シーン
 let bloomOverlayCamera = null; // 全画面クアッド用の正射影カメラ
-let bloomEnabled = true;       // ブルームのON/OFF
+// ブルーム（光のにじみ）。シーン全体をもう一度描く重い処理で、発光面が多い船では
+// 特に重くなり、にじみが壁を越えて広がることもあったので使わない。遠くの灯りは
+// 光のにじみ（26-glow-emitters.js）と、霧に溶けにくい発光（29-weather-fx.js）で見せる。
+let bloomEnabled = false;      // ブルームのON/OFF
 let noBloomDarkMaterial = null;          // ブルーム抽出パス中、noBloom対象を塗りつぶす黒マテリアル
 const noBloomMaterialCache = new Map();  // 退避した元マテリアル（抽出パスの間だけ差し替える）
 

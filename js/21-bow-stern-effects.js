@@ -518,6 +518,7 @@ let _bowSternDebugHudEl = null;
 function _updateBowSternDebugHud(vals) {
     if (!_bowSternDebugHudEl) {
         _bowSternDebugHudEl = document.createElement('div');
+        _bowSternDebugHudEl.id = 'bow-stern-debug-hud';   // ダブルタップで表示を消すとき一緒に消す（css の hud-hidden）
         _bowSternDebugHudEl.style.cssText =
             'position:fixed; top:6px; right:6px; z-index:99999; ' +
             'background:rgba(0,0,0,0.55); color:#7fffb0; font:11px monospace; ' +

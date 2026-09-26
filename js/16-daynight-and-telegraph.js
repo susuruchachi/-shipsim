@@ -1,5 +1,8 @@
 function changeTelegraph(dir) {
+    const prev = physics.telegraphState;
     physics.telegraphState = Math.max(-3, Math.min(3, physics.telegraphState + dir));
+    // ベルを鳴らし、機関室の応答を待つ（37-bridge-controls.js）
+    if (typeof onTelegraphOrder === 'function') onTelegraphOrder(prev, physics.telegraphState);
 }
 
 function onWindowResize() {

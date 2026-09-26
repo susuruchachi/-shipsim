@@ -285,6 +285,8 @@
 <div class="control-btn" id="btn-slower">▼</div>
 <div class="control-btn" id="btn-left">◀</div>
 <div class="control-btn" id="btn-right">▶</div>
+<canvas id="telegraph-widget" class="bridge-widget" aria-label="テレグラフ"></canvas>
+<canvas id="wheel-widget" class="bridge-widget" aria-label="舵輪"></canvas>
 <div class="control-btn" id="btn-horn" title="汽笛（押している間・Hキー）">📯</div>
 
 <div id="settings-panel">
@@ -302,6 +304,7 @@
     <button class="settings-tab" data-tab="decklight" onclick="switchTab('decklight')">🔆 甲板照明</button>
     <button class="settings-tab" data-tab="viewpoint" onclick="switchTab('viewpoint')">🔭 視点</button>
     <button class="settings-tab" data-tab="sound" onclick="switchTab('sound');renderSoundPanel()">🔊 音</button>
+    <button class="settings-tab" data-tab="bridge" onclick="switchTab('bridge');renderBridgePanel()">🎛 操舵・テレグラフ</button>
     <button class="settings-tab" data-tab="save" onclick="switchTab('save')">💾 保存</button>
     <button class="settings-tab" data-tab="perf" onclick="switchTab('perf')">⚡ 軽量化</button>
   </div>
@@ -1008,6 +1011,8 @@
           <input type="range" id="audio-horn" class="sp-slider" min="0" max="1.5" step="0.05" value="1" oninput="setAudioSetting('horn', this.value)"></div>
         <div class="sp-row"><span class="sp-label">機関:</span>
           <input type="range" id="audio-engine" class="sp-slider" min="0" max="1.5" step="0.05" value="0.7" oninput="setAudioSetting('engine', this.value)"></div>
+        <div class="sp-row"><span class="sp-label">ベル等:</span>
+          <input type="range" id="audio-bridge" class="sp-slider" min="0" max="1.5" step="0.05" value="0.8" oninput="setAudioSetting('bridge', this.value)"></div>
         <div class="sp-row"><span class="sp-label">環境音:</span>
           <input type="range" id="audio-env" class="sp-slider" min="0" max="1.5" step="0.05" value="0.7" oninput="setAudioSetting('env', this.value)"></div>
         <div style="font-size:10px;color:#888;margin-top:4px;">
@@ -1050,6 +1055,8 @@
           <button class="sp-gizmo-btn" onclick="playHornSignal('SSS')">短音3回（後進）</button>
           <button class="sp-gizmo-btn" onclick="playHornSignal('SSSSS')">短音5回（警告）</button>
           <button class="sp-gizmo-btn" onclick="playHornSignal('LLL')">長音3回（汽笛の挨拶）</button>
+          <button class="sp-gizmo-btn" onclick="playHornSignal('L','fog')">霧中信号（霧笛・長音1回）</button>
+          <button class="sp-gizmo-btn" onclick="playHornSignal('LL','fog')">霧中信号（停止中・長音2回）</button>
           <button class="sp-remove-btn" onclick="stopHornSignal()">■ 止める</button>
         </div>
         <div class="sp-row">
@@ -1071,13 +1078,54 @@
           <span class="sp-axis-label">Y:</span><input type="number" id="engine-sound-y" class="sp-xyz-input" value="0" step="0.1" oninput="setEngineSound('y', this.value)">
           <span class="sp-axis-label">Z:</span><input type="number" id="engine-sound-z" class="sp-xyz-input" value="0" step="0.1" oninput="setEngineSound('z', this.value)">
         </div>
+        <div class="sp-row" style="gap:8px;flex-wrap:wrap;">
+          <label class="sp-toggle"><input type="checkbox" id="engine-sound-sym" onchange="setEngineSound('sym', this.checked)"> シンメトリー（左右2か所の機関室）</label>
+          <button class="sp-gizmo-btn" id="gizmo-engine" onclick="toggleGizmo('engine')">📍 ギズモ</button>
+        </div>
         <div style="font-size:10px;color:#888;margin-top:4px;">
           音はスクリューの回転数に合わせて変わります（加速・逆転中は力強く）。船内にいると大きく聞こえます。
         </div>
       </div>
     </div>
 
+    <div class="settings-page" id="tab-bridge">
+      <div class="sp-section">
+        <div class="sp-section-title">🎛 テレグラフ（機関指令）</div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">デザイン:</span>
+          <select id="bridge-telegraph" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;" onchange="setBridgeOption('telegraph', this.value)"></select>
+        </div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="bridge-wait-answer" checked onchange="setBridgeOption('waitAnswer', this.checked)"> 機関室の応答（ベル）を待ってから機関が動く</label>
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:4px;">
+          ハンドル・針をドラッグするか、文字の所をタップして指令します（W/Sキーでも可）。<br>
+          指令するとベルが鳴り、少しして機関室が応答のベルを鳴らし、赤い応答の針が追いつきます。
+        </div>
+      </div>
+      <div class="sp-section">
+        <div class="sp-section-title">☸ 舵輪</div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">デザイン:</span>
+          <select id="bridge-wheel" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;" onchange="setBridgeOption('wheel', this.value)"></select>
+        </div>
+        <div class="sp-row" style="gap:6px;"><span class="sp-label" style="min-width:0;">彫り込む文字:</span>
+          <input type="text" id="bridge-wheel-text" value="R.M.S. OLYMPIC" maxlength="40" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:12px;flex:1;min-width:0;" oninput="setBridgeOption('wheelText', this.value)">
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:4px;">
+          舵輪は指で回した角度のまま止まります（手を離しても戻りません）。中心をダブルタップで舵中央。A/Dキーでも回せます。<br>
+          上の舵角計の白い針が実際の舵、黄色の針が舵輪の指示です。<br>
+          古典的な舵輪では、縁の真鍮の帯に「彫り込む文字」がくり返し刻まれます。
+        </div>
+      </div>
+    </div>
+
     <div class="settings-page" id="tab-perf">
+      <div class="sp-section">
+        <div class="sp-section-title">🎬 スクショと一緒に動画も保存（この端末の設定）</div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="clip-enabled" checked onchange="setClipEnabled(this.checked)"> スクショを撮ったら、直前の約5〜10秒の動画（音付き）も保存する</label>
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:4px;">裏でずっと録画しているので、端末が温まりやすくなります。重いと感じたらOFFにしてください。</div>
+      </div>
       <div class="sp-section">
         <div class="sp-section-title">グラフィック品質</div>
         <div class="sp-row">
@@ -1169,6 +1217,8 @@
 <script src="js/34-shelter.js"></script>
 <script src="js/35-audio-engine.js"></script>
 <script src="js/36-horns.js"></script>
+<script src="js/37-bridge-controls.js"></script>
+<script src="js/38-clip-recorder.js"></script>
 <script src="js/17-main-loop.js"></script>
 <script src="js/18-hull-wake-physics.js"></script>
 <script src="js/19-swe-fluid.js"></script>

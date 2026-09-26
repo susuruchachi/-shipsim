@@ -156,6 +156,8 @@ function collectShipConfig() {
         } : null,
         // 汽笛・機関音（36-horns.js）
         sound: (typeof getShipSoundConfig === 'function') ? getShipSoundConfig() : null,
+        // 画面のテレグラフ・舵輪のデザイン（37-bridge-controls.js）
+        bridge: (typeof getBridgeConfig === 'function') ? getBridgeConfig() : null,
         // 位置・向き・月齢
         shipPos: { x: physics.cgWorldX, z: physics.cgWorldZ, heading: physics.heading },
         dayProgress: physics.dayProgress,
@@ -165,7 +167,45 @@ function collectShipConfig() {
         lastModelName: window.lastLoadedModelName || null,
         // モデル本体への参照。本体は IndexedDB に保存してある（27-model-store.js）
         modelRef: (typeof getCurrentModelRef === 'function') ? getCurrentModelRef() : null,
+        // 設定パネルの入力欄すべて（上で個別に保存していない項目も含めて、
+        // ライトの明るさ・煙突照明のON/OFFなど、パネルで変えたものを船ごとに残す）
+        panelInputs: collectPanelInputs(),
     };
+}
+
+// ── 設定パネルの入力欄をまとめて保存・復元 ────────────────────────
+// 対象：船体設定パネルの中の、id の付いた入力欄・選択欄すべて。
+// 除外：一覧の中で番号付きで作り直される欄（煙突 #1 の X など。一覧のデータ
+//       として別に保存している）、この端末の音量（端末ごとの設定）、汽笛・
+//       テレグラフ（専用の形で別に保存）
+const PANEL_INPUT_SKIP = /^(audio-|horn-|engine-sound-|bridge-|clip-)|[-_]\d+(_[LR])?(-\w+)?$/;
+function collectPanelInputs() {
+    const out = {};
+    document.querySelectorAll('#settings-panel input[id], #settings-panel select[id], #settings-panel textarea[id]').forEach((el) => {
+        if (el.type === 'file' || el.type === 'button' || el.type === 'submit' || PANEL_INPUT_SKIP.test(el.id)) return;
+        out[el.id] = (el.type === 'checkbox' || el.type === 'radio') ? el.checked : el.value;
+    });
+    return out;
+}
+// 今の値と違うものだけ書き戻し、手で変えたときと同じ処理（input/change）を走らせる
+function applyPanelInputs(map) {
+    if (!map || typeof map !== 'object') return;
+    for (const id of Object.keys(map)) {
+        const el = document.getElementById(id);
+        if (!el || !el.closest || !el.closest('#settings-panel')) continue;
+        const v = map[id];
+        if (el.type === 'checkbox' || el.type === 'radio') {
+            if (el.checked === !!v) continue;
+            el.checked = !!v;
+        } else {
+            if (String(el.value) === String(v)) continue;
+            el.value = v;
+        }
+        try {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        } catch (e) { console.warn('[ShipConfig] 設定の復元に失敗:', id, e); }
+    }
 }
 
 function applyShipConfig(cfg) {
@@ -315,6 +355,7 @@ function applyShipConfig(cfg) {
 
     // 汽笛・機関音。古い保存データには無いので、そのときは既定の汽笛に戻す
     if (typeof applyShipSoundConfig === 'function') applyShipSoundConfig(cfg.sound || null);
+    if (typeof applyBridgeConfig === 'function') applyBridgeConfig(cfg.bridge || null);
     // ── 天候（24-weather.js）──────────────────────────────────────────
     // 天候がONだと風・波はそちらが毎フレーム上書きするので、この設定が
     // 保存していた風速・波の値は効かなくなる。天候機能より前に保存された
@@ -434,6 +475,10 @@ function applyShipConfig(cfg) {
         const statusText = $('import-status');
         if (statusText) statusText.innerText = '前回モデル: ' + cfg.lastModelName + ' (再読込が必要)';
     }
+
+    // 設定パネルの入力欄（個別に保存していない項目も含めて）。上の個別の復元の
+    // 後で、値が違うものだけ書き戻す。質量の自動補正（下）より前に行う。
+    applyPanelInputs(cfg.panelInputs);
 
     // ── v30 実物理浮力（F=ρgV）対策: massの自動再計算 ──────────────────────
     // セーブデータの mass は、旧バージョン（位置スプリング式の浮力）で
