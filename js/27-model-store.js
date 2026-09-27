@@ -26,7 +26,7 @@ const MODEL_DB_STORE = 'models';
 
 // いま表示しているモデルの出どころ { id, name, type, size }（無ければ null）
 window.currentModelSource = null;
-let _currentModelData = null;     // その中身（ArrayBuffer）
+let _currentModelData = null;     // （使っていない。重いモデルの中身をメモリに持ち続けないよう、常に null）
 // 読み込み途中のモデルの参照。読み込み中にページが閉じられて自動保存が
 // 走っても、「モデルなし」で上書きされて次回モデルが消えないようにする。
 let _pendingModelRef = null;
@@ -66,6 +66,23 @@ function modelStoreGet(id)    { return _modelDbTx('readonly',  s => s.get(id)); 
 function modelStorePut(rec)   { return _modelDbTx('readwrite', s => s.put(rec)); }
 function modelStoreDelete(id) { return _modelDbTx('readwrite', s => s.delete(id)); }
 function modelStoreKeys()     { return _modelDbTx('readonly',  s => s.getAllKeys()); }
+
+// モデル本体は Blob で保存する。Blob なら IndexedDB がファイルとして持つので、
+// 取り出しても中身がメモリに載らない（ZIP書き出しで何個も扱っても軽い）。
+// Blob を保存できない環境では、以前どおり ArrayBuffer で保存する。
+async function modelStorePutData(rec, data) {
+    const blob = data instanceof Blob ? data : new Blob([data]);
+    try {
+        await modelStorePut(Object.assign({}, rec, { data: blob }));
+    } catch (e) {
+        await modelStorePut(Object.assign({}, rec, { data: data instanceof Blob ? await data.arrayBuffer() : data }));
+    }
+}
+// 保存したモデルの中身を ArrayBuffer で（Blob・ArrayBuffer のどちらで保存されていても）
+async function modelRecordBuffer(rec) {
+    if (!rec || !rec.data) return null;
+    return (rec.data instanceof Blob) ? await rec.data.arrayBuffer() : rec.data;
+}
 
 // 中身からIDを作る（SHA-256の先頭16バイト）。crypto.subtle が使えない環境
 // （http:// で開いた場合など）では、サイズと中身の一部から作る簡易ハッシュで代用する。
@@ -109,11 +126,10 @@ async function rememberModelSource(name, type, buffer) {
     if (!buffer || !type) { window.currentModelSource = null; _currentModelData = null; return null; }
     const id = await computeModelId(buffer);
     window.currentModelSource = { id, name, type, size: buffer.byteLength };
-    _currentModelData = buffer;
     try {
         const existing = await modelStoreGet(id);
         if (!existing) {
-            await modelStorePut({ id, name, type, size: buffer.byteLength, data: buffer, savedAt: Date.now() });
+            await modelStorePutData({ id, name, type, size: buffer.byteLength, savedAt: Date.now() }, buffer);
         }
         // 大きなデータを置くので、ブラウザに勝手に消されないよう永続化を頼んでおく
         if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
@@ -149,7 +165,6 @@ async function loadModelFromBuffer(name, type, buffer) {
         throw new Error('unsupported model type: ' + type);
     }
     window.currentModelSource = { id: null, name, type, size: buffer.byteLength };
-    _currentModelData = buffer;
     await _waitModelSettled();
 }
 
@@ -171,7 +186,7 @@ async function _loadModelByRefInner(ref) {
     if (!rec || !rec.data) return false;
     const statusText = $('import-status');
     if (statusText) statusText.innerText = 'Loading: ' + rec.name + '...';
-    await loadModelFromBuffer(rec.name, rec.type, rec.data);
+    await loadModelFromBuffer(rec.name, rec.type, await modelRecordBuffer(rec));
     window.currentModelSource = { id: rec.id, name: rec.name, type: rec.type, size: rec.size, stored: true };
     renderShipSaveListSafe();
     return true;

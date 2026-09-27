@@ -871,11 +871,14 @@
       <div class="sp-section">
         <div class="sp-section-title">まとめて保存 / 読み込み (ZIP)</div>
         <div style="font-size:10px;color:#888;margin-bottom:6px;">
-          保存済みの船すべてを、設定とモデルごと1つのZIPに書き出します。
-          バックアップや、別の端末への引っ越しに使えます。
+          保存済みの船（一覧で「📦 ZIPに入れる」にチェックした船）を、設定とモデルごと1つのZIPに書き出します。
+          バックアップや、別の端末への引っ越しに使えます。重いモデルが多いときは、船を分けて書き出すと軽くなります。
+        </div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="ship-zip-models" checked> モデルも入れる（外すと設定だけの小さなZIP）</label>
         </div>
         <div class="sp-row" style="gap:8px;">
-          <button class="sp-add-btn" style="flex:1;" onclick="exportAllShipsZip()">📦 全部ZIPで保存</button>
+          <button class="sp-add-btn" id="ship-zip-export-btn" style="flex:1;" onclick="exportAllShipsZip()">📦 ZIPで保存</button>
           <button class="sp-add-btn" style="flex:1;" onclick="$('ship-zip-input').click()">📂 ZIPから読み込み</button>
         </div>
         <input type="file" id="ship-zip-input" accept=".zip,application/zip" style="display:none;" onchange="importShipsZip(event)">
@@ -1091,6 +1094,12 @@
         <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">デザイン:</span>
           <select id="bridge-telegraph" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;" onchange="setBridgeOption('telegraph', this.value)"></select>
         </div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">盤面の色:</span>
+          <select id="bridge-tg-theme" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;" onchange="setBridgeOption('tgTheme', this.value)"></select>
+        </div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="bridge-tg-lit" checked onchange="setBridgeOption('tgLit', this.checked)"> 暗くなったら盤面を光らせる（夜の船橋の照明）</label>
+        </div>
         <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">ベルの音:</span>
           <select id="bridge-bell" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;" onchange="setBridgeOption('bell', this.value); telegraphBell(bridgeUI.telegraph, false, 2)"></select>
         </div>
@@ -1139,6 +1148,24 @@
           灯りを動かしたり明るさを変えたりすると、少し待ってから自動で焼き直します（数秒〜数十秒。その間は前の結果のまま）。
           昼夜・明るさのスライダー・煙突照明のオン/オフは、焼き直さずにすぐ反映されます。<br>
           細かさを下げたときは、船を読み込み直すと反映されます。
+        </div>
+      </div>
+      <div class="sp-section">
+        <div class="sp-section-title">🖼 テクスチャの最大サイズ（この端末の設定）</div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">最大:</span>
+          <select id="tex-max-size" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;" onchange="setTextureMaxSize(this.value)">
+            <option value="auto" selected>自動（おすすめ）</option>
+            <option value="1024">1024px（とても軽い）</option>
+            <option value="2048">2048px</option>
+            <option value="4096">4096px</option>
+            <option value="none">制限なし</option>
+          </select>
+        </div>
+        <div style="font-size:10px;color:#888;">
+          大きなテクスチャがたくさんあるモデルは、メモリが足りなくなって船体が真っ黒になることがあります。
+          「自動」では、モデルの中の画像の大きさを調べて、この端末に収まるように縮めて読み込みます
+          （iPad・スマホは最大2048px、合計もおさえる）。読み込めなかった画像は、小さくしてやり直します。<br>
+          変えたときは、モデルを読み込み直すと反映されます。
         </div>
       </div>
       <div class="sp-section">
@@ -1244,6 +1271,7 @@
 <script src="js/39-android-app.js"></script>
 <script src="js/40-light-bake.js"></script>
 <script src="js/41-no-zoom.js"></script>
+<script src="js/42-texture-guard.js"></script>
 <script src="js/17-main-loop.js"></script>
 <script src="js/18-hull-wake-physics.js"></script>
 <script src="js/19-swe-fluid.js"></script>

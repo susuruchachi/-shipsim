@@ -180,7 +180,7 @@ function collectShipConfig() {
 // 除外：一覧の中で番号付きで作り直される欄（煙突 #1 の X など。一覧のデータ
 //       として別に保存している）、この端末の音量（端末ごとの設定）、汽笛・
 //       テレグラフ（専用の形で別に保存）
-const PANEL_INPUT_SKIP = /^(audio-|horn-|engine-sound-|bridge-|clip-|bake-)|[-_]\d+(_[LR])?(-\w+)?$/;
+const PANEL_INPUT_SKIP = /^(audio-|horn-|engine-sound-|bridge-|clip-|bake-|tex-|ship-zip-)|[-_]\d+(_[LR])?(-\w+)?$/;
 function collectPanelInputs() {
     const out = {};
     document.querySelectorAll('#settings-panel input[id], #settings-panel select[id], #settings-panel textarea[id]').forEach((el) => {
@@ -607,7 +607,11 @@ function renderShipSaveList() {
             ${modelLine}
             <div class="sp-row" style="gap:8px;">
                 <button class="sp-add-btn" style="flex:1;" onclick="loadShipConfig('${safeName}')">📂 読み込み</button>
+                <label class="sp-toggle" style="font-size:10px;white-space:nowrap;"><input type="checkbox" class="ship-zip-pick"> 📦 ZIPに入れる</label>
             </div>`;
+        const pick = card.querySelector('.ship-zip-pick');
+        pick.checked = !(typeof shipZipExcluded !== 'undefined' && shipZipExcluded.has(name));
+        pick.addEventListener('change', () => { if (typeof setShipZipPick === 'function') setShipZipPick(name, pick.checked); });
         list.appendChild(card);
     });
 }

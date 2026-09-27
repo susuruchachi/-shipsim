@@ -200,6 +200,105 @@ function _lbWeld(P, n) {
     return { pid, count: next };
 }
 
+// 同じ行列のメッシュをまとめて1つのジオメトリにし、_lbSubdivide で分けてから
+// メッシュごとに戻す。重なった面（同じ位置の頂点）は同じ辺として扱われ、一緒に分かれる。
+// 戻り値：増えた三角形の数
+function _lbSubdivideMeshes(list, opts) {
+    if (list.length === 1) {
+        const m = list[0];
+        const res = _lbSubdivide(m.geometry, Object.assign({}, opts, { multi: Array.isArray(m.material) }));
+        if (!res) return 0;
+        const old = m.geometry; m.geometry = res.geom; old.dispose();
+        return res.added;
+    }
+    // 属性の種類（どれかのメッシュにあれば全部に用意し、無いメッシュは 0 で埋める）
+    const names = new Map();
+    for (const m of list) {
+        for (const nm of Object.keys(m.geometry.attributes)) {
+            if (nm.startsWith('bake')) continue;
+            const sz = m.geometry.attributes[nm].itemSize;
+            if (names.has(nm) && names.get(nm) !== sz) {
+                // 形が合わない（まれ）：まとめずに1つずつ
+                let add = 0;
+                for (const mm of list) add += _lbSubdivideMeshes([mm], Object.assign({}, opts, { budget: opts.budget - add }));
+                return add;
+            }
+            names.set(nm, sz);
+        }
+    }
+    let nV = 0, nI = 0;
+    const info = list.map(m => {
+        const g = m.geometry, n = g.attributes.position.count;
+        const idx = g.index ? g.index.array : null;
+        const ni = idx ? idx.length : n;
+        const r = { vOff: nV, n, iOff: nI, ni, idx };
+        nV += n; nI += ni;
+        return r;
+    });
+    const merged = new THREE.BufferGeometry();
+    for (const [nm, sz] of names) {
+        const D = new Float32Array(nV * sz);
+        list.forEach((m, k) => { const a = m.geometry.attributes[nm]; if (a) D.set(_lbReadAttr(a), info[k].vOff * sz); });
+        merged.setAttribute(nm, new THREE.BufferAttribute(D, sz));
+    }
+    const I = new Uint32Array(nI);
+    const combos = [];   // 合わせたグループ → { k: メッシュ, materialIndex }
+    list.forEach((m, k) => {
+        const r = info[k];
+        for (let i = 0; i < r.ni; i++) I[r.iOff + i] = (r.idx ? r.idx[i] : i) + r.vOff;
+        const gs = (Array.isArray(m.material) && m.geometry.groups && m.geometry.groups.length) ? m.geometry.groups : null;
+        if (gs) gs.forEach(g => { merged.addGroup(r.iOff + g.start, Math.min(g.count, r.ni - g.start), combos.length); combos.push({ k, materialIndex: g.materialIndex, multi: true }); });
+        else { merged.addGroup(r.iOff, r.ni, combos.length); combos.push({ k, materialIndex: 0, multi: false }); }
+    });
+    merged.setIndex(new THREE.BufferAttribute(I, 1));
+    const res = _lbSubdivide(merged, Object.assign({}, opts, { multi: true }));
+    merged.dispose();
+    if (!res) return 0;
+
+    // メッシュごとに戻す
+    const ng = res.geom, NI = ng.index.array;
+    const remap = new Int32Array(ng.attributes.position.count).fill(-1);
+    list.forEach((m, k) => {
+        const old = m.geometry;
+        const mine = [];
+        ng.groups.forEach((g, gi) => { if (combos[gi].k === k) mine.push({ g, c: combos[gi] }); });
+        const used = [];
+        let count = 0;
+        for (const { g } of mine) count += g.count;
+        const idx = new Uint32Array(count);
+        let w = 0;
+        const groups = [];
+        for (const { g, c } of mine) {
+            const start = w;
+            for (let i = g.start; i < g.start + g.count; i++) {
+                const v = NI[i];
+                if (remap[v] < 0) { remap[v] = used.length; used.push(v); }
+                idx[w++] = remap[v];
+            }
+            if (c.multi) groups.push({ start, count: w - start, materialIndex: c.materialIndex });
+        }
+        const out = new THREE.BufferGeometry();
+        for (const nm of Object.keys(old.attributes)) {
+            if (nm.startsWith('bake') || !names.has(nm)) continue;
+            const sz = names.get(nm), src = ng.attributes[nm].array;
+            const D = new Float32Array(used.length * sz);
+            for (let u = 0; u < used.length; u++) for (let c = 0; c < sz; c++) D[u * sz + c] = src[used[u] * sz + c];
+            out.setAttribute(nm, new THREE.BufferAttribute(D, sz));
+        }
+        for (const v of used) remap[v] = -1;
+        out.setIndex(new THREE.BufferAttribute(used.length > 65535 ? idx : Uint16Array.from(idx), 1));
+        groups.forEach(g => out.addGroup(g.start, g.count, g.materialIndex));
+        out.name = old.name;
+        out.userData = Object.assign({}, old.userData, { lbOrigCount: (old.userData && old.userData.lbOrigCount) || old.attributes.position.count });
+        out.computeBoundingBox();
+        out.computeBoundingSphere();
+        m.geometry = out;
+        old.dispose();
+    });
+    ng.dispose();
+    return res.added;
+}
+
 // opts.maxEdge：これより短い辺は分けない（メッシュのローカル単位）
 // opts.budget ：増やしてよい三角形の数
 // opts.needs(P, a, b, c)：この三角形を分ける必要があるか（明るさの変化が大きいか）
@@ -372,14 +471,18 @@ function _lbSubdivide(geom, opts) {
     const index = new IndexArray(liveCount * 3);
     let w = 0;
     if (groups) {
-        groups.forEach((g, gi) => {
-            const start = w;
-            for (let t = 0; t < nTri; t++) {
-                if (!alive[t] || G[t] !== gi) continue;
-                index[w++] = T[t * 3]; index[w++] = T[t * 3 + 1]; index[w++] = T[t * 3 + 2];
-            }
-            ng.addGroup(start, w - start, g.materialIndex);
-        });
+        // グループごとに並べる（数えてから詰める：グループが多くても1回ずつ見るだけ）
+        const cnt = new Int32Array(groups.length + 1);
+        for (let t = 0; t < nTri; t++) if (alive[t] && G[t] >= 0) cnt[G[t] + 1]++;
+        for (let gi = 0; gi < groups.length; gi++) cnt[gi + 1] += cnt[gi];
+        const pos = cnt.slice(0, groups.length);
+        for (let t = 0; t < nTri; t++) {
+            if (!alive[t] || G[t] < 0) continue;
+            const o = 3 * pos[G[t]]++;
+            index[o] = T[t * 3]; index[o + 1] = T[t * 3 + 1]; index[o + 2] = T[t * 3 + 2];
+        }
+        groups.forEach((g, gi) => ng.addGroup(cnt[gi] * 3, (cnt[gi + 1] - cnt[gi]) * 3, g.materialIndex));
+        w = cnt[groups.length] * 3;
     } else {
         for (let t = 0; t < nTri; t++) {
             if (!alive[t]) continue;
@@ -662,7 +765,7 @@ function _lbSignature(meshes) {
     const M = new THREE.Matrix4();
     const r = (v) => Math.round(v * 1000) / 1000;
     const rel = (o) => { o.updateWorldMatrix(true, false); return M.multiplyMatrices(inv, o.matrixWorld).elements.map(r).join(','); };
-    const parts = ['v1', lightBake.detail, r(shipGroup.scale.x)];
+    const parts = ['v2', lightBake.detail, r(shipGroup.scale.x)];   // v2: 使い回しのジオメトリを分けるようにした
     // スクリュー・舵など、いつも動いている部品（07-glb-movable-parts.js）の向きは数えない
     // （数えると、回るたびに「変わった」ことになって焼き直しが止まらない）
     const moving = new Set();
@@ -1079,6 +1182,16 @@ function* _lbJob(job) {
     // ── 1. 対象のメッシュと灯り。灯りの近くの大きな三角形を分ける ──
     let meshes = _lbCollectMeshes();
     if (!meshes.length) throw new Error('焼き込む船のメッシュがありません');
+    // 同じジオメトリを複数の場所で使い回しているモデル（通風筒・左右対称の船体など）では、
+    // 焼き込んだ明るさ（頂点ごとの値）が置き場所ごとに違うので、それぞれ別のジオメトリにする。
+    // 分けないと最後に計算した1か所の明るさが全部に貼られ、まだらになる。
+    {
+        const seen = new Set();
+        for (const m of meshes) {
+            if (seen.has(m.geometry)) m.geometry = m.geometry.clone();
+            seen.add(m.geometry);
+        }
+    }
     const lights = _lbCanonical(() => _lbGatherLights());
     const edgeM = LB_EDGE_M[lightBake.detail] || 1.0;
     const subKey = (job.sig || '') + '|' + lightBake.detail;
@@ -1086,26 +1199,28 @@ function* _lbJob(job) {
         const refiner = _lbMakeRefiner(lights);
         const mats = _lbCanonical(() => meshes.map(m => { m.updateWorldMatrix(true, false); return m.matrixWorld.clone(); }));
         let budget = LB_MAX_NEW_TRIS;
-        const done = new Map();   // 同じジオメトリを使い回しているメッシュは1回だけ分ける
-        let lastYield = performance.now();
+        // 同じ位置（同じ行列）にあるメッシュはまとめて分ける。表と裏で別々の面を
+        // ぴったり重ねたモデル（SketchUp 由来など：黒い塗装の面と白い裏面が同じ所にある）で、
+        // 片方だけ・違う形に分けると奥行きの計算が微妙にずれて、まだらにちらつく。
+        // まとめて分ければ、重なった面は同じ点で同じように分かれる。
+        const byMatrix = new Map();
         for (let i = 0; i < meshes.length; i++) {
-            const m = meshes[i];
-            const old = m.geometry;
-            if (done.has(old)) { m.geometry = done.get(old); continue; }
-            const M = mats[i];
+            const key = mats[i].elements.join(',');
+            let l = byMatrix.get(key); if (!l) { l = []; byMatrix.set(key, l); } l.push(i);
+        }
+        let lastYield = performance.now();
+        let doneN = 0;
+        for (const idxs of byMatrix.values()) {
+            const M = mats[idxs[0]];
             const sc = new THREE.Vector3().setFromMatrixScale(M);
             const mpu = Math.max(Math.abs(sc.x), Math.abs(sc.y), Math.abs(sc.z)) || 1;
-            const res = _lbSubdivide(old, { maxEdge: edgeM / mpu, budget, multi: Array.isArray(m.material), needs: refiner(M) });
-            if (res) {
-                budget -= res.added;
-                done.set(old, res.geom);
-                m.geometry = res.geom;
-                old.dispose();
-            } else {
-                done.set(old, old);
-            }
+            const list = idxs.map(i => meshes[i]);
+            const opts = { maxEdge: edgeM / mpu, budget, multi: true, needs: refiner(M) };
+            const added = _lbSubdivideMeshes(list, opts);
+            budget -= added;
+            doneN += idxs.length;
             if (performance.now() - lastYield > 30) {
-                _lbSetStatus(`灯りの近くの三角形を分けています… ${i + 1}/${meshes.length}`, 0.25 * (i + 1) / meshes.length);
+                _lbSetStatus(`灯りの近くの三角形を分けています… ${doneN}/${meshes.length}`, 0.25 * doneN / meshes.length);
                 yield 'frame';
                 if (job.aborted) return;
                 lastYield = performance.now();

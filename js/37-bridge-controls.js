@@ -71,6 +71,7 @@ const BRIDGE_BELLS = {
 window.BRIDGE_BELLS = BRIDGE_BELLS;
 const bridgeUI = {
     telegraph: 'olympic', wheel: 'classic', wheelText: 'R.M.S. OLYMPIC', waitAnswer: true, bell: 'auto',
+    tgTheme: 'auto', tgLit: true,     // 盤面の色（auto/white/black）・暗くなったら盤面を光らせる
 };
 window.bridgeUI = bridgeUI;
 const _br = {
@@ -397,7 +398,7 @@ function _textOnArc(ctx, text, cx, cy, r, aCenter, engraved, color, flip) {
         ctx.translate(cx + Math.sin(am) * r, cy - Math.cos(am) * r);
         ctx.rotate(flip ? am + Math.PI : am);
         if (engraved) _engraved(ctx, ch, -w / 2, 0, color);
-        else { ctx.fillStyle = color || '#111'; ctx.fillText(ch, -w / 2, 0); }
+        else { ctx.fillStyle = color || '#111'; _tgText(ctx, ch, -w / 2, 0); }
         ctx.restore();
         a += dir * w / r;
     });
@@ -433,13 +434,83 @@ function _tgAngle(design, v) {
 // ════════════════════════════════════════════════════════════════
 //  テレグラフの描画
 // ════════════════════════════════════════════════════════════════
+// ── 盤面の色（白基調・黒基調）と夜の照明 ──
+//  白基調：白いほうろう・明るいパネルに黒文字（夜は盤面の裏から照らしたように光る）
+//  黒基調：黒い盤面に金・色文字（夜は文字が光る＝夜光・照明文字）
+//  暗くなるほど（昼夜係数）ケースやハンドルは暗くなり、盤面と文字だけが光って見える。
+const TG_THEMES = { auto: 'デザインに合わせる', white: '白基調', black: '黒基調' };
+window.TG_THEMES = TG_THEMES;
+function _tgTheme(design) {
+    const t = bridgeUI.tgTheme;
+    if (t === 'white' || t === 'black') return t;
+    return design === 'olympic' ? 'white' : 'black';
+}
+function _tgNight() {
+    if (bridgeUI.tgLit === false) return 0;
+    const nf = (typeof lightingNightFactor !== 'undefined') ? lightingNightFactor : 0;
+    return Math.max(0, Math.min(1, nf));
+}
+function _tgPalette(theme) {
+    return theme === 'white' ? {
+        white: true,
+        panel: '#e6e3dc', panelEdge: '#a9a397', ahead: '#17692f', astern: '#b3261e', stop: '#1a1a1a', tick: '#6b6b6b',
+        sel: '#b86e00', btnOff: '#f7f5f0', btnEdge: '#b9b3a6', textOff: '#2b2b2b', gauge: '#f3f0e8', gaugeText: '#1a1a1a', sub: '#5a5a5a',
+        glow: 'rgba(255,214,150,0.95)',
+    } : {
+        white: false,
+        panel: '#20252b', panelEdge: '#3a4048', ahead: '#8ff0ad', astern: '#ff8a73', stop: '#f2f2f2', tick: '#6c7580',
+        sel: '#ffd23c', btnOff: '#262b31', btnEdge: '#3a4048', textOff: '#f2f2f2', gauge: '#0c0f10', gaugeText: '#d8dde0', sub: '#9aa3ad',
+        glow: null,   // 文字それぞれの色で光る
+    };
+}
+// 文字を書く（夜は文字が光る）
+let _tgGlowPx = 0, _tgGlowCol = null;
+function _tgText(ctx, text, x, y) {
+    if (_tgGlowPx > 0) {
+        ctx.save();
+        ctx.shadowColor = _tgGlowCol || ctx.fillStyle;
+        ctx.shadowBlur = _tgGlowPx;
+        ctx.fillText(text, x, y);
+        ctx.restore();
+    }
+    ctx.fillText(text, x, y);
+}
+// いま描いてある物（ケース・パネル）だけを暗くする
+function _tgDim(ctx, S, k) {
+    if (k <= 0.001) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.fillStyle = `rgba(4,6,12,${k})`;
+    ctx.fillRect(0, 0, S, S);
+    ctx.restore();
+}
+// 夜：パネルの裏から照らした光（白基調）・ほのかな照り返し（黒基調）
+function _tgBacklight(ctx, x, y, w, h, r, night, white) {
+    if (night <= 0.001) return;
+    ctx.save();
+    const g = ctx.createRadialGradient(x + w / 2, y + h / 2, 0, x + w / 2, y + h / 2, Math.max(w, h) * 0.7);
+    if (white) { g.addColorStop(0, `rgba(255,236,196,${0.55 * night})`); g.addColorStop(1, `rgba(255,214,150,${0.25 * night})`); }
+    else { g.addColorStop(0, `rgba(255,190,110,${0.1 * night})`); g.addColorStop(1, 'rgba(255,190,110,0)'); }
+    ctx.globalCompositeOperation = white ? 'source-atop' : 'lighter';
+    ctx.fillStyle = g;
+    _roundRect(ctx, x, y, w, h, r); ctx.fill();
+    ctx.restore();
+}
+
 function _drawTelegraph(ctx, S, design, handleV, answerV, order, special, ansSpecial) {
     ctx.clearRect(0, 0, S, S);
     const cx = S / 2, cy = S * 0.54, R = S * 0.44;
     const hAng = _tgAngle(design, handleV), aAng = _tgAngle(design, answerV);
+    const theme = _tgTheme(design), P = _tgPalette(theme);
+    const night = _tgNight();
+    const dimK = 0.62 * night;                       // ケース・ハンドルの暗さ
+    _tgGlowPx = night > 0.02 ? S * 0.035 * night : 0;
+    _tgGlowCol = P.glow;
 
     if (design === 'olympic' || design === 'queenmary') {
         const deco = design === 'queenmary';
+        const dark = theme === 'black';
+        const font = deco ? '"Futura","Avenir Next","Century Gothic",sans-serif' : 'Georgia,"Times New Roman",serif';
         // 胴（ケース）
         ctx.save();
         ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = S * 0.05; ctx.shadowOffsetY = S * 0.02;
@@ -447,15 +518,31 @@ function _drawTelegraph(ctx, S, design, handleV, answerV, order, special, ansSpe
         ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
         ctx.restore();
         _ring(ctx, cx, cy, R * 0.86, R * 0.95, deco ? 'rgba(20,14,4,0.55)' : 'rgba(80,55,10,0.45)');
-        // 文字盤
+        // ケースのねじ
+        for (let i = 0; i < 6; i++) { const a = _deg(30 + i * 60); _screw(ctx, cx + Math.sin(a) * R * 0.905, cy - Math.cos(a) * R * 0.905, S * 0.012); }
+        _tgDim(ctx, S, dimK);
+        // 文字盤（夜は裏から照らされて光る）
         const face = ctx.createRadialGradient(cx - R * 0.2, cy - R * 0.3, R * 0.1, cx, cy, R * 0.86);
-        if (deco) { face.addColorStop(0, '#1d1a14'); face.addColorStop(1, '#050403'); }
-        else { face.addColorStop(0, '#fffdf4'); face.addColorStop(1, '#e8e0cc'); }
+        if (dark) { face.addColorStop(0, '#1d1a14'); face.addColorStop(1, '#050403'); }
+        else if (night > 0.02) {
+            const mix = (c1, c2) => c1.map((v, i) => Math.round(v + (c2[i] - v) * night));
+            const c0 = mix([255, 253, 244], [255, 243, 212]), c1 = mix([232, 224, 204], [246, 222, 170]);
+            face.addColorStop(0, `rgb(${c0})`); face.addColorStop(1, `rgb(${c1})`);
+        } else { face.addColorStop(0, '#fffdf4'); face.addColorStop(1, '#e8e0cc'); }
+        ctx.save();
+        if (!dark && night > 0.02) { ctx.shadowColor = `rgba(255,214,150,${0.9 * night})`; ctx.shadowBlur = S * 0.07 * night; }
         ctx.fillStyle = face;
         ctx.beginPath(); ctx.arc(cx, cy, R * 0.84, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+        if (dark && night > 0.02) {
+            // 黒い盤面：中心からほのかに照らされる
+            const gl = ctx.createRadialGradient(cx, cy, R * 0.1, cx, cy, R * 0.84);
+            gl.addColorStop(0, `rgba(255,200,120,${0.12 * night})`); gl.addColorStop(1, 'rgba(255,200,120,0)');
+            ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(cx, cy, R * 0.84, 0, Math.PI * 2); ctx.fill();
+        }
         if (deco) {
             // アールデコの放射線（サンバースト）
-            ctx.strokeStyle = 'rgba(212,175,90,0.25)'; ctx.lineWidth = 1;
+            ctx.strokeStyle = dark ? 'rgba(212,175,90,0.25)' : 'rgba(150,110,30,0.22)'; ctx.lineWidth = 1;
             for (let i = -12; i <= 12; i++) {
                 const a = _deg(i * 7.5);
                 ctx.beginPath(); ctx.moveTo(cx + Math.sin(a) * R * 0.2, cy - Math.cos(a) * R * 0.2);
@@ -463,25 +550,26 @@ function _drawTelegraph(ctx, S, design, handleV, answerV, order, special, ansSpe
             }
             _ring(ctx, cx, cy, R * 0.8, R * 0.82, '#c9a24c');
         }
-        // 区切りと文字（前進は黒、後進は赤。アールデコは金と朱）
+        // 区切りと文字（白基調：前進は黒・後進は赤。黒基調：金と朱）
         const step = deco ? 31 : 33;
+        const lineCol = dark ? 'rgba(201,162,76,0.7)' : 'rgba(0,0,0,0.45)';
         ctx.textBaseline = 'middle';
         for (let v = -3; v <= 3; v++) {
             const a = _tgAngle(design, v);
             const lab = _TG_LABEL[v];
-            const col = deco ? (v < 0 ? '#e0674a' : (v === 0 ? '#f3e6c0' : '#d9b45a')) : (v < 0 ? '#b3140f' : '#101010');
-            ctx.font = `bold ${Math.round(S * (v === 0 ? 0.052 : 0.046))}px ${deco ? '"Futura","Avenir Next","Century Gothic",sans-serif' : 'Georgia,"Times New Roman",serif'}`;
+            const col = dark ? (v < 0 ? '#e0674a' : (v === 0 ? '#f3e6c0' : '#d9b45a')) : (v < 0 ? '#b3140f' : '#101010');
+            ctx.font = `bold ${Math.round(S * (v === 0 ? 0.052 : 0.046))}px ${font}`;
             _textOnArc(ctx, lab, cx, cy, R * 0.68, a, false, col);
             // 区切り線
             const b = _deg((v + 0.5) * -step);
             if (v < 3) {
-                ctx.strokeStyle = deco ? 'rgba(201,162,76,0.7)' : 'rgba(0,0,0,0.45)'; ctx.lineWidth = 1;
+                ctx.strokeStyle = lineCol; ctx.lineWidth = 1;
                 ctx.beginPath(); ctx.moveTo(cx + Math.sin(b) * R * 0.5, cy - Math.cos(b) * R * 0.5);
                 ctx.lineTo(cx + Math.sin(b) * R * 0.83, cy - Math.cos(b) * R * 0.83); ctx.stroke();
             }
             if (v === order && !special) {
                 // 指令中の区画をうっすら強調
-                ctx.fillStyle = deco ? 'rgba(212,175,90,0.18)' : 'rgba(255,200,60,0.25)';
+                ctx.fillStyle = dark ? 'rgba(212,175,90,0.18)' : 'rgba(255,200,60,0.25)';
                 ctx.beginPath(); ctx.moveTo(cx, cy);
                 ctx.arc(cx, cy, R * 0.83, a - Math.PI / 2 - _deg(step / 2), a - Math.PI / 2 + _deg(step / 2)); ctx.closePath(); ctx.fill();
             }
@@ -489,67 +577,73 @@ function _drawTelegraph(ctx, S, design, handleV, answerV, order, special, ansSpe
         // 両端：スタンバイ（前進側）と機関終了（後進側）。下側なので文字は内向き
         for (const [key, sp] of Object.entries(_TG_SPECIAL)) {
             const a = _tgAngle(design, sp.v);
-            ctx.font = `bold ${Math.round(S * 0.036)}px ${deco ? '"Futura","Avenir Next","Century Gothic",sans-serif' : 'Georgia,"Times New Roman",serif'}`;
+            ctx.font = `bold ${Math.round(S * 0.036)}px ${font}`;
             // 機関終了は長いので「FINISHED」だけ（下の銘板に日本語で出る）
-            _textOnArc(ctx, key === 'fwe' ? 'FINISHED' : sp.en, cx, cy, R * 0.7, a, false, deco ? '#9fc3d9' : '#1d3f73', true);
+            _textOnArc(ctx, key === 'fwe' ? 'FINISHED' : sp.en, cx, cy, R * 0.7, a, false, dark ? '#9fc3d9' : '#1d3f73', true);
             const b = _tgAngle(design, sp.v > 0 ? 3.5 : -3.5);
-            ctx.strokeStyle = deco ? 'rgba(201,162,76,0.7)' : 'rgba(0,0,0,0.45)'; ctx.lineWidth = 1;
+            ctx.strokeStyle = lineCol; ctx.lineWidth = 1;
             ctx.beginPath(); ctx.moveTo(cx + Math.sin(b) * R * 0.5, cy - Math.cos(b) * R * 0.5);
             ctx.lineTo(cx + Math.sin(b) * R * 0.83, cy - Math.cos(b) * R * 0.83); ctx.stroke();
             if (special === key) {
-                ctx.fillStyle = deco ? 'rgba(160,200,230,0.18)' : 'rgba(60,120,220,0.18)';
+                ctx.fillStyle = dark ? 'rgba(160,200,230,0.18)' : 'rgba(60,120,220,0.18)';
                 ctx.beginPath(); ctx.moveTo(cx, cy);
                 ctx.arc(cx, cy, R * 0.83, a - Math.PI / 2 - _deg(step / 2), a - Math.PI / 2 + _deg(step / 2)); ctx.closePath(); ctx.fill();
             }
         }
-        ctx.font = `bold ${Math.round(S * 0.042)}px ${deco ? '"Futura",sans-serif' : 'Georgia,serif'}`;
+        ctx.font = `bold ${Math.round(S * 0.042)}px ${font}`;
         ctx.textAlign = 'center';
         // 本物と同じく、前進・後進の文字は文字盤の上半分の内側に
-        ctx.fillStyle = deco ? '#d9b45a' : '#101010'; ctx.fillText('AHEAD', cx - R * 0.33, cy - R * 0.22);
-        ctx.fillStyle = deco ? '#e0674a' : '#b3140f'; ctx.fillText('ASTERN', cx + R * 0.33, cy - R * 0.22);
-        ctx.textAlign = 'start';
+        ctx.fillStyle = dark ? '#d9b45a' : '#101010'; _tgText(ctx, 'AHEAD', cx - R * 0.33, cy - R * 0.22);
+        ctx.fillStyle = dark ? '#e0674a' : '#b3140f'; _tgText(ctx, 'ASTERN', cx + R * 0.33, cy - R * 0.22);
         // 下半分：銘板
-        ctx.font = `${Math.round(S * 0.045)}px ${deco ? '"Futura",sans-serif' : 'Georgia,serif'}`;
-        ctx.textAlign = 'center';
-        ctx.fillStyle = deco ? '#c9a24c' : '#3a2c10';
-        ctx.fillText(deco ? 'ENGINE ORDER' : 'ENGINE ROOM', cx, cy + R * 0.42);
-        ctx.font = `${Math.round(S * 0.035)}px ${deco ? '"Futura",sans-serif' : 'Georgia,serif'}`;
-        ctx.fillText(special ? _TG_SPECIAL[special].jp : _TG_JP[order], cx, cy + R * 0.58);
+        ctx.font = `${Math.round(S * 0.045)}px ${font}`;
+        ctx.fillStyle = dark ? '#c9a24c' : '#3a2c10';
+        _tgText(ctx, deco ? 'ENGINE ORDER' : 'ENGINE ROOM', cx, cy + R * 0.42);
+        ctx.font = `${Math.round(S * 0.035)}px ${font}`;
+        _tgText(ctx, special ? _TG_SPECIAL[special].jp : _TG_JP[order], cx, cy + R * 0.58);
         ctx.textAlign = 'start';
-        // 応答の針（赤・内側）と、指令の針（真鍮）
+        // 応答の針（赤・内側）と、指令の針
         _needle(ctx, cx, cy, aAng, R * 0.42, S * 0.018, '#c0201a');
-        _needle(ctx, cx, cy, hAng, R * 0.8, S * 0.03, deco ? _brass(ctx, cx - R, cy - R, cx + R, cy + R) : '#2a2a2a');
+        _needle(ctx, cx, cy, hAng, R * 0.8, S * 0.03, dark ? _brass(ctx, cx - R, cy - R, cx + R, cy + R) : '#2a2a2a');
         // 中心のボス
         ctx.fillStyle = _brass(ctx, cx - R * 0.1, cy - R * 0.1, cx + R * 0.1, cy + R * 0.1);
         ctx.beginPath(); ctx.arc(cx, cy, R * 0.09, 0, Math.PI * 2); ctx.fill();
-        // 外のハンドル（ケースの外まで伸びる把手）
+        // ガラスの映り込み（夜は弱く）
+        const gl = ctx.createLinearGradient(cx - R, cy - R, cx + R * 0.3, cy + R * 0.2);
+        const gk = 1 - 0.75 * night;
+        gl.addColorStop(0, `rgba(255,255,255,${0.28 * gk})`); gl.addColorStop(0.5, `rgba(255,255,255,${0.03 * gk})`); gl.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(cx, cy, R * 0.84, 0, Math.PI * 2); ctx.fill();
+        // 外のハンドル（ケースの外まで伸びる把手）。夜はケースと同じく暗く
         ctx.save(); ctx.translate(cx, cy); ctx.rotate(hAng);
         ctx.fillStyle = _brass(ctx, -S * 0.03, -R * 1.18, S * 0.03, -R * 0.9);
         ctx.fillRect(-S * 0.016, -R * 1.12, S * 0.032, R * 0.24);
         ctx.beginPath(); ctx.arc(0, -R * 1.14, S * 0.045, 0, Math.PI * 2);
         ctx.fillStyle = deco ? '#1a1a1a' : '#5b2b12'; ctx.fill();
+        if (dimK > 0.001) {
+            ctx.fillStyle = `rgba(4,6,12,${dimK})`;
+            ctx.fillRect(-S * 0.016, -R * 1.12, S * 0.032, R * 0.24);
+            ctx.beginPath(); ctx.arc(0, -R * 1.14, S * 0.045, 0, Math.PI * 2); ctx.fill();
+        }
         ctx.restore();
-        // ケースのねじ
-        for (let i = 0; i < 6; i++) { const a = _deg(30 + i * 60); _screw(ctx, cx + Math.sin(a) * R * 0.905, cy - Math.cos(a) * R * 0.905, S * 0.012); }
-        // ガラスの映り込み
-        const gl = ctx.createLinearGradient(cx - R, cy - R, cx + R * 0.3, cy + R * 0.2);
-        gl.addColorStop(0, 'rgba(255,255,255,0.28)'); gl.addColorStop(0.5, 'rgba(255,255,255,0.03)'); gl.addColorStop(1, 'rgba(255,255,255,0)');
-        ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(cx, cy, R * 0.84, 0, Math.PI * 2); ctx.fill();
+        _tgGlowPx = 0;
         return;
     }
 
     if (design === 'warship') {
-        // 黒い計器：前進（緑）・後進（赤）の目盛り
+        // 計器：前進（緑）・後進（赤）の目盛り
         ctx.save();
         ctx.shadowColor = 'rgba(0,0,0,0.7)'; ctx.shadowBlur = S * 0.04;
         ctx.fillStyle = _chrome(ctx, 0, 0, S, S);
         ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
         ctx.restore();
-        ctx.fillStyle = '#0c0f10'; ctx.beginPath(); ctx.arc(cx, cy, R * 0.9, 0, Math.PI * 2); ctx.fill();
+        _drawSpecialBtns(ctx, S, design, special, ansSpecial, P, true);
+        _tgDim(ctx, S, dimK);
+        ctx.fillStyle = P.gauge; ctx.beginPath(); ctx.arc(cx, cy, R * 0.9, 0, Math.PI * 2); ctx.fill();
+        _tgBacklight(ctx, cx - R * 0.9, cy - R * 0.9, R * 1.8, R * 1.8, R * 0.9, night, P.white);
         const arc = (a0, a1, col) => { ctx.strokeStyle = col; ctx.lineWidth = S * 0.035; ctx.beginPath(); ctx.arc(cx, cy, R * 0.74, a0 - Math.PI / 2, a1 - Math.PI / 2); ctx.stroke(); };
-        arc(_deg(4), _deg(126), '#1f8a3a');
-        arc(_deg(-126), _deg(-4), '#a51c1c');
-        ctx.strokeStyle = '#d8dde0'; ctx.fillStyle = '#d8dde0';
+        arc(_deg(4), _deg(126), P.white ? '#2e9a4c' : '#1f8a3a');
+        arc(_deg(-126), _deg(-4), P.white ? '#c23a32' : '#a51c1c');
+        ctx.strokeStyle = P.gaugeText; ctx.fillStyle = P.gaugeText;
         for (let i = -30; i <= 30; i++) {
             const a = _deg(i * 3.6 * 1.166);
             if (Math.abs(i * 3.6 * 1.166) > 126) continue;
@@ -561,61 +655,71 @@ function _drawTelegraph(ctx, S, design, handleV, answerV, order, special, ansSpe
         ctx.font = `bold ${Math.round(S * 0.05)}px "Helvetica Neue",Arial,sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         for (let v = -3; v <= 3; v++) {
             const a = _tgAngle(design, v);
-            ctx.fillStyle = v > 0 ? '#7ee39a' : (v < 0 ? '#ff8a80' : '#ffffff');
-            ctx.fillText(v === 0 ? 'STOP' : String(Math.abs(v) * 33 + (Math.abs(v) === 3 ? 1 : 0)), cx + Math.sin(a) * R * 0.5, cy - Math.cos(a) * R * 0.5);
+            ctx.fillStyle = v > 0 ? P.ahead : (v < 0 ? P.astern : P.stop);
+            _tgText(ctx, v === 0 ? 'STOP' : String(Math.abs(v) * 33 + (Math.abs(v) === 3 ? 1 : 0)), cx + Math.sin(a) * R * 0.5, cy - Math.cos(a) * R * 0.5);
         }
         ctx.font = `bold ${Math.round(S * 0.042)}px "Helvetica Neue",Arial,sans-serif`;
-        ctx.fillStyle = '#7ee39a'; ctx.fillText('AHEAD', cx + R * 0.34, cy + R * 0.42);
-        ctx.fillStyle = '#ff8a80'; ctx.fillText('ASTERN', cx - R * 0.34, cy + R * 0.42);
-        ctx.fillStyle = '#9aa3ad'; ctx.font = `${Math.round(S * 0.034)}px "Helvetica Neue",Arial,sans-serif`;
-        ctx.fillText('REVOLUTIONS %', cx, cy + R * 0.26);
+        ctx.fillStyle = P.ahead; _tgText(ctx, 'AHEAD', cx + R * 0.34, cy + R * 0.42);
+        ctx.fillStyle = P.astern; _tgText(ctx, 'ASTERN', cx - R * 0.34, cy + R * 0.42);
+        ctx.fillStyle = P.sub; ctx.font = `${Math.round(S * 0.034)}px "Helvetica Neue",Arial,sans-serif`;
+        _tgText(ctx, 'REVOLUTIONS %', cx, cy + R * 0.26);
         // 小窓：指令（デジタル）
         ctx.fillStyle = '#021a08'; ctx.fillRect(cx - R * 0.33, cy + R * 0.5, R * 0.66, R * 0.2);
         ctx.fillStyle = order < 0 ? '#ff6b60' : '#5dff8a'; ctx.font = `bold ${Math.round(S * 0.05)}px "Courier New",monospace`;
-        ctx.fillText(special ? _TG_SPECIAL[special].short : `${order > 0 ? 'AH' : order < 0 ? 'AS' : ''} ${_TG_LABEL[order]}`, cx, cy + R * 0.6);
+        _tgText(ctx, special ? _TG_SPECIAL[special].short : `${order > 0 ? 'AH' : order < 0 ? 'AS' : ''} ${_TG_LABEL[order]}`, cx, cy + R * 0.6);
         ctx.textAlign = 'start';
         _needle(ctx, cx, cy, aAng, R * 0.55, S * 0.016, '#ff3b30');
-        _needle(ctx, cx, cy, hAng, R * 0.8, S * 0.025, '#f5f0e0');
+        _needle(ctx, cx, cy, hAng, R * 0.8, S * 0.025, P.white ? '#1f2328' : '#f5f0e0');
         ctx.fillStyle = _chrome(ctx, cx - 8, cy - 8, cx + 8, cy + 8);
         ctx.beginPath(); ctx.arc(cx, cy, R * 0.08, 0, Math.PI * 2); ctx.fill();
-        _drawSpecialBtns(ctx, S, design, special, ansSpecial);
+        _drawSpecialBtns(ctx, S, design, special, ansSpecial, P);
+        _tgGlowPx = 0;
         return;
     }
 
     if (design === 'modern') {
         // 押しボタンのパネル（上から全速前進〜全速後進）
         const x0 = S * 0.14, w = S * 0.72, y0 = S * 0.05, h = S * 0.9;
-        ctx.fillStyle = '#16191d'; _roundRect(ctx, x0, y0, w, h, S * 0.04); ctx.fill();
-        ctx.strokeStyle = '#3a4048'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.fillStyle = P.white ? '#cfd4da' : '#16191d'; _roundRect(ctx, x0, y0, w, h, S * 0.04); ctx.fill();
+        ctx.strokeStyle = P.white ? '#9aa3ad' : '#3a4048'; ctx.lineWidth = 2; ctx.stroke();
+        _tgDim(ctx, S, dimK);
         const bh = h / 8.6;
         for (let k = 0; k < 7; k++) {
             const v = 3 - k;
             const by = y0 + S * 0.03 + (k + 1) * bh;      // 1段目はスタンバイ・機関終了
             const on = v === order && !special, ans = v === Math.round(answerV) && !ansSpecial;
-            ctx.fillStyle = on ? (v < 0 ? '#ff5a3c' : (v === 0 ? '#ffd23c' : '#46e07a')) : '#262b31';
+            ctx.fillStyle = on ? (v < 0 ? '#ff5a3c' : (v === 0 ? '#ffd23c' : '#46e07a')) : P.btnOff;
+            ctx.save();
+            if (on && night > 0.02) { ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = S * 0.05 * night; }
             _roundRect(ctx, x0 + S * 0.05, by, w - S * 0.1, bh * 0.82, S * 0.02); ctx.fill();
-            if (ans && !on) { ctx.strokeStyle = '#ffd23c'; ctx.lineWidth = 2; ctx.stroke(); }
-            ctx.fillStyle = on ? '#101010' : (v < 0 ? '#ff8a73' : (v === 0 ? '#f2f2f2' : '#8ff0ad'));
+            ctx.restore();
+            if (!on) _tgBacklight(ctx, x0 + S * 0.05, by, w - S * 0.1, bh * 0.82, S * 0.02, night * 0.8, P.white);
+            if (ans && !on) { ctx.strokeStyle = P.sel; ctx.lineWidth = 2; _roundRect(ctx, x0 + S * 0.05, by, w - S * 0.1, bh * 0.82, S * 0.02); ctx.stroke(); }
+            ctx.fillStyle = on ? '#101010' : (v < 0 ? P.astern : (v === 0 ? P.stop : P.ahead));
             ctx.font = `bold ${Math.round(S * 0.052)}px "Helvetica Neue",Arial,sans-serif`;
             ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-            ctx.fillText(v === 0 ? 'STOP' : `${_TG_LABEL[v]} ${v > 0 ? 'AHEAD' : 'ASTERN'}`, x0 + w / 2, by + bh * 0.41);
+            _tgText(ctx, v === 0 ? 'STOP' : `${_TG_LABEL[v]} ${v > 0 ? 'AHEAD' : 'ASTERN'}`, x0 + w / 2, by + bh * 0.41);
         }
-        _drawSpecialBtns(ctx, S, design, special, ansSpecial);
+        _drawSpecialBtns(ctx, S, design, special, ansSpecial, P);
+        _tgGlowPx = 0;
         return;
     }
 
     if (design === 'rotary') {
         // 目盛りの付いた回転つまみ
-        ctx.fillStyle = '#20252b'; _roundRect(ctx, S * 0.05, S * 0.08, S * 0.9, S * 0.86, S * 0.06); ctx.fill();
+        ctx.fillStyle = P.panel; _roundRect(ctx, S * 0.05, S * 0.08, S * 0.9, S * 0.86, S * 0.06); ctx.fill();
+        if (P.white) { ctx.strokeStyle = P.panelEdge; ctx.lineWidth = 1.5; ctx.stroke(); }
+        _tgDim(ctx, S, dimK);
+        _tgBacklight(ctx, S * 0.05, S * 0.08, S * 0.9, S * 0.86, S * 0.06, night, P.white);
         ctx.font = `bold ${Math.round(S * 0.048)}px "Helvetica Neue",Arial,sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         for (let v = -3; v <= 3; v++) {
             const a = _tgAngle(design, v);
-            ctx.fillStyle = (v === order && !special) ? '#ffd23c' : (v > 0 ? '#8ff0ad' : (v < 0 ? '#ff8a73' : '#f2f2f2'));
-            ctx.fillText(v === 0 ? 'STOP' : _TG_LABEL[v], cx + Math.sin(a) * R * 0.8, cy - Math.cos(a) * R * 0.8);
+            ctx.fillStyle = (v === order && !special) ? P.sel : (v > 0 ? P.ahead : (v < 0 ? P.astern : P.stop));
+            _tgText(ctx, v === 0 ? 'STOP' : _TG_LABEL[v], cx + Math.sin(a) * R * 0.8, cy - Math.cos(a) * R * 0.8);
             ctx.fillRect(cx + Math.sin(a) * R * 0.62 - 2, cy - Math.cos(a) * R * 0.62 - 2, 4, 4);
         }
-        ctx.fillStyle = '#8ff0ad'; ctx.fillText('AHEAD ▶', cx + R * 0.5, cy + R * 0.72);
-        ctx.fillStyle = '#ff8a73'; ctx.fillText('◀ ASTERN', cx - R * 0.5, cy + R * 0.72);
+        ctx.fillStyle = P.ahead; _tgText(ctx, 'AHEAD ▶', cx + R * 0.5, cy + R * 0.72);
+        ctx.fillStyle = P.astern; _tgText(ctx, '◀ ASTERN', cx - R * 0.5, cy + R * 0.72);
         ctx.textAlign = 'start';
         // つまみ（ギザギザの縁）
         ctx.save(); ctx.translate(cx, cy); ctx.rotate(hAng);
@@ -625,36 +729,47 @@ function _drawTelegraph(ctx, S, design, handleV, answerV, order, special, ansSpe
         ctx.closePath(); ctx.fill();
         ctx.fillStyle = _chrome(ctx, -R * 0.4, -R * 0.4, R * 0.4, R * 0.4);
         ctx.beginPath(); ctx.arc(0, 0, R * 0.42, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = '#ff9f1a'; ctx.fillRect(-S * 0.012, -R * 0.5, S * 0.024, R * 0.3);
+        if (dimK > 0.001) { ctx.fillStyle = `rgba(4,6,12,${dimK})`; ctx.beginPath(); ctx.arc(0, 0, R * 0.42, 0, Math.PI * 2); ctx.fill(); }
+        ctx.fillStyle = '#ff9f1a';
+        ctx.save(); if (night > 0.02) { ctx.shadowColor = '#ff9f1a'; ctx.shadowBlur = S * 0.03 * night; }
+        ctx.fillRect(-S * 0.012, -R * 0.5, S * 0.024, R * 0.3); ctx.restore();
         ctx.restore();
         // 応答ランプ
         const aa = _tgAngle(design, answerV);
+        ctx.save(); if (night > 0.02) { ctx.shadowColor = '#ff3b30'; ctx.shadowBlur = S * 0.04 * night; }
         ctx.fillStyle = '#ff3b30'; ctx.beginPath(); ctx.arc(cx + Math.sin(aa) * R * 0.95, cy - Math.cos(aa) * R * 0.95, S * 0.014, 0, Math.PI * 2); ctx.fill();
-        _drawSpecialBtns(ctx, S, design, special, ansSpecial);
+        ctx.restore();
+        _drawSpecialBtns(ctx, S, design, special, ansSpecial, P);
+        _tgGlowPx = 0;
         return;
     }
 
     if (design === 'tilt') {
         // 横から見たレバー：前へ倒すと前進、手前へ倒すと後進
         const px = cx, py = S * 0.86;
-        ctx.fillStyle = '#23282e'; _roundRect(ctx, S * 0.05, S * 0.05, S * 0.9, S * 0.9, S * 0.06); ctx.fill();
+        ctx.fillStyle = P.white ? P.panel : '#23282e'; _roundRect(ctx, S * 0.05, S * 0.05, S * 0.9, S * 0.9, S * 0.06); ctx.fill();
+        if (P.white) { ctx.strokeStyle = P.panelEdge; ctx.lineWidth = 1.5; ctx.stroke(); }
+        _tgDim(ctx, S, dimK);
+        _tgBacklight(ctx, S * 0.05, S * 0.05, S * 0.9, S * 0.9, S * 0.06, night, P.white);
         // 目盛りの弧
         ctx.font = `bold ${Math.round(S * 0.045)}px "Helvetica Neue",Arial,sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         for (let v = -3; v <= 3; v++) {
             const a = _tgAngle(design, v);
             const L = S * 0.56;
-            ctx.strokeStyle = (v === order && !special) ? '#ffd23c' : '#6c7580'; ctx.lineWidth = 2;
+            ctx.strokeStyle = (v === order && !special) ? P.sel : P.tick; ctx.lineWidth = 2;
             ctx.beginPath(); ctx.moveTo(px + Math.sin(a) * L * 0.9, py - Math.cos(a) * L * 0.9); ctx.lineTo(px + Math.sin(a) * L * 0.97, py - Math.cos(a) * L * 0.97); ctx.stroke();
-            ctx.fillStyle = (v === order && !special) ? '#ffd23c' : (v > 0 ? '#8ff0ad' : (v < 0 ? '#ff8a73' : '#f2f2f2'));
+            ctx.fillStyle = (v === order && !special) ? P.sel : (v > 0 ? P.ahead : (v < 0 ? P.astern : P.stop));
             ctx.save(); ctx.translate(px + Math.sin(a) * L * 1.08, py - Math.cos(a) * L * 1.08); ctx.rotate(a);
-            ctx.fillText(v === 0 ? 'STOP' : _TG_LABEL[v], 0, 0); ctx.restore();
+            _tgText(ctx, v === 0 ? 'STOP' : _TG_LABEL[v], 0, 0); ctx.restore();
         }
-        ctx.fillStyle = '#8ff0ad'; ctx.fillText('AHEAD', S * 0.8, S * 0.9);
-        ctx.fillStyle = '#ff8a73'; ctx.fillText('ASTERN', S * 0.2, S * 0.9);
+        ctx.fillStyle = P.ahead; _tgText(ctx, 'AHEAD', S * 0.8, S * 0.9);
+        ctx.fillStyle = P.astern; _tgText(ctx, 'ASTERN', S * 0.2, S * 0.9);
         ctx.textAlign = 'start';
         // 応答の印
         const aa = _tgAngle(design, answerV);
+        ctx.save(); if (night > 0.02) { ctx.shadowColor = '#ff3b30'; ctx.shadowBlur = S * 0.04 * night; }
         ctx.fillStyle = '#ff3b30'; ctx.beginPath(); ctx.arc(px + Math.sin(aa) * S * 0.49, py - Math.cos(aa) * S * 0.49, S * 0.014, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
         // 溝とレバー
         ctx.fillStyle = '#0b0d0f'; ctx.beginPath(); ctx.arc(px, py, S * 0.12, Math.PI, 0); ctx.fill();
         ctx.save(); ctx.translate(px, py); ctx.rotate(hAng);
@@ -662,10 +777,13 @@ function _drawTelegraph(ctx, S, design, handleV, answerV, order, special, ansSpe
         ctx.fillRect(-S * 0.018, -S * 0.39, S * 0.036, S * 0.39);
         ctx.fillStyle = '#111'; ctx.beginPath(); ctx.ellipse(0, -S * 0.42, S * 0.048, S * 0.058, 0, 0, Math.PI * 2); ctx.fill();
         ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.beginPath(); ctx.ellipse(-S * 0.014, -S * 0.435, S * 0.016, S * 0.024, 0, 0, Math.PI * 2); ctx.fill();
+        if (dimK > 0.001) { ctx.fillStyle = `rgba(4,6,12,${dimK})`; ctx.fillRect(-S * 0.018, -S * 0.39, S * 0.036, S * 0.39); ctx.beginPath(); ctx.ellipse(0, -S * 0.42, S * 0.048, S * 0.058, 0, 0, Math.PI * 2); ctx.fill(); }
         ctx.restore();
-        _drawSpecialBtns(ctx, S, design, special, ansSpecial);
+        _drawSpecialBtns(ctx, S, design, special, ansSpecial, P);
+        _tgGlowPx = 0;
         return;
     }
+    _tgGlowPx = 0;
 }
 // 丸型以外：スタンバイ・機関終了の小さなボタンの位置 [x, y, 幅, 高さ]
 function _tgSpecialRects(design, S) {
@@ -676,17 +794,23 @@ function _tgSpecialRects(design, S) {
     }
     return { standby: [S * 0.03, S * 0.02, S * 0.25, S * 0.1], fwe: [S * 0.72, S * 0.02, S * 0.25, S * 0.1] };
 }
-function _drawSpecialBtns(ctx, S, design, special, ansSpecial) {
+function _drawSpecialBtns(ctx, S, design, special, ansSpecial, P, bgOnly) {
+    P = P || _tgPalette('black');
     const rects = _tgSpecialRects(design, S);
     ctx.font = `bold ${Math.round(S * 0.042)}px "Helvetica Neue",Arial,sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     for (const [key, [x, y, w, h]] of Object.entries(rects)) {
         const on = special === key, ans = ansSpecial === key;
-        ctx.fillStyle = on ? (key === 'standby' ? '#ffb020' : '#4aa3ff') : '#262b31';
+        if (bgOnly) {
+            // 夜に暗くするため、下地だけ先に描く（上から文字などを描き直す）
+            ctx.fillStyle = P.btnOff; _roundRect(ctx, x, y, w, h, S * 0.02); ctx.fill();
+            continue;
+        }
+        ctx.fillStyle = on ? (key === 'standby' ? '#ffb020' : '#4aa3ff') : P.btnOff;
         _roundRect(ctx, x, y, w, h, S * 0.02); ctx.fill();
-        ctx.strokeStyle = ans ? '#ffd23c' : '#3a4048'; ctx.lineWidth = ans ? 2 : 1; ctx.stroke();
-        ctx.fillStyle = on ? '#101010' : (key === 'standby' ? '#ffc861' : '#8cc6ff');
-        ctx.fillText(_TG_SPECIAL[key].short, x + w / 2, y + h * 0.52);
+        ctx.strokeStyle = ans ? P.sel : P.btnEdge; ctx.lineWidth = ans ? 2 : 1; ctx.stroke();
+        ctx.fillStyle = on ? '#101010' : (key === 'standby' ? (P.white ? '#a86400' : '#ffc861') : (P.white ? '#1f5fa8' : '#8cc6ff'));
+        _tgText(ctx, _TG_SPECIAL[key].short, x + w / 2, y + h * 0.52);
     }
     ctx.textAlign = 'start';
 }
@@ -995,6 +1119,9 @@ function updateBridge(t) {
     }
     if (Math.abs(physics.rudderAngle - _br.lastRudder) > 0.05) { _br.lastRudder = physics.rudderAngle; _br.dirtyW = true; }
 
+    // 暗くなる・明るくなるにつれて盤面の光り方を描き直す
+    const nk = Math.round(_tgNight() * 40);
+    if (nk !== _br.lastNightK) { _br.lastNightK = nk; _br.dirtyT = true; }
     if (_br.dirtyT && _tgCanvas && bridgeUI.telegraph !== 'buttons') {
         _br.dirtyT = false;
         _drawTelegraph(_tgCanvas.getContext('2d'), _br.size, design, _br.tgHandle, _br.answer, order, special, ansSpecial);
@@ -1008,9 +1135,9 @@ function updateBridge(t) {
 window.updateBridge = updateBridge;
 
 // ── 保存・読み込み ──
-function getBridgeConfig() { return { telegraph: bridgeUI.telegraph, wheel: bridgeUI.wheel, wheelText: bridgeUI.wheelText, waitAnswer: bridgeUI.waitAnswer, bell: bridgeUI.bell }; }
+function getBridgeConfig() { return { telegraph: bridgeUI.telegraph, wheel: bridgeUI.wheel, wheelText: bridgeUI.wheelText, waitAnswer: bridgeUI.waitAnswer, bell: bridgeUI.bell, tgTheme: bridgeUI.tgTheme, tgLit: bridgeUI.tgLit }; }
 function applyBridgeConfig(c) {
-    const d = { telegraph: 'olympic', wheel: 'classic', wheelText: 'R.M.S. OLYMPIC', waitAnswer: true, bell: 'auto' };
+    const d = { telegraph: 'olympic', wheel: 'classic', wheelText: 'R.M.S. OLYMPIC', waitAnswer: true, bell: 'auto', tgTheme: 'auto', tgLit: true };
     Object.assign(bridgeUI, d, c || {});
     if (!BRIDGE_TELEGRAPHS[bridgeUI.telegraph]) bridgeUI.telegraph = 'olympic';
     if (!BRIDGE_WHEELS[bridgeUI.wheel]) bridgeUI.wheel = 'classic';
@@ -1022,7 +1149,7 @@ window.getBridgeConfig = getBridgeConfig;
 window.applyBridgeConfig = applyBridgeConfig;
 
 function setBridgeOption(key, v) {
-    if (key === 'waitAnswer') bridgeUI.waitAnswer = !!v;
+    if (key === 'waitAnswer' || key === 'tgLit') bridgeUI[key] = !!v;
     else bridgeUI[key] = v;
     if (key === 'wheel') _br.wheelDeg = Math.max(-(WHEEL_LOCK_DEG[v] || 360), Math.min(WHEEL_LOCK_DEG[v] || 360, physics.helmOrder / 35 * (WHEEL_LOCK_DEG[v] || 360)));
     applyBridgeLayout();
@@ -1032,6 +1159,9 @@ window.setBridgeOption = setBridgeOption;
 function renderBridgePanel() {
     const bl = document.getElementById('bridge-bell');
     if (bl) bl.innerHTML = Object.entries(BRIDGE_BELLS).map(([k, l]) => `<option value="${k}"${k === (bridgeUI.bell || 'auto') ? ' selected' : ''}>${l}</option>`).join('');
+    const th = document.getElementById('bridge-tg-theme');
+    if (th) th.innerHTML = Object.entries(TG_THEMES).map(([k, l]) => `<option value="${k}"${k === (bridgeUI.tgTheme || 'auto') ? ' selected' : ''}>${l}</option>`).join('');
+    const lit = document.getElementById('bridge-tg-lit'); if (lit) lit.checked = bridgeUI.tgLit !== false;
     const tg = document.getElementById('bridge-telegraph');
     if (tg) tg.innerHTML = Object.entries(BRIDGE_TELEGRAPHS).map(([k, l]) => `<option value="${k}"${k === bridgeUI.telegraph ? ' selected' : ''}>${l}</option>`).join('');
     const wh = document.getElementById('bridge-wheel');

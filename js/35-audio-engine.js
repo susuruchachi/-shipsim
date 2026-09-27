@@ -279,7 +279,8 @@ function _audioBuildEnv() {
 
     // 雨：屋外のザーッ、室内では屋根を打つ音（こもった音）
     E.rainGain = _mkGain(0, E.outdoor);
-    audioNoiseSource('white').connect(_mkFilter('highpass', 2500, 0.5, E.rainGain));
+    // 高すぎる成分は耳に刺さるので削る（ザーッをやわらかく）
+    audioNoiseSource('white').connect(_mkFilter('highpass', 2200, 0.5, _mkFilter('lowpass', 9000, 0.5, E.rainGain)));
     E.roofGain = _mkGain(0, out);
     audioNoiseSource('white').connect(_mkFilter('lowpass', 900, 0.7, _mkFilter('highpass', 150, 0.5, E.roofGain)));
 
@@ -366,6 +367,7 @@ function _audioWaveImpacts(t, half) {
     const bowEv = window._bowSlamEvent, sternEv = window._sternSlamEvent;
     if (bowEv && bowEv !== E.lastBowEv) {
         E.lastBowEv = bowEv;
+        E.lastBowImpactT = t;
         const k = Math.min(2, 0.5 + (bowEv.slamRatio || 0) * 0.6) * seaK;
         audioWaveImpact(audioShipPoint(0, 0, half * 0.92, new THREE.Vector3()), k);
     }
@@ -374,6 +376,8 @@ function _audioWaveImpacts(t, half) {
         const k = Math.min(1.5, 0.4 + (sternEv.slamRatio || 0) * 0.45) * seaK;
         audioWaveImpact(audioShipPoint(0, 0, -half * 0.92, new THREE.Vector3()), k);
     }
+    // 船首が波で持ち上がったあと、落ちて水面に打ち付けられる
+    _audioBowDrop(t, half);
     // うねりが高いと、ときどき大きな波が舷側に当たる（波高1.5mくらいから）
     if (!E.sideNext) E.sideNext = t + 3;
     if (t > E.sideNext) {
@@ -386,6 +390,43 @@ function _audioWaveImpacts(t, half) {
             const p = audioShipPoint(side * beam, 0, (Math.random() * 1.6 - 0.8) * half, new THREE.Vector3());
             audioWaveImpact(p, seaK * (0.3 + 0.6 * Math.random()));
         }
+    }
+}
+
+// 船首の高さ（水面から）を見張り、いつもより大きく持ち上がってから
+// 勢いよく水面まで落ちたら「ドーン」と鳴らす（大波が当たる音と同じ音）。
+// 強さは、どれだけ持ち上がったか・落ちる速さで決める（船の重さは audioWaveImpact 側で）。
+function _audioBowDrop(t, half) {
+    const E = audio.env;
+    if (typeof getOceanHeight !== 'function') return;
+    const bp = audioShipPoint(0, 0, half * 0.92, E._bowTmp || (E._bowTmp = new THREE.Vector3()));
+    const rel = bp.y - getOceanHeight(bp.x, bp.z, t);
+    if (E.bowRelT === undefined || t - E.bowRelT > 1) {
+        E.bowRelT = t; E.bowRelPrev = rel; E.bowRelMean = rel; E.bowVel = 0; E.bowArmed = 0;
+        return;
+    }
+    const dt = t - E.bowRelT;
+    if (dt <= 0) return;
+    E.bowRelT = t;
+    E.bowVel += ((rel - E.bowRelPrev) / dt - E.bowVel) * Math.min(1, dt / 0.08);   // 上下の速さ（なめらかに）
+    E.bowRelPrev = rel;
+    E.bowRelMean += (rel - E.bowRelMean) * Math.min(1, dt / 20);                    // ふだんの高さ
+    const hp = window.hullProfile;
+    if (!hp || !hp.ready || !(hp.totalDraft > 0)) return;       // 船体を調べ終わるまで待つ
+    const sy = (typeof shipGroup !== 'undefined' && shipGroup) ? Math.abs(shipGroup.scale.y) || 1 : 1;
+    // 喫水[m]（喫水線からキールまで。totalDraft は船体の高さ全体なので使わない）
+    const dl = (hp.designWaterlineY || 0) - (hp.keelY || 0);
+    const draft = Math.max(0.3, (dl > 0 ? dl : hp.totalDraft * 0.3) * sy);
+    const d = rel - E.bowRelMean;
+    if (d > 0.3 * draft) E.bowArmed = Math.max(E.bowArmed || 0, d);
+    if (E.bowArmed && d < 0.08 * draft) {
+        const v = -E.bowVel;                       // 落ちる速さ[m/s]
+        if (v > 0.8 && t - (E.lastBowImpactT || -9) > 1.2) {
+            const k = Math.min(2, 0.3 + 0.5 * E.bowArmed / draft + v / 5);
+            audioWaveImpact(bp.clone(), k);
+            E.lastBowImpactT = t;
+        }
+        E.bowArmed = 0;
     }
 }
 
@@ -481,8 +522,9 @@ function _audioUpdateEnv(t, dt) {
 
     // ── 雨 ──
     const rain = on ? (w.rain || 0) : 0;
-    E.rainGain.gain.setTargetAtTime(0.18 * rain, now, 0.4);
-    E.roofGain.gain.setTargetAtTime(0.35 * rain * indoor, now, 0.4);
+    // 他の環境音（海・風）より前に出ないくらいに
+    E.rainGain.gain.setTargetAtTime(0.065 * rain, now, 0.4);
+    E.roofGain.gain.setTargetAtTime(0.16 * rain * indoor, now, 0.4);
 
     // ── 水中：全体をこもらせる ──
     audio.muffle.frequency.setTargetAtTime(20000 * (1 - under) + 380 * under, now, 0.1);
