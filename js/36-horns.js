@@ -789,7 +789,8 @@ window.addEventListener('keydown', (e) => {
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
     if (e.repeat) return;
     const k = e.key.toLowerCase();
-    if (k === 'h' && !_keyHeld.h) { _keyHeld.h = true; hornPressMain(); }
+    if (k === 'h' && !_keyHeld.h) { _keyHeld.h = true; hornPressMain(); }       // 操船信号用の汽笛を一斉に
+    if (k === 'g' && !_keyHeld.g) { _keyHeld.g = true; hornPressFog(); }        // 霧笛を一斉に
     if (/^[1-9]$/.test(k) && !_keyHeld[k]) {
         const i = parseInt(k, 10) - 1;
         if (i < shipSound.horns.length) { _keyHeld[k] = true; hornPress(i); }
@@ -798,6 +799,7 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => {
     const k = e.key.toLowerCase();
     if (k === 'h' && _keyHeld.h) { _keyHeld.h = false; hornReleaseMain(); }
+    if (k === 'g' && _keyHeld.g) { _keyHeld.g = false; hornReleaseFog(); }
     if (/^[1-9]$/.test(k) && _keyHeld[k]) { _keyHeld[k] = false; hornRelease(parseInt(k, 10) - 1); }
 });
 // 画面を離れたら鳴りっぱなしにしない

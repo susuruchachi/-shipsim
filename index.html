@@ -1051,7 +1051,7 @@
         </div>
         <div style="font-size:10px;color:#888;margin-top:4px;">
           位置(X/Y/Z)は煙突と同じ船の座標です。音はその場所から聞こえます（遠いほど小さく・まろやかに、音が届くまで遅れます）。<br>
-          画面の 📯 ボタン・Hキーで「📯ボタン・信号で鳴らす」にチェックした汽笛をまとめて、1〜9キーで番号の汽笛を鳴らせます。
+          画面の 📯 ボタン・Hキーで「📯ボタン・操船信号用」にチェックした汽笛をまとめて、Gキーで「霧中信号用（霧笛）」の汽笛をまとめて、1〜9キーで番号の汽笛を鳴らせます（押している間）。
         </div>
       </div>
       <div class="sp-section">
@@ -1107,7 +1107,8 @@
           <label class="sp-toggle"><input type="checkbox" id="bridge-wait-answer" checked onchange="setBridgeOption('waitAnswer', this.checked)"> 機関室の応答（ベル）を待ってから機関が動く</label>
         </div>
         <div style="font-size:10px;color:#888;margin-top:4px;">
-          ハンドル・針をドラッグするか、文字の所をタップして指令します（W/Sキーでも可）。<br>
+          ハンドル・針をドラッグするか、文字の所をタップして指令します。一気に倒すと一段ずつ切り替わります。<br>
+          キーボード：W/S 一段ずつ・X 停止・Q スタンバイ・E 機関終了。<br>
           指令するとベルが鳴り、少しして機関室が応答のベルを鳴らし、赤い応答の針が追いつきます。
         </div>
       </div>
@@ -1234,7 +1235,7 @@
       </div>
     </div>
 
-  </div></div><div id="instructions">PC: [W/S] Telegraph | [X] Stop | [A/D] Rudder | [C] Midships<br>Drag/Swipe to rotate camera | Right-Drag/2-Fingers to pan</div>
+  </div></div><div id="instructions">PC: [W/S] Telegraph | [X] Stop | [Q] Stand by | [E] F.W.E. | [A/D] Rudder | [C] Midships | [H] Horn | [G] Fog horn<br>Drag/Swipe to rotate camera | Right-Drag/2-Fingers to pan</div>
 
 <script src="js/01-state-and-config.js"></script>
 <script src="js/02-utils-and-wave-physics.js"></script>

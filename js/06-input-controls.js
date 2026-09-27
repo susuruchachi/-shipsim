@@ -8,6 +8,11 @@ function setupKeyboardControls() {
         // C：舵中央（舵輪を真ん中へ）　X：機関停止（テレグラフを STOP へ、一段ずつ）
         if ((e.key === 'c' || e.key === 'C') && typeof bridgeCenterHelm === 'function') bridgeCenterHelm();
         if ((e.key === 'x' || e.key === 'X') && typeof _tgAim === 'function') _tgAim(0);
+        // Q：スタンバイ（機関用意）　E：機関終了（F.W.E.）
+        if ((e.key === 'q' || e.key === 'Q' || e.key === 'e' || e.key === 'E') && !e.repeat && typeof setTelegraphSpecial === 'function') {
+            if (typeof _br !== 'undefined') _br.tgTarget = null;      // 一段ずつ進めている途中なら止める
+            setTelegraphSpecial((e.key === 'q' || e.key === 'Q') ? 'standby' : 'fwe');
+        }
     });
     window.addEventListener('keyup', (e) => {
         if (e.key === 'a' || e.key === 'A') keys.a = false;
