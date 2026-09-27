@@ -6,7 +6,7 @@
 //    ・ビット（双係柱）：台の上に太い柱が2本。大型船の船首・船尾の主な係船具
 //    ・ボラード（単柱）：頭がきのこ形に広がった柱が1本
 //    ・クリート：横に伸びた角（つの）に索を8の字に掛ける小さな金物
-//  位置は船（shipGroup）の中の座標（汽笛・機関音と同じ）。+z が船首、+x が右舷側。
+//  位置は船（shipGroup）の中の座標（汽笛・機関音と同じ）。+z が船首、+x が左舷側（右舷は −x）。
 //  大きさは実寸[m]で作り、船の縮尺（physics.scale）で割って置く。
 //  タグボート（次の段）はここで置いた金物の位置に索を取る（mooringPoints）。
 
@@ -217,6 +217,11 @@ function mooringAutoLayout() {
     // 船首・船尾の間：クリート
     for (const zn of [0.55, -0.55]) put('cleat', zn, 0.7 * size, 90);
     if (!items.length) { alert('甲板が見つかりませんでした'); return; }
+    // 同じ名前には番号を付ける（ビット 船首1・ビット 船首2 …）
+    const cnt = {};
+    items.forEach(it => { cnt[it.name] = (cnt[it.name] || 0) + 1; });
+    const seen = {};
+    items.forEach(it => { if (cnt[it.name] > 1) { seen[it.name] = (seen[it.name] || 0) + 1; it.name = it.name + seen[it.name]; } });
     if (shipMooring.items.length && !confirm('今の係船設備を消して、おすすめの配置にしますか？')) return;
     if (typeof disableGizmo === 'function') disableGizmo();
     shipMooring.items = items;

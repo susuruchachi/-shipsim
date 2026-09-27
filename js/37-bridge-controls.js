@@ -1046,6 +1046,8 @@ function applyBridgeLayout() {
     if (horn) horn.style.bottom = `calc(${useTg ? S + 30 : 210}px + env(safe-area-inset-bottom))`;
     const sig = document.getElementById('btn-horn-sig');
     if (sig) sig.style.bottom = `calc(${useTg ? S + 41 : 221}px + env(safe-area-inset-bottom))`;
+    const tugB = document.getElementById('btn-tug');
+    if (tugB) tugB.style.bottom = `calc(${useTg ? S + 41 : 221}px + env(safe-area-inset-bottom))`;
     _br.dirtyT = _br.dirtyW = true;
 }
 window.applyBridgeLayout = applyBridgeLayout;

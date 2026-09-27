@@ -644,6 +644,7 @@ function animate() {
     // この位置で呼ぶ。影マップを描き直さないフレームは影の変換行列だけを
     // 更新するので、ここより前で呼ぶと影が1フレーム分船に置いていかれる。
     // 船の照明の焼き込み（40-light-bake.js）：焼き込みを少しずつ進め、昼夜などの倍率を渡す
+    if (typeof updateTugs === 'function') updateTugs(t, dt);                 // タグボート（47-tugboats.js）
     if (typeof updateWorldTerrain === 'function') updateWorldTerrain(t, dt);
     if (typeof updateLightBake === 'function') updateLightBake(t);
     if (typeof updateAreaLights === 'function') updateAreaLights(t);
