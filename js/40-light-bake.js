@@ -204,10 +204,10 @@ function _lbWeld(P, n) {
 // 同じ行列のメッシュをまとめて1つのジオメトリにし、_lbSubdivide で分けてから
 // メッシュごとに戻す。重なった面（同じ位置の頂点）は同じ辺として扱われ、一緒に分かれる。
 // 戻り値：増えた三角形の数
-function _lbSubdivideMeshes(list, opts) {
+function* _lbSubdivideMeshes(list, opts) {
     if (list.length === 1) {
         const m = list[0];
-        const res = _lbSubdivide(m.geometry, Object.assign({}, opts, { multi: Array.isArray(m.material) }));
+        const res = yield* _lbSubdivide(m.geometry, Object.assign({}, opts, { multi: Array.isArray(m.material) }));
         if (!res) return 0;
         const old = m.geometry; m.geometry = res.geom; old.dispose();
         return res.added;
@@ -221,7 +221,7 @@ function _lbSubdivideMeshes(list, opts) {
             if (names.has(nm) && names.get(nm) !== sz) {
                 // 形が合わない（まれ）：まとめずに1つずつ
                 let add = 0;
-                for (const mm of list) add += _lbSubdivideMeshes([mm], Object.assign({}, opts, { budget: opts.budget - add }));
+                for (const mm of list) add += yield* _lbSubdivideMeshes([mm], Object.assign({}, opts, { budget: opts.budget - add }));
                 return add;
             }
             names.set(nm, sz);
@@ -252,7 +252,7 @@ function _lbSubdivideMeshes(list, opts) {
         else { merged.addGroup(r.iOff, r.ni, combos.length); combos.push({ k, materialIndex: 0, multi: false }); }
     });
     merged.setIndex(new THREE.BufferAttribute(I, 1));
-    const res = _lbSubdivide(merged, Object.assign({}, opts, { multi: true }));
+    const res = yield* _lbSubdivide(merged, Object.assign({}, opts, { multi: true }));
     merged.dispose();
     if (!res) return 0;
 
@@ -308,7 +308,10 @@ function _lbSubdivideMeshes(list, opts) {
 // 細長い三角形ができにくく、増える数も少ない。分ける辺を共有する三角形は全部同じ点で
 // 分けるので、すき間はできない。
 // 戻り値：{ geom, added } または null（分ける三角形が無い）
-function _lbSubdivide(geom, opts) {
+// 時間のかかる分割は、少しずつ（1フレームに約16msまで）進める。yield 'frame' で次のフレームへ
+function* _lbSubdivide(geom, opts) {
+    let _t0 = performance.now(), _tick = 0;
+    const PAUSE = () => ((++_tick & 4095) === 0 && performance.now() - _t0 > 16);
     const posAttr = geom.attributes.position;
     const nV = posAttr.count;
     const idxSrc = geom.index ? geom.index.array : null;
@@ -325,6 +328,7 @@ function _lbSubdivide(geom, opts) {
     // 分ける必要のある三角形が1つも無ければ何もしない
     let any = false;
     for (let t = 0; t < nT && !any; t++) {
+        if (PAUSE()) { yield 'frame'; _t0 = performance.now(); }
         const a = vidx(t, 0), b = vidx(t, 1), c = vidx(t, 2);
         if ((d2(a, b) > L2 || d2(b, c) > L2 || d2(c, a) > L2) && opts.needs(P, a, b, c)) any = true;
     }
@@ -345,6 +349,7 @@ function _lbSubdivide(geom, opts) {
     let nTri = nT;
     const groups = (opts.multi && geom.groups && geom.groups.length) ? geom.groups : null;
     for (let t = 0; t < nT; t++) {
+        if (PAUSE()) { yield 'frame'; _t0 = performance.now(); }
         T[t * 3] = vidx(t, 0); T[t * 3 + 1] = vidx(t, 1); T[t * 3 + 2] = vidx(t, 2);
         alive[t] = 1; G[t] = groups ? -1 : 0;
     }
@@ -364,6 +369,7 @@ function _lbSubdivide(geom, opts) {
     // 積む印：三角形の番号。負の数は「形を整えるために先に分ける隣」（-1-番号）
     const stack = [];
     for (let t = 0; t < nT; t++) {
+        if (PAUSE()) { yield 'frame'; _t0 = performance.now(); }
         const a = T[t * 3], b = T[t * 3 + 1], c = T[t * 3 + 2];
         let has = false;
         if (d2(a, b) > L2) { addE(ek(pid[a], pid[b]), t); has = true; }
@@ -401,6 +407,7 @@ function _lbSubdivide(geom, opts) {
     const midCache = new Map();
     let guard = 0;
     while (stack.length && added < budget && guard++ < 50000000) {
+        if (PAUSE()) { yield 'frame'; _t0 = performance.now(); }
         const top = stack.pop();
         const forced = top < 0;
         const t = forced ? -1 - top : top;
@@ -1219,7 +1226,8 @@ function* _lbJob(job) {
             const list = idxs.map(i => meshes[i]);
             const facing = (typeof meshFacingSign === 'function') ? meshFacingSign(list[0]) : 1;
             const opts = { maxEdge: edgeM / mpu, budget, multi: true, needs: refiner(M, facing) };
-            const added = _lbSubdivideMeshes(list, opts);
+            const added = yield* _lbSubdivideMeshes(list, opts);
+            if (job.aborted) return;
             budget -= added;
             doneN += idxs.length;
             if (performance.now() - lastYield > 30) {
