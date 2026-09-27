@@ -12,7 +12,8 @@
 //    ・warship   : 軍艦の計器のようなメーター型
 //    ・modern    : 現代的な押しボタン式パネル
 //    ・rotary    : 回転つまみ式レバー
-//    ・tilt      : 倒すタイプのレバー（前後に倒す）
+//    ・tilt      : 倒すタイプのレバー（画面の左右に倒す）
+//    ・fore      : 前後に倒すレバー（奥へ押すと前進、手前へ引くと後進）
 //    ・buttons   : 従来の ▲▼ ボタン
 //  ハンドル（または針）を指でドラッグするか、文字の所をタップして指令する。
 //  速度のほかに、本物のテレグラフにある2つの指令も出せる：
@@ -41,7 +42,8 @@ const BRIDGE_TELEGRAPHS = {
     warship:   '軍艦のメーター型',
     modern:    '現代的なボタン式',
     rotary:    'レバー（回転つまみ式）',
-    tilt:      'レバー（倒すタイプ）',
+    tilt:      'レバー（左右に倒すタイプ）',
+    fore:      'レバー（前後に倒すタイプ）',
     buttons:   'シンプル（▲▼ボタン）',
 };
 const BRIDGE_WHEELS = {
@@ -428,6 +430,11 @@ function _needle(ctx, cx, cy, ang, len, w, color, tail) {
     ctx.restore();
 }
 
+// 前後に倒すレバー：指令（-3〜3）→ 画面の縦の位置（上＝奥＝前進）
+function _tgForeGeom(S) {
+    const cx = S * 0.5, yc = S * 0.57, step = S * 0.1;
+    return { cx, yc, step, pivY: S * 0.93, yOf: (v) => yc - v * step };
+}
 // 指令（-3〜3）→ 文字盤の角度（上が0、右回りが正）。形式ごとに向きと幅が違う
 const _TG_STEP = { olympic: -33, queenmary: -31, warship: 36, rotary: 40, tilt: 13 };
 function _tgAngle(design, v) {
@@ -793,6 +800,51 @@ function _drawTelegraph(ctx, S, design, handleV, answerV, order, special, ansSpe
         _tgGlowPx = 0;
         return;
     }
+    if (design === 'fore') {
+        // 前後に倒すレバーを斜め上から見たところ：奥（画面の上）へ押すと前進、手前へ引くと後進
+        const g = _tgForeGeom(S);
+        ctx.fillStyle = P.white ? P.panel : '#23282e'; _roundRect(ctx, S * 0.05, S * 0.14, S * 0.9, S * 0.82, S * 0.06); ctx.fill();
+        if (P.white) { ctx.strokeStyle = P.panelEdge; ctx.lineWidth = 1.5; ctx.stroke(); }
+        _tgDim(ctx, S, dimK);
+        _tgBacklight(ctx, S * 0.05, S * 0.14, S * 0.9, S * 0.82, S * 0.06, night, P.white);
+        // 溝（奥ほど細く見える）
+        ctx.fillStyle = '#0b0d0f';
+        ctx.beginPath();
+        ctx.moveTo(g.cx - S * 0.018, g.yOf(3.3)); ctx.lineTo(g.cx + S * 0.018, g.yOf(3.3));
+        ctx.lineTo(g.cx + S * 0.03, g.yOf(-3.3)); ctx.lineTo(g.cx - S * 0.03, g.yOf(-3.3)); ctx.closePath(); ctx.fill();
+        // 目盛りと文字
+        ctx.font = `bold ${Math.round(S * 0.045)}px "Helvetica Neue",Arial,sans-serif`; ctx.textBaseline = 'middle';
+        for (let v = -3; v <= 3; v++) {
+            const y = g.yOf(v), on = v === order && !special;
+            ctx.strokeStyle = on ? P.sel : P.tick; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(g.cx - S * 0.1, y); ctx.lineTo(g.cx - S * 0.055, y); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(g.cx + S * 0.055, y); ctx.lineTo(g.cx + S * 0.1, y); ctx.stroke();
+            ctx.fillStyle = on ? P.sel : (v > 0 ? P.ahead : (v < 0 ? P.astern : P.stop));
+            ctx.textAlign = 'right';
+            _tgText(ctx, v === 0 ? 'STOP' : _TG_LABEL[v], g.cx - S * 0.12, y);
+        }
+        ctx.textAlign = 'center';
+        ctx.fillStyle = P.ahead; _tgText(ctx, '▲ AHEAD', g.cx + S * 0.27, g.yOf(2));
+        ctx.fillStyle = P.astern; _tgText(ctx, '▼ ASTERN', g.cx + S * 0.27, g.yOf(-2));
+        ctx.textAlign = 'start';
+        // 応答の印（右の目盛りの外）
+        ctx.save(); if (night > 0.02) { ctx.shadowColor = '#ff3b30'; ctx.shadowBlur = S * 0.04 * night; }
+        ctx.fillStyle = '#ff3b30'; ctx.beginPath(); ctx.arc(g.cx + S * 0.13, g.yOf(answerV), S * 0.014, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+        // レバー：根元（溝の中の支点）から握りまで。手前に引くほど握りが大きく見える
+        const ky = g.yOf(handleV), near = (3.3 - handleV) / 6.6;          // 0＝奥 1＝手前
+        const kr = S * (0.042 + 0.022 * near);
+        ctx.fillStyle = _chrome(ctx, g.cx - S * 0.02, g.pivY, g.cx + S * 0.02, ky);
+        ctx.beginPath();
+        ctx.moveTo(g.cx - S * 0.016, g.pivY); ctx.lineTo(g.cx + S * 0.016, g.pivY);
+        ctx.lineTo(g.cx + kr * 0.35, ky); ctx.lineTo(g.cx - kr * 0.35, ky); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#111'; ctx.beginPath(); ctx.ellipse(g.cx, ky, kr, kr * 0.85, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.beginPath(); ctx.ellipse(g.cx - kr * 0.3, ky - kr * 0.3, kr * 0.35, kr * 0.25, 0, 0, Math.PI * 2); ctx.fill();
+        if (dimK > 0.001) { ctx.fillStyle = `rgba(4,6,12,${dimK})`; ctx.beginPath(); ctx.ellipse(g.cx, ky, kr, kr * 0.85, 0, 0, Math.PI * 2); ctx.fill(); }
+        _drawSpecialBtns(ctx, S, design, special, ansSpecial, P);
+        _tgGlowPx = 0;
+        return;
+    }
     _tgGlowPx = 0;
 }
 // 丸型以外：スタンバイ・機関終了の小さなボタンの位置 [x, y, 幅, 高さ]
@@ -1005,6 +1057,11 @@ function _setupTelegraphInput(cv) {
     const S = () => _br.size;
     const pivot = () => bridgeUI.telegraph === 'tilt' ? { x: S() / 2, y: S() * 0.86 } : { x: S() / 2, y: S() * 0.54 };
     const angleAt = (p) => { const c = pivot(); return Math.atan2(p.x - c.x, -(p.y - c.y)); };
+    // 指の位置 → 指令（連続値）。前後に倒すレバーは縦の位置、ほかは支点からの角度
+    const _tgFromPointer = (d, p) => {
+        if (d === 'fore') { const g = _tgForeGeom(S()); return Math.max(-3.2, Math.min(3.2, (g.yc - p.y) / g.step)); }
+        return _tgFromAngleCont(d, angleAt(p));
+    };
     cv.addEventListener('pointerdown', (e) => {
         e.preventDefault(); e.stopPropagation();
         try { cv.setPointerCapture(e.pointerId); } catch (err) { /* 合成イベントなど */ }
@@ -1022,14 +1079,14 @@ function _setupTelegraphInput(cv) {
             return;
         }
         _br.tgDrag = { id: e.pointerId };
-        _br.tgHandle = _tgFromAngleCont(d, angleAt(p));
+        _br.tgHandle = _tgFromPointer(d, p);
         _tgAim(Math.round(_br.tgHandle));
         _br.dirtyT = true;
     });
     cv.addEventListener('pointermove', (e) => {
         if (!_br.tgDrag) return;
         e.preventDefault();
-        _br.tgHandle = _tgFromAngleCont(bridgeUI.telegraph, angleAt(_localPos(cv, e)));
+        _br.tgHandle = _tgFromPointer(bridgeUI.telegraph, _localPos(cv, e));
         _tgAim(Math.round(_br.tgHandle));
         _br.dirtyT = true;
     });
