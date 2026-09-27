@@ -1045,7 +1045,8 @@ function updateUI() {
     else if (physics.rudderAngle > 2) rudderStr = physics.rudderAngle.toFixed(1) + '°' + ' >'.repeat(Math.floor(Math.abs(physics.rudderAngle) / 5));
     $('ui-rudder').innerText = `Rudder   : ${rudderStr}`;
 
-    let deg = Math.floor(physics.heading) % 360; if (deg < 0) deg += 360;
+    // 羅針盤の方位（右に回ると増える）。physics.heading は上から見て左回りに増えるので逆にする
+    let deg = Math.floor((360 - physics.heading % 360) % 360); if (deg < 0) deg += 360; if (deg >= 360) deg -= 360;
     $('ui-heading').innerText = `Heading  : ${deg}°`;
 
     const gameHours = Math.floor(physics.gameTime / (physics.dayDuration / 24)) % 24;

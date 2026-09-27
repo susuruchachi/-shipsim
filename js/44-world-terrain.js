@@ -44,7 +44,8 @@ function _portShape(p) {
     const loc = worldUnitToLocal(p.u);
     const br = p.seaBearing * Math.PI / 180;
     // s：海の方、l：岸沿い（s を右に90°）
-    return { id: p.id, type: p.type, x: loc.x, z: loc.z, sx: Math.sin(br), sz: Math.cos(br),
+    // 海の方の向き（物理の面では東が −x）
+    return { id: p.id, type: p.type, x: loc.x, z: loc.z, sx: -Math.sin(br), sz: Math.cos(br),
              quayLen, apron, basin, depth: T.depth, seed: p.seed, name: p.name, chLen: worldPortChannelLen(p) };
 }
 // 高さに港の手直しを加える（ワーカーと同じ式。関数の中身を文字列にしてワーカーへ渡す）
@@ -107,7 +108,7 @@ function _trWorker() {
                 const z = q.cz - half + j * step;
                 for (let i = 0; i < n; i++) {
                     const x = q.cx - half + i * step;
-                    const a = x / WORLD_R, b = z / WORLD_R;
+                    const a = -x / WORLD_R, b = z / WORLD_R;       // +x は西
                     let ux = C.x + a * E.x + b * N.x, uy = C.y + a * E.y + b * N.y, uz = C.z + a * E.z + b * N.z;
                     const l = Math.hypot(ux, uy, uz);
                     let h = worldHeightAt(ux / l, uy / l, uz / l, q.oct);

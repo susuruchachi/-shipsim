@@ -201,10 +201,12 @@ function worldFrame() {
     }
     return _wFrameCache;
 }
-// 物理の面の点 (x=東, z=北)[m] → 球の点
+// 物理の面の点 (x=西, z=北)[m] → 球の点
+//  three.js を上から北を上にして見ると、右（東）は −x になる。なので +x は西。
+//  physics.heading は上から見て左回りに増えるので、羅針盤の方位は 360 − heading（worldCompass）。
 function worldLocalToUnit(x, z, out) {
     const F = worldFrame();
-    const a = x / WORLD_R, b = z / WORLD_R;
+    const a = -x / WORLD_R, b = z / WORLD_R;
     let ux = F.C.x + a * F.E.x + b * F.N.x, uy = F.C.y + a * F.E.y + b * F.N.y, uz = F.C.z + a * F.E.z + b * F.N.z;
     const l = Math.hypot(ux, uy, uz);
     out = out || {};
@@ -217,10 +219,14 @@ function worldUnitToLocal(u, out) {
     const d = u.x * F.C.x + u.y * F.C.y + u.z * F.C.z;
     out = out || {};
     if (d <= 0.01) { out.x = out.z = Infinity; return out; }
-    out.x = WORLD_R * (u.x * F.E.x + u.y * F.E.y + u.z * F.E.z) / d;
+    out.x = -WORLD_R * (u.x * F.E.x + u.y * F.E.y + u.z * F.E.z) / d;
     out.z = WORLD_R * (u.x * F.N.x + u.y * F.N.y + u.z * F.N.z) / d;
     return out;
 }
+// physics.heading（上から見て左回り）⇄ 羅針盤の方位（北0・東90、右回り）
+function worldCompass(heading) { return ((360 - (heading || 0)) % 360 + 360) % 360; }
+function worldHeadingFromCompass(c) { return ((360 - c) % 360 + 360) % 360; }
+window.worldCompass = worldCompass;
 // 物理の面の点の高さ[m]（oct を省くと一番細かく）
 const _wTmpU = {};
 function worldHeightAtLocal(x, z, oct) {
@@ -448,7 +454,7 @@ function worldStartAtPort(port) {
     world.ref = { lat: ll.lat, lon: ll.lon };
     _wFrameCache = null;
     physics.cgWorldX = 0; physics.cgWorldZ = 0;
-    physics.heading = port.seaBearing;
+    physics.heading = worldHeadingFromCompass(port.seaBearing);
     physics.speed = 0; physics.targetSpeed = 0; physics.turnRate = 0;
     physics.telegraphState = 0;
     if (typeof shipHistory !== 'undefined') shipHistory.length = 0;
@@ -858,7 +864,7 @@ function worldMapRedraw(quick) {
     if (world.mode === 'world') {
         const ll = worldShipLatLon();
         const s = _wmToScreen(ll.lat, ll.lon, cv);
-        g.save(); g.translate(s.x, s.y); g.rotate((physics.heading || 0) * Math.PI / 180);
+        g.save(); g.translate(s.x, s.y); g.rotate(worldCompass(physics.heading) * Math.PI / 180);
         g.fillStyle = '#ffffff'; g.strokeStyle = '#ff3b30'; g.lineWidth = 2;
         g.beginPath(); g.moveTo(0, -11); g.lineTo(7, 8); g.lineTo(0, 4); g.lineTo(-7, 8); g.closePath(); g.fill(); g.stroke();
         g.restore();
