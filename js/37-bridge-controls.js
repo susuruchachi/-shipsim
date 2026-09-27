@@ -359,10 +359,11 @@ function setTelegraphSpecial(sp) {
 }
 window.setTelegraphSpecial = setTelegraphSpecial;
 // 舵中央（ミジップ）：舵輪を真ん中へ（キーボードの C・舵輪の中心をダブルタップ）
+// 舵輪は一瞬で戻さず、手で回して戻すように回転させる（古典的な舵輪は1周ごとにベルも鳴る）
+const WHEEL_CENTER_RATE = { classic: 6 * 360, handle: 540, azipod: 120 };   // 戻す速さ[度/秒]（古典的な舵輪は1秒6周＝1周ごとのベルが全部聞こえる速さ）
 function bridgeCenterHelm() {
-    _br.wheelDeg = 0;
-    physics.helmOrder = 0;
-    _br.dirtyW = true;
+    if (!bridgeWheelActive()) { physics.helmOrder = 0; return; }
+    _br.wheelTarget = 0;
 }
 window.bridgeCenterHelm = bridgeCenterHelm;
 
@@ -1149,8 +1150,16 @@ function updateBridge(t) {
     const lock = WHEEL_LOCK_DEG[bridgeUI.wheel] || 360;
     if (bridgeWheelActive()) {
         const kr = HELM_KEY_RATE_WHEEL[bridgeUI.wheel] || HELM_KEY_RATE;
+        if (keys.a || keys.d || _br.wheelDrag) _br.wheelTarget = null;     // 手で回したら中央戻しはやめる
         if (keys.a) { _br.wheelDeg = Math.max(-lock, _br.wheelDeg - kr / 35 * lock * dt); _br.dirtyW = true; }
         if (keys.d) { _br.wheelDeg = Math.min(lock, _br.wheelDeg + kr / 35 * lock * dt); _br.dirtyW = true; }
+        if (_br.wheelTarget !== null && _br.wheelTarget !== undefined) {
+            const d = _br.wheelTarget - _br.wheelDeg;
+            const step = (WHEEL_CENTER_RATE[bridgeUI.wheel] || 540) * dt;
+            if (Math.abs(d) <= step) { _br.wheelDeg = _br.wheelTarget; _br.wheelTarget = null; }
+            else _br.wheelDeg += Math.sign(d) * step;
+            _br.dirtyW = true;
+        }
         physics.helmOrder = _br.wheelDeg / lock * 35;
         // 古典的な舵輪：1周ごとにベル（テレグラフと同じ音）
         if (bridgeUI.wheel === 'classic') {
