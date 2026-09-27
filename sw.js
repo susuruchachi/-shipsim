@@ -13,7 +13,7 @@
 
 const CACHE_NAME = 'shipsim-runtime-v1';
 const CDN_HOSTS = ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net'];
-const SKIP_EXT = /\.(glb|gltf|obj|mtl|bin|zip)(\?|$)/i;
+const SKIP_EXT = /\.(glb|gltf|obj|mtl|bin|zip|apk)(\?|$)/i;
 
 self.addEventListener('install', (event) => {
     // 起動に最低限必要なものだけ先に保存しておく（失敗しても続行）

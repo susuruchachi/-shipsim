@@ -1,0 +1,17 @@
+// ShipSim の Android アプリ（ブラウザ版を全画面の WebView で動かす入れ物）
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = 'ShipSim'
+include ':app'

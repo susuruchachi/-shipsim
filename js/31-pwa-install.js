@@ -7,6 +7,9 @@
 //   ・すでにアプリとして開いている／インストール済みならボタンは出さない
 //   ・iPhone/iPad の Safari にはこの仕組みが無いので、手順の案内だけ出す
 //
+// Android のブラウザで開いたときは、APK（Android アプリ。android/ フォルダ）の
+// ダウンロードも出す。APK は全画面の入れ物で、中身はこのページそのもの。
+//
 // 【注意】インストールできるのは https:// か http://localhost（同じ端末の
 // ローカルサーバー）で開いたときだけ。別の端末から http://192.168.x.x のように
 // 開いた場合、ブラウザはインストールを許可しない。
@@ -58,8 +61,16 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         ['mousedown', 'touchstart'].forEach(t => btn.addEventListener(t, (e) => e.stopPropagation()));
     }
-    // iPhone/iPad の Safari：インストールのイベントが無いので、手順だけ案内する
+    // Android のブラウザ：APK（Android アプリ）のダウンロードを出す。アプリの中では出さない
     const ua = navigator.userAgent || '';
+    const inAndroidApp = !!window.ShipSimNative || /ShipSimAndroid\//.test(ua);
+    if (/Android/i.test(ua) && !inAndroidApp) {
+        const box = document.getElementById('apk-download-box');
+        if (box) box.style.display = '';
+        const link = document.getElementById('apk-download-link');
+        if (link) ['mousedown', 'touchstart'].forEach(t => link.addEventListener(t, (e) => e.stopPropagation()));
+    }
+    // iPhone/iPad の Safari：インストールのイベントが無いので、手順だけ案内する
     const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
     if (isIOS && !_pwaIsStandalone()) {
         if (btn) btn.style.display = 'none';

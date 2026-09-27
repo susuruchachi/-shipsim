@@ -44,6 +44,11 @@
         <button id="pwa-install-btn" type="button" style="width:100%;padding:8px;background:#00ffcc;color:#0a1932;border:none;border-radius:4px;font-weight:bold;cursor:pointer;">📲 アプリとしてインストール</button>
         <div id="pwa-install-note" style="font-size:10px;color:#9fb8c8;margin-top:4px;line-height:1.4;"></div>
     </div>
+    <!-- Android アプリ（APK）。Android のブラウザで開いたときだけ表示（31-pwa-install.js） -->
+    <div id="apk-download-box" style="display:none;margin-bottom:10px;">
+        <a id="apk-download-link" href="shipsim-android.apk" download="ShipSim.apk" style="display:block;box-sizing:border-box;width:100%;padding:8px;background:#7ee39a;color:#0a1932;border-radius:4px;font-weight:bold;text-align:center;text-decoration:none;">🤖 Androidアプリ（APK）をダウンロード</a>
+        <div style="font-size:10px;color:#9fb8c8;margin-top:4px;line-height:1.4;">全画面で、遊んでいる間は画面が消えません。端末の「ゲーム」として扱われます（ゲームエンハンサー等）。中身はこのページと同じで、自動で最新になります。入れるときに「提供元不明のアプリ」の許可が必要です。</div>
+    </div>
     <div style="font-weight: bold; border-bottom: 1px solid #ffffff; padding-bottom: 4px; margin-bottom: 10px; text-align: center; font-size: 14px; color: #00ffcc;">=== TELEMETRY ===</div>
     <div id="ui-telegraph">Telegraph: STOP</div>
     <div id="ui-engine">Screw    : STOP</div>
@@ -1219,6 +1224,7 @@
 <script src="js/36-horns.js"></script>
 <script src="js/37-bridge-controls.js"></script>
 <script src="js/38-clip-recorder.js"></script>
+<script src="js/39-android-app.js"></script>
 <script src="js/17-main-loop.js"></script>
 <script src="js/18-hull-wake-physics.js"></script>
 <script src="js/19-swe-fluid.js"></script>
