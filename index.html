@@ -1082,6 +1082,10 @@
         <div class="sp-row">
           <label class="sp-toggle"><input type="checkbox" id="horn-auto-astern" onchange="setHornAuto('astern', this.checked)"> 前進中に後進をかけたら短音3回</label>
         </div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">出港の汽笛:</span>
+          <select id="horn-auto-depart" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;" onchange="setHornAuto('depart', this.value)"></select>
+          <span style="font-size:10px;color:#888;">スタンバイのあと、初めて前進にしたとき</span>
+        </div>
       </div>
       <div class="sp-section">
         <div class="sp-section-title">⚙ 機関音</div>

@@ -395,13 +395,19 @@ window.playHornSignal = playHornSignal;
 // ── 自動の信号 ──
 //  霧中信号：霧の中を航行中は2分ごとに長音1回、停止中は長音2回
 //  後進信号：前進中に後進をかけたら短音3回
-const hornAuto = { fog: false, astern: false, _nextFog: 0, _prevTele: 0 };
+//  出港の汽笛：スタンバイ（機関用意）のあと、初めて前進を指令したとき（off／長音1回／長音3回）
+const HORN_DEPART = { off: '鳴らさない', L: '長音1回', LLL: '長音3回' };
+window.HORN_DEPART = HORN_DEPART;
+const hornAuto = { fog: false, astern: false, depart: 'L', _nextFog: 0, _prevTele: 0, _departArmed: false };
 (function restoreHornAuto() {
-    try { const s = JSON.parse(localStorage.getItem('susuru_horn_auto') || 'null'); if (s) { hornAuto.fog = !!s.fog; hornAuto.astern = !!s.astern; } } catch (e) { /* ignore */ }
+    try {
+        const s = JSON.parse(localStorage.getItem('susuru_horn_auto') || 'null');
+        if (s) { hornAuto.fog = !!s.fog; hornAuto.astern = !!s.astern; if (HORN_DEPART[s.depart]) hornAuto.depart = s.depart; }
+    } catch (e) { /* ignore */ }
 })();
 function setHornAuto(key, on) {
-    hornAuto[key] = !!on;
-    try { localStorage.setItem('susuru_horn_auto', JSON.stringify({ fog: hornAuto.fog, astern: hornAuto.astern })); } catch (e) { /* ignore */ }
+    hornAuto[key] = (key === 'depart') ? (HORN_DEPART[on] ? on : 'off') : !!on;
+    try { localStorage.setItem('susuru_horn_auto', JSON.stringify({ fog: hornAuto.fog, astern: hornAuto.astern, depart: hornAuto.depart })); } catch (e) { /* ignore */ }
 }
 
 // 毎フレーム（35 の updateAudio から）
@@ -433,6 +439,14 @@ function updateHorns(t, dt) {
     }
     const tele = physics.telegraphState || 0;
     if (hornAuto.astern && tele < 0 && hornAuto._prevTele >= 0 && (physics.speed || 0) > 0.5) playHornSignal('SSS');
+    // 出港の汽笛：スタンバイで構え、そのあと初めて前進になったら鳴らす（機関終了で取り消し）
+    const sp = physics.telegraphSpecial || '';
+    if (sp === 'standby') hornAuto._departArmed = true;
+    else if (sp === 'fwe') hornAuto._departArmed = false;
+    else if (hornAuto._departArmed && tele > 0) {
+        hornAuto._departArmed = false;
+        if (hornAuto.depart && hornAuto.depart !== 'off') playHornSignal(hornAuto.depart);
+    }
     hornAuto._prevTele = tele;
 }
 
@@ -588,6 +602,8 @@ function renderSoundPanel() {
     set('audio-bridge', S.bridge != null ? S.bridge : 0.8);
     set('horn-auto-fog', hornAuto.fog, 'checked');
     set('horn-auto-astern', hornAuto.astern, 'checked');
+    const dp = document.getElementById('horn-auto-depart');
+    if (dp) dp.innerHTML = Object.entries(HORN_DEPART).map(([k, l]) => `<option value="${k}"${k === hornAuto.depart ? ' selected' : ''}>${l}</option>`).join('');
 }
 window.renderSoundPanel = renderSoundPanel;
 
