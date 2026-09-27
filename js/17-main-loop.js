@@ -644,6 +644,7 @@ function animate() {
     // この位置で呼ぶ。影マップを描き直さないフレームは影の変換行列だけを
     // 更新するので、ここより前で呼ぶと影が1フレーム分船に置いていかれる。
     // 船の照明の焼き込み（40-light-bake.js）：焼き込みを少しずつ進め、昼夜などの倍率を渡す
+    if (typeof updateWorldTerrain === 'function') updateWorldTerrain(t, dt);
     if (typeof updateLightBake === 'function') updateLightBake(t);
     if (typeof updateAreaLights === 'function') updateAreaLights(t);
     if (typeof updateGlowHalos === 'function') updateGlowHalos();   // 遠景用の光のにじみ（26）
@@ -1076,12 +1077,27 @@ function updateUI() {
         const ms = Math.max(0, physics.windSpeed || 0);
         _wd.innerText = `Wind     : ${dir}° ${pts[Math.round(dir / 22.5) % 16]}  ${ms.toFixed(1)} m/s (${(ms * 1.9438).toFixed(0)} kn)`;
     }
-    const _ps = $('ui-pos');
+    const _ps = $('ui-pos'), _pp = $('ui-port');
     if (_ps) {
-        // 今はまだ地図が無いので、出発点からの位置[m]。将来の世界地図ではここを緯度・経度にする
-        const x = physics.cgWorldX || 0, z = physics.cgWorldZ || 0;
-        const nm = Math.hypot(x, z) / 1852;
-        _ps.innerText = `Position : X ${x.toFixed(0)}  Z ${z.toFixed(0)} m (${nm.toFixed(2)} NM)`;
+        if (window.world && world.mode === 'world' && typeof worldShipLatLon === 'function') {
+            // 世界を航海するモード：緯度・経度と、いちばん近い港
+            const ll = worldShipLatLon();
+            _ps.innerText = `Position : ${worldFmtLatLon(ll.lat, ll.lon)}`;
+            if (_pp) {
+                if (!updateUI._np || performance.now() - updateUI._npT > 2000) { updateUI._np = worldNearestPort(ll.lat, ll.lon); updateUI._npT = performance.now(); }
+                const np = updateUI._np, T = window.terrain;
+                const depth = (T && T.depth != null) ? `  水深 ${Math.max(0, T.depth).toFixed(0)} m` : '';
+                _pp.style.display = '';
+                _pp.style.color = (T && T.grounded) ? '#ff8a73' : '#c9f0ff';
+                _pp.innerText = (T && T.grounded) ? `⚠ 座礁しています${depth}` : `Port     : ${np ? np.port.name + ' ' + (np.dist / 1852).toFixed(1) + ' NM' : '—'}${depth}`;
+            }
+        } else {
+            // 海だけのモード：出発点からの位置[m]
+            const x = physics.cgWorldX || 0, z = physics.cgWorldZ || 0;
+            const nm = Math.hypot(x, z) / 1852;
+            _ps.innerText = `Position : X ${x.toFixed(0)}  Z ${z.toFixed(0)} m (${nm.toFixed(2)} NM)`;
+            if (_pp) _pp.style.display = 'none';
+        }
     }
 }
 

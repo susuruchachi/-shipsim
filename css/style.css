@@ -132,7 +132,7 @@
             pointer-events: none; white-space: nowrap;
         }
         body.hud-hidden #bake-hud { display: none !important; }
-        body.hud-hidden #telemetry-panel, body.hud-hidden #btn-horn { display: none !important; }
+        body.hud-hidden #telemetry-panel, body.hud-hidden #btn-horn, body.hud-hidden #worldmap-toggle { display: none !important; }
         body.menu-open #btn-horn { left: 310px; }
         /* 汽笛信号（36-horns.js）：📯 の右の「信号」ボタンと、そこから開く一覧 */
         #btn-horn-sig {
@@ -745,3 +745,49 @@
         @media (max-width: 768px) {
             #telemetry-panel { top: calc(148px + env(safe-area-inset-top)); font-size: 10px; }
         }
+
+        /* ── 世界地図（43-world.js） ── */
+        #worldmap-toggle {
+            position: absolute;
+            top: calc(10px + env(safe-area-inset-top));
+            left: calc(565px + env(safe-area-inset-left));
+            z-index: 15;
+            background: rgba(10, 30, 60, 0.9);
+            border: 1px solid #7ee3c8; color: #7ee3c8;
+            padding: 10px 16px; border-radius: 6px;
+            font-weight: bold; font-size: 14px; cursor: pointer; pointer-events: auto;
+        }
+        #worldmap-toggle:active { background: rgba(126,227,200,0.3); }
+        @media (max-width: 768px) {
+            #worldmap-toggle { left: auto; right: calc(10px + env(safe-area-inset-right)); top: calc(148px + env(safe-area-inset-top)); }
+            #telemetry-panel { top: calc(194px + env(safe-area-inset-top)); }
+        }
+        #world-panel {
+            position: fixed; inset: 0; z-index: 300; display: none; flex-direction: column;
+            background: rgba(4, 14, 28, 0.97); color: #eaf4ff; font-family: 'Courier New', Courier, monospace;
+            padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+        }
+        #world-panel.open { display: flex; }
+        #world-panel .wp-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; flex-wrap: wrap; border-bottom: 1px solid rgba(126,227,200,0.3); }
+        #world-panel .wp-title { font-weight: bold; color: #7ee3c8; font-size: 15px; margin-right: 6px; }
+        #world-panel .wp-modes button, #world-panel .wp-tools button, #world-panel .wp-pbtns button, #world-panel .wp-close {
+            background: rgba(10, 30, 60, 0.9); color: #cfe8ff; border: 1px solid rgba(126,227,200,0.5);
+            border-radius: 5px; padding: 6px 10px; font-size: 13px; cursor: pointer; font-family: inherit;
+        }
+        #world-panel .wp-modes button.on { background: #1c6b5a; color: #fff; border-color: #7ee3c8; }
+        #world-panel .wp-close { margin-left: auto; }
+        #world-panel .wp-body { position: relative; flex: 1; min-height: 0; }
+        #wp-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+        #world-panel .wp-tools { position: absolute; right: 10px; top: 10px; display: flex; flex-direction: column; gap: 6px; }
+        #world-panel .wp-tools button { width: 40px; height: 40px; font-size: 18px; padding: 0; }
+        #world-panel .wp-legend { position: absolute; left: 10px; bottom: 10px; display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px;
+            background: rgba(0,0,0,0.45); padding: 5px 8px; border-radius: 5px; }
+        #world-panel .wp-legend i, #wp-info i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+        #wp-info { display: none; position: absolute; left: 10px; top: 10px; max-width: min(360px, calc(100% - 70px));
+            background: rgba(6, 20, 40, 0.94); border: 1px solid rgba(126,227,200,0.5); border-radius: 6px; padding: 8px 10px; }
+        #wp-info .wp-pname { font-weight: bold; font-size: 14px; }
+        #wp-info .wp-pmeta { font-size: 11px; color: #a9c4d8; margin: 3px 0 6px; }
+        #wp-info .wp-pbtns { display: flex; gap: 6px; flex-wrap: wrap; }
+        #wp-status { position: absolute; left: 50%; transform: translateX(-50%); bottom: 44px; font-size: 11px; color: #ffe38a;
+            background: rgba(0,0,0,0.45); padding: 3px 8px; border-radius: 4px; pointer-events: none; }
+        #wp-status:empty { display: none; }
