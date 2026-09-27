@@ -793,3 +793,6 @@
         #wp-status { position: absolute; left: 50%; transform: translateX(-50%); bottom: 44px; font-size: 11px; color: #ffe38a;
             background: rgba(0,0,0,0.45); padding: 3px 8px; border-radius: 4px; pointer-events: none; }
         #wp-status:empty { display: none; }
+
+/* 係船設備の設定（46-mooring.js） */
+.moor-sel { background:#0a1932; color:#00ffcc; border:1px solid #00ffcc; border-radius:4px; padding:4px 8px; font-family:inherit; font-size:11px; max-width:100%; }

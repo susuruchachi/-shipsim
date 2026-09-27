@@ -654,6 +654,7 @@ function animate() {
     if (typeof updateBridge === 'function') updateBridge(t);
     // 目印を画面上で一定の大きさに・音の位置の目印（10 / 36）
     if (typeof updateSoundMarkers === 'function') updateSoundMarkers();
+    if (typeof updateMooring === 'function') updateMooring();          // 係船設備（46-mooring.js）
     if (typeof updateMarkerScales === 'function') updateMarkerScales();
     // 自動露出（30-auto-exposure.js）：目の慣れのように露出を少しずつ合わせる
     if (typeof applyAutoExposure === 'function') applyAutoExposure(t);

@@ -160,6 +160,8 @@ function collectShipConfig() {
         sound: (typeof getShipSoundConfig === 'function') ? getShipSoundConfig() : null,
         // 画面のテレグラフ・舵輪のデザイン（37-bridge-controls.js）
         bridge: (typeof getBridgeConfig === 'function') ? getBridgeConfig() : null,
+        // 係船設備（46-mooring.js）
+        mooring: (typeof getMooringConfig === 'function') ? getMooringConfig() : null,
         // 位置・向き・月齢
         shipPos: { x: physics.cgWorldX, z: physics.cgWorldZ, heading: physics.heading },
         dayProgress: physics.dayProgress,
@@ -358,6 +360,7 @@ function applyShipConfig(cfg) {
     // 汽笛・機関音。古い保存データには無いので、そのときは既定の汽笛に戻す
     if (typeof applyShipSoundConfig === 'function') applyShipSoundConfig(cfg.sound || null);
     if (typeof applyBridgeConfig === 'function') applyBridgeConfig(cfg.bridge || null);
+    if (typeof applyMooringConfig === 'function') applyMooringConfig(cfg.mooring || null);
     // ── 天候（24-weather.js）──────────────────────────────────────────
     // 天候がONだと風・波はそちらが毎フレーム上書きするので、この設定が
     // 保存していた風速・波の値は効かなくなる。天候機能より前に保存された

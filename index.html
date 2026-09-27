@@ -321,6 +321,7 @@
     <button class="settings-tab" data-tab="viewpoint" onclick="switchTab('viewpoint')">🔭 視点</button>
     <button class="settings-tab" data-tab="sound" onclick="switchTab('sound');renderSoundPanel()">🔊 音</button>
     <button class="settings-tab" data-tab="bridge" onclick="switchTab('bridge');renderBridgePanel()">🎛 操舵・テレグラフ</button>
+    <button class="settings-tab" data-tab="mooring" onclick="switchTab('mooring');renderMooringPanel()">⚓ 係船</button>
     <button class="settings-tab" data-tab="save" onclick="switchTab('save')">💾 保存</button>
     <button class="settings-tab" data-tab="perf" onclick="switchTab('perf')">⚡ 軽量化</button>
   </div>
@@ -1018,6 +1019,26 @@
       </div>
     </div>
 
+    <div class="settings-page" id="tab-mooring">
+      <div class="sp-section">
+        <div class="sp-section-title">⚓ 係船設備（ビット・ボラード・クリート）</div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">
+          もやい綱やタグボートの索を取る金物です。種類を選んで置き、📍ギズモか数字で位置を決めます。「左右対称」なら反対舷にも同じものが付きます。<br>
+          ⬇「甲板に載せる」で、その位置の真下の甲板にぴったり載せます。大きさは実寸（1＝標準）で、向きは上から見た角度です。
+        </div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+          <button class="sp-gizmo-btn" onclick="mooringAutoLayout()">✨ おすすめの配置</button>
+          <button class="sp-gizmo-btn" onclick="mooringClear()">🗑 すべて消す</button>
+        </div>
+        <div class="sp-funnel-list" id="moor-list"></div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+          <button class="sp-gizmo-btn" onclick="mooringAdd('bitt')">＋ ビット（双係柱）</button>
+          <button class="sp-gizmo-btn" onclick="mooringAdd('bollard')">＋ ボラード（単柱）</button>
+          <button class="sp-gizmo-btn" onclick="mooringAdd('cleat')">＋ クリート</button>
+        </div>
+      </div>
+    </div>
+
     <div class="settings-page" id="tab-sound">
       <div class="sp-section">
         <div class="sp-section-title">🔊 音量（この端末の設定）</div>
@@ -1298,6 +1319,7 @@
 <script src="js/43-world.js"></script>
 <script src="js/44-world-terrain.js"></script>
 <script src="js/45-horn-echo.js"></script>
+<script src="js/46-mooring.js"></script>
 <script src="js/17-main-loop.js"></script>
 <script src="js/18-hull-wake-physics.js"></script>
 <script src="js/19-swe-fluid.js"></script>
