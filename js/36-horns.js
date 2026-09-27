@@ -506,6 +506,8 @@ function renderSoundPanel() {
                     <label class="sp-toggle"><input type="checkbox" ${h.main ? 'checked' : ''} onchange="shipSound.horns[${i}].main=this.checked"> 📯ボタン・操船信号用</label>
                     <label class="sp-toggle"><input type="checkbox" ${h.fog ? 'checked' : ''} onchange="shipSound.horns[${i}].fog=this.checked"> 霧中信号用（霧笛）</label>
                     <button class="sp-gizmo-btn" id="gizmo-horn-${i}" onclick="toggleGizmo('horn', ${i})">📍 ギズモ</button>
+                    <button class="sp-gizmo-btn" onclick="hornCopy(${i}, false)" title="同じ設定の汽笛をもう1つ作る">⧉ 複製</button>
+                    <button class="sp-gizmo-btn" onclick="hornCopy(${i}, true)" title="左右反対側（Xを反転）に同じ汽笛を作る">⇆ 反対舷に複製</button>
                     <button class="sp-gizmo-btn horn-test-btn" data-horn="${i}">🔊 押している間 鳴らす${i < 9 ? `（${i + 1}キー）` : ''}</button>
                 </div>`;
             list.appendChild(card);
@@ -540,6 +542,21 @@ function hornAdd() {
     _soundMarkersDirty = true;
     renderSoundPanel();
 }
+// 汽笛をコピーする（すぐ後ろに入れる）。mirror：左右反対側（X を反転）に置く
+function hornCopy(i, mirror) {
+    const src = shipSound.horns[i];
+    if (!src) return;
+    const h = JSON.parse(JSON.stringify(src));
+    if (mirror) h.x = -(h.x || 0);
+    h.name = (src.name || '') + (mirror ? '（反対舷）' : '（コピー）');
+    shipSound.horns.splice(i + 1, 0, h);
+    // 鳴っている汽笛の番号がずれないよう、実行中の情報も同じ位置に空きを入れる
+    if (_hornRuntime.length > i + 1) _hornRuntime.splice(i + 1, 0, undefined);
+    if (typeof disableGizmo === 'function') disableGizmo();
+    _soundMarkersDirty = true;
+    renderSoundPanel();
+}
+window.hornCopy = hornCopy;
 function hornRemove(i) {
     const R = _hornRuntime[i];
     if (R) { R.presses = 1; hornRelease(i); if (R.em) R.em.disconnect(); }
