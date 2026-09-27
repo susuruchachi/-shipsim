@@ -625,6 +625,7 @@ function _wmEnsureDom() {
                 <button id="wp-mode-world" onclick="worldSetMode('world')">🌍 世界を航海</button>
             </span>
             <button id="wp-chart" class="wp-chartbtn" onclick="worldMapSetChart(!_wm.chart)">📘 海図</button>
+            <button id="wp-minimap" class="wp-chartbtn wp-mmbtn" onclick="minimapShow(!_mm.show)" title="右上の小さな地図">◉ ミニ地図</button>
             <button class="wp-close" onclick="toggleWorldMap(false)">✕</button>
         </div>
         <div class="wp-body">
@@ -743,6 +744,7 @@ function worldMapRedraw(quick) {
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.fillStyle = _wm.chart ? '#e4edf5' : '#0d2a44'; g.fillRect(0, 0, W, H);
     const chartBtn = document.getElementById('wp-chart'); if (chartBtn) chartBtn.classList.toggle('on', !!_wm.chart);
+    const mmBtn = document.getElementById('wp-minimap'); if (mmBtn && typeof _mm !== 'undefined') mmBtn.classList.toggle('on', !!_mm.show);
     document.getElementById('wp-mode-ocean').classList.toggle('on', world.mode === 'ocean');
     document.getElementById('wp-mode-world').classList.toggle('on', world.mode === 'world');
     const st = document.getElementById('wp-status');

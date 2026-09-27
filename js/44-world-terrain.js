@@ -455,6 +455,7 @@ function _trClearAll() {
 
 // モードが変わった・港へ移動した（43-world.js から）
 function worldTerrainModeChanged(moved) {
+    if (typeof minimapReset === 'function') minimapReset();
     _trClearAll();
     if (world.mode === 'world') { worldBuildPorts(); terrain._dirty = true; }
 }

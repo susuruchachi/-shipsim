@@ -775,9 +775,10 @@
             border-radius: 5px; padding: 6px 10px; font-size: 13px; cursor: pointer; font-family: inherit;
         }
         #world-panel .wp-modes button.on { background: #1c6b5a; color: #fff; border-color: #7ee3c8; }
-        #world-panel .wp-chartbtn { margin-left: auto; font-size: 13px; background: rgba(0,0,0,0.3); color: #cfe; border: 1px solid rgba(126,227,200,0.5); border-radius: 6px; padding: 5px 10px; font-family: inherit; cursor: pointer; }
+        #world-panel .wp-chartbtn { margin-left: 0; font-size: 13px; background: rgba(0,0,0,0.3); color: #cfe; border: 1px solid rgba(126,227,200,0.5); border-radius: 6px; padding: 5px 10px; font-family: inherit; cursor: pointer; }
         #world-panel .wp-chartbtn.on { background: #e8f0f8; color: #16283c; border-color: #fff; }
         #world-panel .wp-close { margin-left: 0; }
+        #world-panel #wp-chart { margin-left: auto; }
         #world-panel .wp-body { position: relative; flex: 1; min-height: 0; }
         #wp-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
         #world-panel .wp-tools { position: absolute; right: 10px; top: 10px; display: flex; flex-direction: column; gap: 6px; }
@@ -824,3 +825,22 @@ body.hud-hidden #btn-tug, body.hud-hidden #tug-panel { display: none !important;
 #tug-panel .tg-state { color: #ffd278; margin-left: 6px; margin-right: auto; }
 #tug-panel .tg-sep { width: 8px; }
 #tug-panel .tg-empty { color: #9ab; line-height: 1.5; }
+
+/* 小さな地図（48-minimap.js）：TELEMETRY の下に丸く */
+#minimap { position: absolute; z-index: 11; right: calc(10px + env(safe-area-inset-right)); top: 240px; width: 150px; height: 150px; pointer-events: auto; }
+#minimap.hidden, #minimap.off { display: none; }
+body.hud-hidden #minimap { display: none !important; }
+#mm-canvas { width: 150px; height: 150px; display: block; cursor: pointer; border-radius: 50%; box-shadow: 0 4px 14px rgba(0,0,0,0.45); }
+#minimap .mm-b {
+    position: absolute; width: 24px; height: 24px; padding: 0; border-radius: 50%; font-size: 12px; line-height: 22px; text-align: center;
+    background: rgba(8, 20, 40, 0.85); color: #cfe; border: 1px solid rgba(0, 255, 204, 0.5); cursor: pointer; font-family: inherit; touch-action: manipulation;
+}
+#minimap .mm-b.on { background: #1c6b5a; color: #fff; }
+#minimap .mm-n { left: -6px; top: -4px; font-weight: bold; }
+#minimap .mm-x { right: -6px; top: -4px; }
+#minimap .mm-plus { left: -6px; bottom: -4px; }
+#minimap .mm-minus { right: -6px; bottom: -4px; }
+#minimap .mm-scale { position: absolute; left: 50%; bottom: -16px; transform: translateX(-50%); font-size: 10px; color: #cfe; white-space: nowrap; text-shadow: 0 1px 2px #000; pointer-events: none; }
+@media (max-width: 600px) {
+    #minimap, #mm-canvas { width: 120px; height: 120px; }
+}
