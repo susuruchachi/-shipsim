@@ -101,7 +101,7 @@ function _glowCollectGroups(modelRoot, entries, metersPerUnit) {
         M.multiplyMatrices(invRoot, mesh.matrixWorld);
         // 鏡像変換（Blenderの "mirrored" 書き出し等）では三角形の巻きが逆になり、
         // 外積で求めた法線が裏返る。行列式の符号で打ち消す。
-        const flip = M.determinant() < 0 ? -1 : 1;
+        const flip = (M.determinant() < 0 ? -1 : 1) * meshFacingSign(mesh);
 
         // 複数マテリアルのメッシュでは、発光マテリアルの範囲の三角形だけを使う
         const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
@@ -203,6 +203,77 @@ function _glowMergeCells(groups, metersPerUnit) {
         }
     });
     return out;
+}
+
+// 鏡像（負の拡大率）で置かれた部品の法線が「内向き」かどうか。
+// 片側を拡大率 -1 で複製して書き出したモデルでは、複製側の法線（と三角形の巻き）が
+// 船の内側を向いていることがある。画面では両面表示なので気づかないが、
+// 光の計算（発光パネルの向き・照明の焼き込み）が裏返ってしまい、船の片側だけ暗くなる。
+// 判定は「鏡像にしている節（拡大率が負の親）」ごとにまとめて行う：その下の部品の
+// 横（船幅方向）を向いた三角形が、全体として船の中心の方を向いていれば「内向き」。
+// 甲板のように横向きの面が無い部品も、同じ節の下なら同じ扱いにする。
+// 戻り値：-1＝内向き（向きを逆に扱う）、1＝そのまま。結果は userData に覚える。
+function _facingModelInfo(root) {
+    if (root.userData._facingInfo) return root.userData._facingInfo;
+    const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+    const box = new THREE.Box3(), M = new THREE.Matrix4();
+    root.traverse(o => {
+        if (!o.isMesh || !o.geometry) return;
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+        box.union(o.geometry.boundingBox.clone().applyMatrix4(M.multiplyMatrices(inv, o.matrixWorld)));
+    });
+    const c = box.getCenter(new THREE.Vector3()), sz = box.getSize(new THREE.Vector3());
+    // 船の長さ方向＝長いほうの水平軸、船幅方向＝もう一方の水平軸
+    const lat = sz.x >= sz.z ? 2 : 0;
+    root.userData._facingInfo = { inv, c, lat };
+    return root.userData._facingInfo;
+}
+// 部品の横向きの三角形の「外向き度」（-1〜1）と重み
+function _facingScore(mesh, info) {
+    const pos = mesh.geometry && mesh.geometry.attributes.position;
+    if (!pos) return { s: 0, w: 0 };
+    const M = new THREE.Matrix4().multiplyMatrices(info.inv, mesh.matrixWorld);
+    const sgn = M.determinant() < 0 ? -1 : 1;
+    const idx = mesh.geometry.index ? mesh.geometry.index.array : null;
+    const nT = (idx ? idx.length : pos.count) / 3 | 0;
+    const step = Math.max(1, Math.floor(nT / 3000));
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), d = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
+    const L = info.lat === 0 ? 'x' : 'z';
+    let s = 0, w = 0;
+    for (let t = 0; t < nT; t += step) {
+        a.fromBufferAttribute(pos, idx ? idx[t * 3] : t * 3).applyMatrix4(M);
+        b.fromBufferAttribute(pos, idx ? idx[t * 3 + 1] : t * 3 + 1).applyMatrix4(M);
+        d.fromBufferAttribute(pos, idx ? idx[t * 3 + 2] : t * 3 + 2).applyMatrix4(M);
+        e1.subVectors(b, a); e2.subVectors(d, a);
+        e1.cross(e2).multiplyScalar(sgn);        // データ上の表の向き（巻き×行列式）
+        const nl = e1[L];                          // 船幅方向の成分（面積つき）
+        const off = (a[L] + b[L] + d[L]) / 3 - info.c[L];
+        if (Math.abs(off) < 1e-6 || nl === 0) continue;
+        s += Math.abs(nl) * Math.sign(nl) * Math.sign(off);
+        w += Math.abs(nl);
+    }
+    return { s, w };
+}
+function meshFacingSign(mesh) {
+    if (!mesh || !mesh.geometry || !mesh.geometry.attributes.position) return 1;
+    if (mesh.userData.facingSign) return mesh.userData.facingSign;
+    const root = (typeof importedModelGroup !== 'undefined' && importedModelGroup) ? importedModelGroup.children[0] : null;
+    if (!root) return 1;
+    root.updateWorldMatrix(true, true);
+    const rel = new THREE.Matrix4().copy(root.matrixWorld).invert().multiply(mesh.matrixWorld);
+    if (rel.determinant() >= 0) { mesh.userData.facingSign = 1; return 1; }
+    const info = _facingModelInfo(root);
+    // 鏡像にしている節（いちばん近い、自分の行列の行列式が負の親）
+    let node = mesh;
+    while (node && node !== root && node.matrix.determinant() >= 0) node = node.parent;
+    if (!node || node === root) node = mesh;
+    if (!node.userData.facingGroupSign) {
+        let s = 0, w = 0;
+        node.traverse(o => { if (o.isMesh) { const r = _facingScore(o, info); s += r.s; w += r.w; } });
+        node.userData.facingGroupSign = (w > 0 && s < -0.3 * w) ? -1 : 1;
+    }
+    mesh.userData.facingSign = node.userData.facingGroupSign;
+    return mesh.userData.facingSign;
 }
 
 // モデル読み込み後（ワールド行列が確定してから）に1回呼ぶ。

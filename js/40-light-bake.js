@@ -563,9 +563,9 @@ function _lbMakeRefiner(lightsByCh) {
         return E;
     };
     // 1つのメッシュ用の判定（M：そのメッシュの、船の基準の姿勢でのワールド行列）
-    return function forMesh(M) {
+    return function forMesh(M, facing) {
         const m = M.elements;
-        const flip = M.determinant() < 0 ? -1 : 1;
+        const flip = (M.determinant() < 0 ? -1 : 1) * (facing || 1);
         return function needs(P, a, b, c) {
             const vs = [a, b, c];
             for (let k = 0; k < 3; k++) {
@@ -765,7 +765,7 @@ function _lbSignature(meshes) {
     const M = new THREE.Matrix4();
     const r = (v) => Math.round(v * 1000) / 1000;
     const rel = (o) => { o.updateWorldMatrix(true, false); return M.multiplyMatrices(inv, o.matrixWorld).elements.map(r).join(','); };
-    const parts = ['v2', lightBake.detail, r(shipGroup.scale.x)];   // v2: 使い回しのジオメトリを分けるようにした
+    const parts = ['v3', lightBake.detail, r(shipGroup.scale.x)];   // v3: 重なった面をまとめて分ける・鏡像部品の内向き法線を裏返す
     // スクリュー・舵など、いつも動いている部品（07-glb-movable-parts.js）の向きは数えない
     // （数えると、回るたびに「変わった」ことになって焼き直しが止まらない）
     const moving = new Set();
@@ -1215,7 +1215,8 @@ function* _lbJob(job) {
             const sc = new THREE.Vector3().setFromMatrixScale(M);
             const mpu = Math.max(Math.abs(sc.x), Math.abs(sc.y), Math.abs(sc.z)) || 1;
             const list = idxs.map(i => meshes[i]);
-            const opts = { maxEdge: edgeM / mpu, budget, multi: true, needs: refiner(M) };
+            const facing = (typeof meshFacingSign === 'function') ? meshFacingSign(list[0]) : 1;
+            const opts = { maxEdge: edgeM / mpu, budget, multi: true, needs: refiner(M, facing) };
             const added = _lbSubdivideMeshes(list, opts);
             budget -= added;
             doneN += idxs.length;
@@ -1262,6 +1263,8 @@ function* _lbJob(job) {
             m.updateWorldMatrix(true, false);
             const M = m.matrixWorld;
             nm.getNormalMatrix(M);
+            // 鏡像で複製された部品の法線が内向きなら、裏返して使う（26-glow-emitters.js）
+            if (typeof meshFacingSign === 'function' && meshFacingSign(m) < 0) nm.multiplyScalar(-1);
             const pa = _lbReadAttr(m.geometry.attributes.position), na = _lbReadAttr(m.geometry.attributes.normal);
             const o = meshStart[mi];
             for (let i = 0; i < counts[mi]; i++) {
