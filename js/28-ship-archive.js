@@ -180,6 +180,59 @@ function _setArchiveStatus(text) {
     if (el) el.textContent = text;
 }
 
+// できたZIPを保存してもらう。
+// iPad・iPhone の Safari は「押した直後」でないとダウンロードを始めない（準備に時間が
+// かかると、何も起きずに終わる）。そこで、できあがったら「保存」ボタンを出して、
+// もう一度押してもらう。共有シートが使える端末は「共有…」（ファイルに保存など）も出す。
+// パソコン等で、押してからすぐにできたときは、そのまま保存を始める。
+let _archiveUrl = null;
+function _archiveIsIOS() {
+    const ua = navigator.userAgent || '';
+    return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+function _archiveOffer(blob, fname, msg, quick) {
+    if (_archiveUrl) URL.revokeObjectURL(_archiveUrl);
+    _archiveUrl = URL.createObjectURL(blob);
+    const el = $('ship-archive-status');
+    if (!el) return;
+    el.textContent = '';
+    const line = document.createElement('div');
+    line.textContent = msg;
+    el.appendChild(line);
+    const row = document.createElement('div');
+    row.className = 'sp-row';
+    row.style.cssText = 'gap:8px;margin-top:4px;';
+    const a = document.createElement('a');
+    a.href = _archiveUrl;
+    a.download = fname;
+    a.className = 'sp-add-btn';
+    a.style.cssText = 'flex:1;text-align:center;text-decoration:none;';
+    a.textContent = '📥 ZIPを保存';
+    a.addEventListener('click', (e) => {
+        // Android アプリ（39-android-app.js）では、アプリに保存してもらう
+        if (typeof window.shipsimSaveUrl === 'function') { e.preventDefault(); window.shipsimSaveUrl(_archiveUrl, fname); }
+        setTimeout(() => { line.textContent = msg + '（保存: ' + fname + '）'; }, 300);
+    });
+    row.appendChild(a);
+    let file = null;
+    try { file = new File([blob], fname, { type: 'application/zip' }); } catch (e) { file = null; }
+    if (file && navigator.canShare && navigator.share) {
+        let ok = false;
+        try { ok = navigator.canShare({ files: [file] }); } catch (e) { ok = false; }
+        if (ok) {
+            const sh = document.createElement('button');
+            sh.className = 'sp-add-btn';
+            sh.style.cssText = 'flex:1;';
+            sh.textContent = '📤 共有…（ファイルに保存）';
+            sh.addEventListener('click', () => { navigator.share({ files: [file], title: fname }).catch(() => {}); });
+            row.appendChild(sh);
+        }
+    }
+    el.appendChild(row);
+    // 押してすぐできた（iPad・iPhone 以外）なら、そのまま保存を始める
+    if (quick && !_archiveIsIOS()) a.click();
+}
+
 // ZIPに入れない船（一覧のチェックを外した船）。このページを開いている間だけ覚える
 const shipZipExcluded = new Set();
 function setShipZipPick(name, on) {
@@ -196,6 +249,7 @@ async function exportAllShipsZip() {
     const withModels = !($('ship-zip-models') && !$('ship-zip-models').checked);
     const btn = $('ship-zip-export-btn');
     if (btn) btn.disabled = true;
+    const t0 = performance.now();
     try {
         _setArchiveStatus('書き出しの準備をしています…');
         const enc = new TextEncoder();
@@ -263,19 +317,10 @@ async function exportAllShipsZip() {
         _setArchiveStatus('ZIPを作成しています…');
         const blob = buildZipBlob(files);
         const fname = `susuru_ships_${new Date().toISOString().slice(0, 10)}.zip`;
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fname;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(url), 120000);
-
-        let msg = `${names.length}隻・モデル${manifest.models.length}個を書き出しました（${formatModelSize(blob.size)}）: ${fname}`;
-        if (!withModels) msg = `${names.length}隻の設定だけを書き出しました（モデルなし・${formatModelSize(blob.size)}）: ${fname}`;
+        let msg = `${names.length}隻・モデル${manifest.models.length}個のZIPができました（${formatModelSize(blob.size)}）`;
+        if (!withModels) msg = `${names.length}隻の設定だけのZIPができました（モデルなし・${formatModelSize(blob.size)}）`;
         if (missing.length) msg += ` ※モデルが保存されていない船があります: ${[...new Set(missing)].join(', ')}`;
-        _setArchiveStatus(msg);
+        _archiveOffer(blob, fname, msg, performance.now() - t0 < 800);
     } catch (e) {
         _setArchiveStatus('エラー: ' + (e && e.message ? e.message : 'ZIPを作れませんでした'));
     } finally {

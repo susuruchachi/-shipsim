@@ -338,24 +338,31 @@ function audioWaveImpact(pos, strength) {
     else dest.connect(E.outdoor);
     const { size, heavy } = _audioShipHeft();
     const t0 = c.currentTime + when;
-    // 船体に響く「ドーン」：大きく重い船ほど低く長い
-    const fr = 34 + 70 / (1 + 2.2 * size);
-    const o = c.createOscillator(); o.type = 'sine';
-    o.frequency.setValueAtTime(fr * 1.25, t0);
-    o.frequency.exponentialRampToValueAtTime(fr, t0 + 0.25);
-    const og = c.createGain();
-    og.gain.setValueAtTime(0, t0);
-    og.gain.linearRampToValueAtTime(0.5 * g * heavy, t0 + 0.02);
-    og.gain.exponentialRampToValueAtTime(0.0005, t0 + 0.5 + 1.2 * size * heavy);
-    o.connect(og); og.connect(_audioSat ? _audioSat(1.8, dest) : dest);
-    o.start(t0); o.stop(t0 + 0.6 + 1.3 * size * heavy);
-    audioBurst(dest, { when, dur: 0.8 + 1.6 * size * heavy, attack: 0.015, gain: 0.7 * g * (0.5 + 0.5 * heavy), type: 'lowpass', freq: 70 + 120 / (1 + size), q: 0.7, kind: 'brown' });
-    // 砕ける水「ザバァーン」
-    audioBurst(dest, { when: when + 0.03, dur: 1.1 + 0.9 * Math.min(1.5, strength), attack: 0.06, gain: 0.45 * g, type: 'bandpass', freq: 550 + 450 / (1 + size), q: 0.55 });
-    audioBurst(dest, { when: when + 0.02, dur: 0.9, attack: 0.03, gain: 0.3 * g, type: 'lowpass', freq: 380, q: 0.5, kind: 'brown' });
+    // 船体に響く「ドゴーン」：大きく重い船ほど低く長い。胴全体が鳴るように、
+    // 低い音2つ（少しずらした高さ）を長く響かせる
+    const fr = 28 + 55 / (1 + 2.2 * size);
+    const ring = 1.6 + 3.2 * size * heavy;                    // 響きの長さ[秒]
+    for (const [mul, amp] of [[1, 1.0], [1.47, 0.45]]) {
+        const o = c.createOscillator(); o.type = 'sine';
+        o.frequency.setValueAtTime(fr * mul * 1.3, t0);
+        o.frequency.exponentialRampToValueAtTime(fr * mul, t0 + 0.35);
+        const og = c.createGain();
+        og.gain.setValueAtTime(0, t0);
+        og.gain.linearRampToValueAtTime(1.1 * amp * g * heavy, t0 + 0.025);
+        og.gain.exponentialRampToValueAtTime(0.0005, t0 + ring * (mul > 1 ? 0.6 : 1));
+        o.connect(og); og.connect(_audioSat ? _audioSat(2.2, dest) : dest);
+        o.start(t0); o.stop(t0 + ring + 0.2);
+    }
+    // 叩きつけの「ドッ」
+    audioBurst(dest, { when, dur: 1.2 + 2.4 * size * heavy, attack: 0.012, gain: 1.3 * g * (0.5 + 0.5 * heavy), type: 'lowpass', freq: 60 + 110 / (1 + size), q: 0.8, kind: 'brown' });
+    // 長く尾を引く地鳴りのような「ゴォォォ…」
+    audioBurst(dest, { when: when + 0.08, dur: 3 + 3.5 * size * heavy, attack: 0.25, gain: 0.9 * g * heavy, type: 'lowpass', freq: 55 + 40 / (1 + size), q: 0.6, kind: 'brown' });
+    // 砕ける水「ザッバァーン」（大きく、長く）
+    audioBurst(dest, { when: when + 0.03, dur: 1.8 + 1.6 * Math.min(1.5, strength), attack: 0.05, gain: 0.8 * g, type: 'bandpass', freq: 450 + 400 / (1 + size), q: 0.5 });
+    audioBurst(dest, { when: when + 0.02, dur: 1.6 + 1.2 * size, attack: 0.03, gain: 0.6 * g, type: 'lowpass', freq: 320, q: 0.5, kind: 'brown' });
     // 打ち上がったしぶきが降ってくる
-    audioBurst(dest, { when: when + 0.35 + 0.2 * size, dur: 1.3 + 0.8 * strength, attack: 0.35, gain: 0.14 * g, type: 'highpass', freq: 2200, q: 0.5 });
-    setTimeout(() => { try { dest.disconnect(); if (pan) pan.disconnect(); } catch (e) { /* ignore */ } }, (when + 6) * 1000);
+    audioBurst(dest, { when: when + 0.45 + 0.25 * size, dur: 2 + 1.2 * strength, attack: 0.4, gain: 0.2 * g, type: 'highpass', freq: 2000, q: 0.5 });
+    setTimeout(() => { try { dest.disconnect(); if (pan) pan.disconnect(); } catch (e) { /* ignore */ } }, (when + 12) * 1000);
 }
 window.audioWaveImpact = audioWaveImpact;
 
