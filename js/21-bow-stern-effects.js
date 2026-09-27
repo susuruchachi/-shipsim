@@ -508,56 +508,6 @@ function computeHogSagAmount(cgWorldX, cgWorldZ, rotY, physScale, len, t, subDt)
     return smoothed;
 }
 
-// ─────────────────────────────────────────
-//  _updateBowSternDebugHud()
-//  Stage4の係数調整用の簡易デバッグ表示。画面右上に小さく数値を出すだけ。
-//  スマホの実機テストで「効き具合を勘で判断する」のを減らすためのもの。
-//  不要になったらこの関数ごと削除するか、main-loop.js側の呼び出しを消せばよい。
-// ─────────────────────────────────────────
-let _bowSternDebugHudEl = null;
-function _updateBowSternDebugHud(vals) {
-    if (!_bowSternDebugHudEl) {
-        _bowSternDebugHudEl = document.createElement('div');
-        _bowSternDebugHudEl.id = 'bow-stern-debug-hud';   // ダブルタップで表示を消すとき一緒に消す（css の hud-hidden）
-        _bowSternDebugHudEl.style.cssText =
-            'position:fixed; top:6px; right:6px; z-index:99999; ' +
-            'background:rgba(0,0,0,0.55); color:#7fffb0; font:11px monospace; ' +
-            'padding:4px 8px; border-radius:4px; pointer-events:none; white-space:pre;';
-        document.body.appendChild(_bowSternDebugHudEl);
-    }
-    _bowSternDebugHudEl.textContent =
-        `volBow: ${vals.volBow.toFixed(2)} m³\n` +
-        `volBowDesign: ${vals.bowVolBaseline.toFixed(2)} m³\n` +
-        `bowExcessVol(raw): ${(vals.rawBowExcessVol || 0).toFixed(2)} m³\n` +
-        `bowExcessBaseline: ${(vals.bowExcessBaseline || 0).toFixed(2)} m³\n` +
-        `bowExcessVol: ${vals.bowExcessVol.toFixed(2)} m³\n` +
-        `bowSlamRatio: ${vals.bowSlamRatio.toFixed(2)} (spray>1.0)\n` +
-        `  └ 直近3秒ピーク: ${(vals.bowSlamRatioPeak3s || 0).toFixed(2)}\n` +
-        `speed: ${(vals.speed || 0).toFixed(2)} / target ${(vals.targetSpeed || 0).toFixed(2)}\n` +
-        `slamCount(累計): ${vals.slamCount || 0}`;
-}
-
-// ─────────────────────────────────────────
-//  _trackBowSlamRatioPeak(currentRatio, t)
-//  「今は静かなのに大きな水しぶきが見える」という報告の原因切り分け用。
-//  直近3秒間でbowSlamRatioが実際どこまで跳ね上がっていたかを追跡する
-//  （継続スプレー系はライブ値を直接見ているので、一瞬だけ閾値を超えて
-//  すぐ戻っても、その一瞬に出たパーティクルは寿命の間ずっと画面に残る。
-//  現在値が穏やかでも直近ピークが高ければ、それが原因である可能性が高いと
-//  判断できる）。
-// ─────────────────────────────────────────
-let _bowSlamRatioHistory = [];
-function _trackBowSlamRatioPeak(currentRatio, t) {
-    _bowSlamRatioHistory.push({ t, r: currentRatio });
-    while (_bowSlamRatioHistory.length > 0 && t - _bowSlamRatioHistory[0].t > 3.0) {
-        _bowSlamRatioHistory.shift();
-    }
-    let peak = currentRatio;
-    for (let i = 0; i < _bowSlamRatioHistory.length; i++) {
-        if (_bowSlamRatioHistory[i].r > peak) peak = _bowSlamRatioHistory[i].r;
-    }
-    return peak;
-}
 
 // ─────────────────────────────────────────
 //  estimateSignificantWaveHeight(cx, cz, t)

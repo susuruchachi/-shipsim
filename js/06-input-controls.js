@@ -20,6 +20,22 @@ function setupKeyboardControls() {
     });
 }
 
+// ── 右上の TELEMETRY：見出しを押すとたたむ／開く（この端末で覚える） ──
+function toggleTelemetry(force) {
+    const el = document.getElementById('telemetry-panel');
+    if (!el) return;
+    const folded = (typeof force === 'boolean') ? force : !el.classList.contains('folded');
+    el.classList.toggle('folded', folded);
+    const f = document.getElementById('telemetry-fold');
+    if (f) f.textContent = folded ? '▸' : '▾';
+    try { localStorage.setItem('susuru_telemetry_folded', folded ? '1' : '0'); } catch (e) { /* ignore */ }
+}
+window.addEventListener('load', () => {
+    let v = null;
+    try { v = localStorage.getItem('susuru_telemetry_folded'); } catch (e) { v = null; }
+    if (v === '1') toggleTelemetry(true);
+});
+
 // ── HUD（ボタン・メーター類）の一括表示/非表示 ──────────────
 // body.hud-hiddenクラスの有無をCSS側(#menu-toggle等の並び)で判定して
 // display:noneに畳む。ダブルタップ・スクショ撮影の両方から使う共通処理。

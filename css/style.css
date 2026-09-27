@@ -132,7 +132,7 @@
             pointer-events: none; white-space: nowrap;
         }
         body.hud-hidden #bake-hud { display: none !important; }
-        body.hud-hidden #bow-stern-debug-hud, body.hud-hidden #btn-horn { display: none !important; }
+        body.hud-hidden #telemetry-panel, body.hud-hidden #btn-horn { display: none !important; }
         body.menu-open #btn-horn { left: 310px; }
         body.menu-open #btn-faster { left: 310px; }
         body.menu-open #btn-slower { left: 310px; }
@@ -683,4 +683,36 @@
             filter: brightness(1.8);
             box-shadow: 0 0 8px currentColor;
             font-weight: bold;
+        }
+
+        /* ── 右上の TELEMETRY（メニューから独立。見出しを押すとたためる） ── */
+        #telemetry-panel {
+            position: absolute;
+            top: calc(10px + env(safe-area-inset-top));
+            right: calc(10px + env(safe-area-inset-right));
+            z-index: 12;
+            background: rgba(6, 18, 36, 0.62);
+            border: 1px solid rgba(0, 255, 204, 0.35);
+            border-radius: 6px;
+            padding: 5px 9px 6px;
+            color: #ffffff;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 11px;
+            line-height: 1.35;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+            pointer-events: none;
+            max-width: calc(100vw - 20px);
+            box-sizing: border-box;
+        }
+        #telemetry-head {
+            pointer-events: auto; cursor: pointer; user-select: none; -webkit-user-select: none;
+            color: #00ffcc; font-weight: bold; letter-spacing: 1px; text-align: center;
+        }
+        #telemetry-body { margin-top: 3px; }
+        #telemetry-body > div { white-space: pre; }
+        #telemetry-panel.folded #telemetry-body { display: none; }
+        .telemetry-sep { border-top: 1px solid rgba(255,255,255,0.25); margin: 3px 0; }
+        /* 狭い画面では、右側に並ぶボタン（視点・スクショ）の下へ */
+        @media (max-width: 768px) {
+            #telemetry-panel { top: calc(148px + env(safe-area-inset-top)); font-size: 10px; }
         }

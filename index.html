@@ -38,6 +38,25 @@
 <button id="screenshot-toggle" onclick="captureScreenshot()">📷 スクショ</button>
 <div id="viewpoint-menu"></div>
 
+<!-- 船の状態（右上に常に表示。見出しを押すとたためる） -->
+<div id="telemetry-panel">
+    <div id="telemetry-head" onclick="toggleTelemetry()">TELEMETRY <span id="telemetry-fold">▾</span></div>
+    <div id="telemetry-body">
+        <div id="ui-telegraph">Telegraph: STOP</div>
+        <div id="ui-engine">Screw    : STOP</div>
+        <div id="ui-speed">Speed    : 0.0 kn</div>
+        <div id="ui-rudder">Rudder   : 0.0°</div>
+        <div id="ui-heading">Heading  : 0°</div>
+        <div id="ui-time">Time     : 12:00</div>
+        <div id="ui-roll" style="color: #aaddff;">Roll     : 0.0°</div>
+        <div id="ui-pitch" style="color: #aaddff;">Pitch    : 0.0°</div>
+        <div class="telemetry-sep"></div>
+        <div id="ui-weather" style="color:#ffe9a8;">Weather  : —</div>
+        <div id="ui-wind" style="color:#ffe9a8;">Wind     : —</div>
+        <div id="ui-pos" style="color:#c9f0ff;">Position : —</div>
+    </div>
+</div>
+
 <div id="ui-container">
     <!-- アプリとしてインストール（31-pwa-install.js。インストールできるときだけ表示） -->
     <div id="pwa-install-box" style="display:none;margin-bottom:10px;">
@@ -49,16 +68,6 @@
         <a id="apk-download-link" href="shipsim-android.apk" download="ShipSim.apk" style="display:block;box-sizing:border-box;width:100%;padding:8px;background:#7ee39a;color:#0a1932;border-radius:4px;font-weight:bold;text-align:center;text-decoration:none;">🤖 Androidアプリ（APK）をダウンロード</a>
         <div style="font-size:10px;color:#9fb8c8;margin-top:4px;line-height:1.4;">全画面で、遊んでいる間は画面が消えません。端末の「ゲーム」として扱われます（ゲームエンハンサー等）。中身はこのページと同じで、自動で最新になります。入れるときに「提供元不明のアプリ」の許可が必要です。</div>
     </div>
-    <div style="font-weight: bold; border-bottom: 1px solid #ffffff; padding-bottom: 4px; margin-bottom: 10px; text-align: center; font-size: 14px; color: #00ffcc;">=== TELEMETRY ===</div>
-    <div id="ui-telegraph">Telegraph: STOP</div>
-    <div id="ui-engine">Screw    : STOP</div>
-    <div id="ui-speed">Speed    : 0.0 kn</div>
-    <div id="ui-rudder">Rudder   : 0.0°</div>
-    <div id="ui-heading">Heading  : 0°</div>
-    <div id="ui-time">Time     : 12:00</div>
-    <div id="ui-roll" style="color: #aaddff;">Roll     : 0.0°</div>
-    <div id="ui-pitch" style="color: #aaddff;">Pitch    : 0.0°</div>
-
     <div class="section-title">ENVIRONMENT & TIME</div>
     
     <div class="interactive-ui">

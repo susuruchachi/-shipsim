@@ -373,28 +373,6 @@ function animate() {
                 window._propRacingIntensity = _sternF.racingIntensity;
             }
 
-            // ── デバッグHUD（Stage4調整用）: bowExcess/greenWaterRatio/slamRatioを画面表示 ──
-            // 「感覚的に弱い/強い」だけだと係数調整が勘頼りになるため、実測値を
-            // 画面の隅に出しておく。不要になったら _updateBowSternDebugHud ごと
-            // 削除するか、下の if を false にすれば非表示にできる。
-            if (typeof _updateBowSternDebugHud === 'function') {
-                const _slamRatioNow = window._bowSlamRatioLive || 0;
-                const _slamRatioPeak3s = (typeof _trackBowSlamRatioPeak === 'function')
-                    ? _trackBowSlamRatioPeak(_slamRatioNow, t) : _slamRatioNow;
-                _updateBowSternDebugHud({
-                    volBow: (_bowF && _bowF.volBow) || 0,
-                    bowVolBaseline: (_bowF && _bowF.volBowDesign) || 0,
-                    bowExcessVol: window._bowExcessVol || 0,
-                    rawBowExcessVol: (_bowF && _bowF.rawBowExcess) || 0,
-                    bowExcessBaseline: window._bowExcessBaselineVol || 0,
-                    bowSlamRatio: _slamRatioNow,
-                    bowSlamRatioPeak3s: _slamRatioPeak3s,
-                    speed: physics.speed,
-                    targetSpeed: physics.targetSpeed,
-                    slamCount: window._bowSlamCount || 0,
-                });
-            }
-
             // ════════════════════════════════════════════════════════════
             //  船中央（Stage 3）── ホギング/サギングの視覚的な船体曲げ
             //  剛体物理には影響させず、hogSagUniforms経由でシェーダーにのみ反映する。
@@ -1075,6 +1053,36 @@ function updateUI() {
 
     $('ui-roll').innerText = `Roll     : ${(physics.roll * 180 / Math.PI).toFixed(1)}°`;
     $('ui-pitch').innerText = `Pitch    : ${(physics.pitch * 180 / Math.PI).toFixed(1)}°`;
+
+    // 天気・風・位置（右上の TELEMETRY の下の段）
+    const _w = window.weather;
+    const _wx = $('ui-weather');
+    if (_wx) {
+        let lab = '—';
+        if (_w && _w.enabled) {
+            const pr = (typeof weatherPresetByKey === 'function') ? weatherPresetByKey(_w.presetKey) : null;
+            lab = (_w.presetKey === 'custom') ? 'カスタム' : ((pr && pr.label) || _w.presetKey || '—');
+            const extra = [];
+            if ((_w.rain || 0) > 0.05) extra.push('雨');
+            if ((_w.fog || 0) > 0.3) extra.push('霧');
+            if (extra.length) lab += '（' + extra.join('・') + '）';
+        } else lab = '固定（天候オフ）';
+        _wx.innerText = `Weather  : ${lab}`;
+    }
+    const _wd = $('ui-wind');
+    if (_wd) {
+        const dir = (((Math.round(physics.windDir || 0)) % 360) + 360) % 360;
+        const pts = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+        const ms = Math.max(0, physics.windSpeed || 0);
+        _wd.innerText = `Wind     : ${dir}° ${pts[Math.round(dir / 22.5) % 16]}  ${ms.toFixed(1)} m/s (${(ms * 1.9438).toFixed(0)} kn)`;
+    }
+    const _ps = $('ui-pos');
+    if (_ps) {
+        // 今はまだ地図が無いので、出発点からの位置[m]。将来の世界地図ではここを緯度・経度にする
+        const x = physics.cgWorldX || 0, z = physics.cgWorldZ || 0;
+        const nm = Math.hypot(x, z) / 1852;
+        _ps.innerText = `Position : X ${x.toFixed(0)}  Z ${z.toFixed(0)} m (${nm.toFixed(2)} NM)`;
+    }
 }
 
 init();
