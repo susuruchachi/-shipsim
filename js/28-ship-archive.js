@@ -224,7 +224,8 @@ function _archiveOffer(blob, fname, msg, quick) {
             sh.className = 'sp-add-btn';
             sh.style.cssText = 'flex:1;';
             sh.textContent = '📤 共有…（ファイルに保存）';
-            sh.addEventListener('click', () => { navigator.share({ files: [file], title: fname }).catch(() => {}); });
+            // 題名や文章を一緒に渡すと、iPad では文字（ファイル名）だけが共有されることがあるので、ファイルだけを渡す
+            sh.addEventListener('click', () => { navigator.share({ files: [file] }).catch(() => {}); });
             row.appendChild(sh);
         }
     }
