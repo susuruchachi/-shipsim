@@ -5,6 +5,9 @@ function setupKeyboardControls() {
         if (e.key === 's' || e.key === 'S') changeTelegraph(-1);
         if (e.key === 'a' || e.key === 'A') keys.a = true;
         if (e.key === 'd' || e.key === 'D') keys.d = true;
+        // C：舵中央（舵輪を真ん中へ）　X：機関停止（テレグラフを STOP へ、一段ずつ）
+        if ((e.key === 'c' || e.key === 'C') && typeof bridgeCenterHelm === 'function') bridgeCenterHelm();
+        if ((e.key === 'x' || e.key === 'X') && typeof _tgAim === 'function') _tgAim(0);
     });
     window.addEventListener('keyup', (e) => {
         if (e.key === 'a' || e.key === 'A') keys.a = false;

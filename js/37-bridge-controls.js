@@ -54,9 +54,11 @@ window.BRIDGE_TELEGRAPHS = BRIDGE_TELEGRAPHS;
 window.BRIDGE_WHEELS = BRIDGE_WHEELS;
 
 // 舵輪を端から端まで回すのに必要な角度（片側）
-const WHEEL_LOCK_DEG = { classic: 540, handle: 270, azipod: 70 };
+// 古典的な舵輪は、本物の大型船のように1周で舵1°（舵いっぱい35°まで35周）
+const WHEEL_LOCK_DEG = { classic: 35 * 360, handle: 270, azipod: 70 };
 const HELM_RATE = 20;          // 舵が舵輪の指示へ追いつく速さ[度/秒]（舵取機）
 const HELM_KEY_RATE = 60;      // A/Dキーで舵輪を回す速さ（舵角換算[度/秒]）
+const HELM_KEY_RATE_WHEEL = { classic: 6 };   // 古典的な舵輪は1秒に6周（＝舵6°）まで
 const TG_ANSWER_DELAY = 1.3;   // 機関室が応答するまで[秒]
 
 // テレグラフのベルの音（auto：デザインに合わせる。オリンピック級・クイーン・メリー風は
@@ -356,6 +358,13 @@ function setTelegraphSpecial(sp) {
     onTelegraphOrder(prev, 0, ps);
 }
 window.setTelegraphSpecial = setTelegraphSpecial;
+// 舵中央（ミジップ）：舵輪を真ん中へ（キーボードの C・舵輪の中心をダブルタップ）
+function bridgeCenterHelm() {
+    _br.wheelDeg = 0;
+    physics.helmOrder = 0;
+    _br.dirtyW = true;
+}
+window.bridgeCenterHelm = bridgeCenterHelm;
 
 // ════════════════════════════════════════════════════════════════
 //  描画の道具
@@ -1013,25 +1022,51 @@ function _setupTelegraphInput(cv) {
         }
         _br.tgDrag = { id: e.pointerId };
         _br.tgHandle = _tgFromAngleCont(d, angleAt(p));
+        _tgAim(Math.round(_br.tgHandle));
         _br.dirtyT = true;
     });
     cv.addEventListener('pointermove', (e) => {
         if (!_br.tgDrag) return;
         e.preventDefault();
         _br.tgHandle = _tgFromAngleCont(bridgeUI.telegraph, angleAt(_localPos(cv, e)));
+        _tgAim(Math.round(_br.tgHandle));
         _br.dirtyT = true;
     });
     const up = (e) => {
         if (!_br.tgDrag) return;
         _br.tgDrag = null;
-        const v = Math.round(_br.tgHandle);
-        const sp = Object.keys(_TG_SPECIAL).find(k => _TG_SPECIAL[k].v === v);
-        if (sp) setTelegraphSpecial(sp); else setTelegraphOrder(v);
+        _tgAim(Math.round(_br.tgHandle));
         _br.dirtyT = true;
     };
     cv.addEventListener('pointerup', up);
     cv.addEventListener('pointercancel', up);
 }
+// ── 一段ずつ切り替える ──
+// ハンドルを一気に倒しても、指令は一段ずつ（TG_STEP_S 秒おきに）切り替わり、
+// 段ごとにベルが鳴る。本物のテレグラフで、ハンドルが途中の目盛りを順に通るのと同じ。
+// 目標の位置（-3〜3、丸型は両端の ±4 がスタンバイ・機関終了）
+const TG_STEP_S = 0.12;
+function _tgCurPos() {
+    const sp = physics.telegraphSpecial;
+    return (sp && _tgOnDial(bridgeUI.telegraph)) ? _TG_SPECIAL[sp].v : (physics.telegraphState || 0);
+}
+function _tgAim(v) {
+    const lim = _tgOnDial(bridgeUI.telegraph) ? 4 : 3;
+    _br.tgTarget = Math.max(-lim, Math.min(lim, v));
+}
+// 毎フレーム：目標まで一段ずつ進める
+function _tgStepTowardTarget(now) {
+    if (_br.tgTarget === undefined || _br.tgTarget === null) return;
+    const cur = _tgCurPos();
+    if (cur === _br.tgTarget) { if (!_br.tgDrag) _br.tgTarget = null; return; }
+    if (now < (_br.tgStepAt || 0)) return;
+    _br.tgStepAt = now + TG_STEP_S;
+    const next = cur + Math.sign(_br.tgTarget - cur);
+    const sp = Object.keys(_TG_SPECIAL).find(k => _TG_SPECIAL[k].v === next);
+    if (sp && _tgOnDial(bridgeUI.telegraph)) setTelegraphSpecial(sp);
+    else setTelegraphOrder(next);
+}
+
 // 角度 → 指令（連続値：ドラッグ中にハンドルを指に追従させる）
 function _tgFromAngleCont(design, a) {
     const step = _TG_STEP[design] || 26;
@@ -1048,7 +1083,7 @@ function _setupWheelInput(cv) {
         const now = performance.now();
         // 中心をダブルタップ：舵中央
         if (Math.hypot(p.x - c.x, p.y - c.y) < _br.size * 0.12 && now - _br.lastTap < 350) {
-            _br.wheelDeg = 0; _br.lastTap = 0; _br.dirtyW = true; return;
+            bridgeCenterHelm(); _br.lastTap = 0; return;
         }
         _br.lastTap = now;
         _br.wheelDrag = { a: Math.atan2(p.x - c.x, -(p.y - c.y)) };
@@ -1113,12 +1148,23 @@ function updateBridge(t) {
     // 舵輪：A/Dキーで回す
     const lock = WHEEL_LOCK_DEG[bridgeUI.wheel] || 360;
     if (bridgeWheelActive()) {
-        if (keys.a) { _br.wheelDeg = Math.max(-lock, _br.wheelDeg - HELM_KEY_RATE / 35 * lock * dt); _br.dirtyW = true; }
-        if (keys.d) { _br.wheelDeg = Math.min(lock, _br.wheelDeg + HELM_KEY_RATE / 35 * lock * dt); _br.dirtyW = true; }
+        const kr = HELM_KEY_RATE_WHEEL[bridgeUI.wheel] || HELM_KEY_RATE;
+        if (keys.a) { _br.wheelDeg = Math.max(-lock, _br.wheelDeg - kr / 35 * lock * dt); _br.dirtyW = true; }
+        if (keys.d) { _br.wheelDeg = Math.min(lock, _br.wheelDeg + kr / 35 * lock * dt); _br.dirtyW = true; }
         physics.helmOrder = _br.wheelDeg / lock * 35;
+        // 古典的な舵輪：1周ごとにベル（テレグラフと同じ音）
+        if (bridgeUI.wheel === 'classic') {
+            const turn = Math.trunc(_br.wheelDeg / 360);
+            if (_br.lastTurn === undefined) _br.lastTurn = turn;
+            if (turn !== _br.lastTurn) {
+                _br.lastTurn = turn;
+                if (t - (_br.turnBellAt || -9) > 0.15) { _br.turnBellAt = t; telegraphBell(bridgeUI.telegraph, false, 1); }
+            }
+        } else _br.lastTurn = undefined;
     }
     if (Math.abs(physics.rudderAngle - _br.lastRudder) > 0.05) { _br.lastRudder = physics.rudderAngle; _br.dirtyW = true; }
 
+    _tgStepTowardTarget(t);
     // 暗くなる・明るくなるにつれて盤面の光り方を描き直す
     const nk = Math.round(_tgNight() * 40);
     if (nk !== _br.lastNightK) { _br.lastNightK = nk; _br.dirtyT = true; }
