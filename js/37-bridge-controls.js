@@ -121,8 +121,9 @@ function _bellKind() {
 const _gong = { ctx: null, buf: {}, verb: null };
 // 1打ぶんのゴングの音（f0：いちばん低い音の高さ）
 // decay：減衰の長さの倍率（1＝ゴング、0.3くらい＝電話の小さなベル）
-function _gongStrikeBuffer(c, f0, dark, decay = 1) {
-    const key = f0 + ':' + (dark ? 1 : 0) + ':' + decay;
+// bright：高い倍音と打ち子の音を強める量（0＝ゴング、1くらい＝電話のベルの鋭い音）
+function _gongStrikeBuffer(c, f0, dark, decay = 1, bright = 0) {
+    const key = f0 + ':' + (dark ? 1 : 0) + ':' + decay + ':' + bright;
     if (_gong.ctx !== c) { _gong.ctx = c; _gong.buf = {}; _gong.verb = null; }
     if (_gong.buf[key]) return _gong.buf[key];
     const sr = c.sampleRate, len = Math.floor(sr * Math.max(0.6, 2.6 * decay));
@@ -139,6 +140,12 @@ function _gongStrikeBuffer(c, f0, dark, decay = 1) {
         { r: 8.13, a: dark ? 0.04 : 0.10, t: 0.22 },
         { r: 10.6, a: dark ? 0.01 : 0.05, t: 0.12 },
     ];
+    if (bright > 0) {
+        // 薄い小さなベル：高い倍音が強く、長めに残る（「チリ」という鋭さ）
+        for (const p of parts) if (p.r >= 3.9) { p.a *= 1 + 1.6 * bright; p.t *= 1 + 0.8 * bright; }
+        parts.push({ r: 13.4, a: 0.12 * bright, t: 0.09 }, { r: 16.9, a: 0.07 * bright, t: 0.06 });
+        parts[0].a *= 0.3;   // 低いうなりは小さく
+    }
     for (const p of parts) {
         const f = f0 * p.r;
         if (f > sr * 0.45) continue;
@@ -158,7 +165,7 @@ function _gongStrikeBuffer(c, f0, dark, decay = 1) {
     for (let i = 0; i < clickLen; i++) {
         const n = Math.random() * 2 - 1;
         lp += (n - lp) * 0.55;
-        d[i] += (n - lp) * 0.5 * Math.exp(-i / (sr * 0.0025));
+        d[i] += (n - lp) * (0.5 + 1.1 * bright) * Math.exp(-i / (sr * 0.0025));
     }
     // 立ち上がりを 1ms かけて滑らかに（プチッという音を防ぐ）
     const a = Math.floor(sr * 0.001);
@@ -228,19 +235,19 @@ function _gongRing(c, dest, t0, answer, steps) {
 // 交互に叩く。1打ずつは短く減衰するが、速く叩くので重なって「ジリリリ」と続く。
 // 2つのベルは少し高さが違い、打ち子の当たる「カチ」も混ざる
 function _phoneRing(c, dest, t0, answer, steps) {
-    const fA = answer ? 1480 : 1880, fB = answer ? 1640 : 2090;
-    const bufA = _gongStrikeBuffer(c, fA, answer, 0.3);
-    const bufB = _gongStrikeBuffer(c, fB, answer, 0.3);
+    const fA = answer ? 1720 : 2250, fB = answer ? 1900 : 2520;
+    const bufA = _gongStrikeBuffer(c, fA, false, 0.28, answer ? 0.6 : 1);
+    const bufB = _gongStrikeBuffer(c, fB, false, 0.28, answer ? 0.6 : 1);
     const out = c.createGain();
     out.gain.value = answer ? 0.3 : 0.42;
     let node = out;
     if (answer) {
-        const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3200; lp.Q.value = 0.5;
+        const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 6000; lp.Q.value = 0.5;
         out.connect(lp); node = lp;
     }
     node.connect(dest);
     const verb = _gongVerb(c, dest);
-    const send = c.createGain(); send.gain.value = answer ? 0.7 : 0.3;
+    const send = c.createGain(); send.gain.value = answer ? 0.45 : 0.14;
     node.connect(send); send.connect(verb);
     // 鳴る長さ：ハンドルを大きく動かすほど長い。「ジリリン、ジリリン」と2回に分けて鳴らす
     const bursts = answer ? 1 : (steps >= 3 ? 2 : 1);

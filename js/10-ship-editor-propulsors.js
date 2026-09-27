@@ -82,9 +82,9 @@ function toggleGizmo(type, index = -1, mode = 'translate') {
         const entry = funnelUplights.find(u => u.funnelIndex === fi && !u.isMirror);
         if (entry) {
             targetMesh = side === 'L' ? entry.markerL : entry.markerR;
-            btnId = `gizmo-funnel-uplight-${index}`;
+            btnId = `gizmo-funnel-uplight-${index}-${mode}`;
         }
-        mode = 'rotate'; // 角度調整のみなので回転モード固定
+        // 移動（付け根の位置）と回転（傾き）。反対側は対称に付いてくる
     }
     else if (type === 'nav_port') targetMesh = navLightMeshes.port;
     else if (type === 'nav_mastFore') targetMesh = navLightMeshes.mastFore;
@@ -292,16 +292,8 @@ function onGizmoChange() {
         }
     }
     else if (currentGizmoType === 'funnel_uplight') {
-        updateFunnelUplightAim(currentGizmoTarget);
-        // 回転を funnels[] データへ保存（次回 buildFunnelMeshes 時に復元するため）
-        const parts = String(currentGizmoIndex).split('_');
-        const fi = parseInt(parts[0]);
-        const side = parts[1];
-        const f = funnels[fi];
-        if (f) {
-            const r = currentGizmoTarget.rotation;
-            f[side === 'L' ? 'upRotL' : 'upRotR'] = { x: r.x, y: r.y, z: r.z };
-        }
+        // 付け根の位置・傾きを funnels[i].up へ（左右対称に反映。12-bloom-and-deck-lighting-fx.js）
+        onFunnelUplightMarkerChanged(currentGizmoTarget, currentGizmoMode);
     }
     else if (currentGizmoType === 'decklight') {
         // position/scale をUIの数値欄に反映
