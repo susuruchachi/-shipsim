@@ -234,8 +234,10 @@ function _gongRing(c, dest, t0, answer, steps) {
 // 電話のようなベル「ジリリン」：打ち子が2つの小さな椀形のベルを1秒に20回ほど
 // 交互に叩く。1打ずつは短く減衰するが、速く叩くので重なって「ジリリリ」と続く。
 // 2つのベルは少し高さが違い、打ち子の当たる「カチ」も混ざる
+// 電話ベルの2つの椀の高さ[Hz]（指令・応答）
+const PHONE_BELL_F = { order: [2250, 2520], answer: [1720, 1900] };
 function _phoneRing(c, dest, t0, answer, steps) {
-    const fA = answer ? 1720 : 2250, fB = answer ? 1900 : 2520;
+    const [fA, fB] = PHONE_BELL_F[answer ? 'answer' : 'order'];
     const bufA = _gongStrikeBuffer(c, fA, false, 0.28, answer ? 0.6 : 1);
     const bufB = _gongStrikeBuffer(c, fB, false, 0.28, answer ? 0.6 : 1);
     const out = c.createGain();
