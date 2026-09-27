@@ -38,11 +38,11 @@ const WORLD_OCT_MAP = 9;              // 地図に使う細かさ（ノイズを
 const WORLD_OCT_FULL = 20;            // 船のまわりの細かさ（約35mの起伏まで）
 
 const PORT_TYPES = {
-    fishing: { label: '漁港',     suffix: '漁港', color: '#7ee39a', size: 1, depth: 8, basin: 260, pier: 70 },
-    town:    { label: '港町',     suffix: '港',   color: '#ffe38a', size: 2, depth: 12, basin: 380, pier: 10 },
-    city:    { label: '港湾都市', suffix: '港',   color: '#ffb36b', size: 3, depth: 18, basin: 640, pier: 10 },
-    cargo:   { label: '貨物港',   suffix: '貨物港', color: '#8cc6ff', size: 3, depth: 18, basin: 760, pier: 10 },
-    naval:   { label: '軍港',     suffix: '軍港', color: '#ff7a7a', size: 2, depth: 16, basin: 620, pier: 270 },
+    fishing: { label: '漁港',     suffix: '漁港', color: '#7ee39a', size: 1, depth: 8, basin: 260, pier: 70, quay: 170 },
+    town:    { label: '港町',     suffix: '港',   color: '#ffe38a', size: 2, depth: 12, basin: 380, pier: 10, quay: 320 },
+    city:    { label: '港湾都市', suffix: '港',   color: '#ffb36b', size: 3, depth: 18, basin: 640, pier: 10, quay: 720 },
+    cargo:   { label: '貨物港',   suffix: '貨物港', color: '#8cc6ff', size: 3, depth: 18, basin: 760, pier: 10, quay: 1050 },
+    naval:   { label: '軍港',     suffix: '軍港', color: '#ff7a7a', size: 2, depth: 16, basin: 620, pier: 270, quay: 640 },
 };
 window.PORT_TYPES = PORT_TYPES;
 
@@ -137,6 +137,28 @@ function worldHeightFromE(e) {
     return s < 0.05 ? -150 * Math.pow(s / 0.05, 0.7) : -Math.min(6000, 150 + 5000 * (s - 0.05));
 }
 
+// 浅瀬・岩礁：大陸棚（深さ130mまで）のところどころに「浅瀬の多い海域」（数十km）があり、
+// その中に砂州や岩の連なり（2〜3km）と、ひとつひとつの岩（数百m）がある。
+// 海面から頭を出す岩もあれば、数mの深さに隠れているものもある。
+// 細かい所（oct 12 以上）だけで足す（世界全体の地図では見えない大きさなので）。
+function worldShoal(ux, uy, uz, h, oct) {
+    if (h >= 0 || h < -130 || oct < 12) return h;
+    const field = _wNoise3(ux * 140 + 11.3, uy * 140 - 4.1, uz * 140 + 7.7);
+    if (field < 0.18) return h;
+    const w = Math.min(1, (field - 0.18) / 0.2) * Math.min(1, (h + 130) / 60);
+    const n1 = _wNoise3(ux * 1900 - 3.3, uy * 1900 + 8.8, uz * 1900 + 1.2);
+    const n2 = oct >= 16 ? _wNoise3(ux * 7000 + 5.5, uy * 7000 - 2.2, uz * 7000 + 9.1) : 0;
+    const ridge = 1 - Math.abs(n1);
+    // 尾根のいちばん高い所が数mの浅さ。海面から出る岩は、その中のさらに一部だけ
+    const top = -42 + 40 * ridge * ridge * ridge + 5 * n2;
+    if (top <= h) return h;
+    return h + (top - h) * w;
+}
+// 球の上の点の高さ[m]（浅瀬・岩礁込み）
+function worldHeightAt(ux, uy, uz, oct) {
+    return worldShoal(ux, uy, uz, worldHeightFromE(worldNoiseE(ux, uy, uz, oct)), oct);
+}
+
 // 海面の高さを、陸が WORLD_LAND_FRACTION になるように決める
 (function () {
     const r = _wRng(WORLD_SEED + 1);
@@ -203,7 +225,7 @@ function worldUnitToLocal(u, out) {
 const _wTmpU = {};
 function worldHeightAtLocal(x, z, oct) {
     worldLocalToUnit(x, z, _wTmpU);
-    return worldHeightFromE(worldNoiseE(_wTmpU.x, _wTmpU.y, _wTmpU.z, oct || WORLD_OCT_FULL));
+    return worldHeightAt(_wTmpU.x, _wTmpU.y, _wTmpU.z, oct || WORLD_OCT_FULL);
 }
 // 大円距離[m]
 function worldDistance(latA, lonA, latB, lonB) {
@@ -411,7 +433,11 @@ function worldStartAtPort(port) {
     let off = { fishing: 150, town: 220, city: 360, cargo: 420, naval: 350 }[port.type] || 250;
     // 泊地に収まらない（長すぎる・深すぎる）船は、港の外の、船の端から端まで深さが足りる所へ
     if (need > T.depth + 1 || off - halfLen < T.pier || off + halfLen > mouth) {
-        const depthAt = (d) => { const u = unitAt(d); return -worldHeightFromE(worldNoiseE(u.x, u.y, u.z, 16)); };
+        const depthAt = (d) => {
+            const u = unitAt(d), nat = -worldHeightAt(u.x, u.y, u.z, 16);
+            // 航路（44-world-terrain.js の _portAdjust）の中は掘ってある
+            return d < T.basin + worldPortChannelLen(port) - 400 ? Math.max(nat, T.depth + 2) : nat;
+        };
         for (let d = mouth + halfLen + 60; d < 15000; d += 100) {
             off = d;
             if (depthAt(d - halfLen) > need && depthAt(d) > need && depthAt(d + halfLen) > need) break;
@@ -441,8 +467,7 @@ window.worldStartAtPort = worldStartAtPort;
 const _wm = { open: false, cx: 0, cy: 10, zoom: 1, base: null, detail: null, detailKey: '', sel: null, drag: null, pinch: null, job: 0 };
 const WM_BASE_W = 720, WM_BASE_H = 360;
 
-function _wmColor(e) {
-    const h = worldHeightFromE(e);
+function _wmColor(h) {
     if (h < 0) {
         const d = Math.min(1, -h / 2500);
         if (h > -25) return [96, 170, 196];                   // 浅瀬
@@ -455,33 +480,132 @@ function _wmColor(e) {
     if (h < 1900) return [150, 140, 125];
     return [236, 238, 242];                                   // 雪
 }
+// 海図の色：陸は黄土色、海は深さの段ごとに青から白へ（浅いほど濃い青）
+const WM_CHART_BANDS = [2, 5, 10, 20, 50, 200];              // 等深線[m]
+const WM_CHART_COL = [[158, 204, 168], [120, 182, 232], [158, 205, 242], [196, 224, 248], [224, 239, 252], [242, 248, 254], [252, 253, 255]];
+function _wmBand(h) {
+    if (h >= 0) return -1;
+    const d = -h;
+    let k = 0;
+    while (k < WM_CHART_BANDS.length && d >= WM_CHART_BANDS[k]) k++;
+    return k;
+}
+// 高さの配列 → 絵（rows r0〜r1-1）。海図のときは段の境目に等深線を引く
+function _wmPaint(cv, r0, r1) {
+    const w = cv.width, H = cv.H, img = cv.img, D = img.data, chart = !!_wm.chart;
+    for (let y = r0; y < r1; y++) {
+        for (let x = 0; x < w; x++) {
+            const k = y * w + x, h = H[k], o = k * 4;
+            let c;
+            if (!chart) c = _wmColor(h);
+            else {
+                const b = _wmBand(h);
+                c = b < 0 ? (h > 300 ? [228, 208, 158] : [240, 222, 170]) : WM_CHART_COL[b];
+                const bl = x > 0 ? _wmBand(H[k - 1]) : b, bu = y > 0 ? _wmBand(H[k - w]) : b;
+                if (bl !== b || bu !== b) {
+                    const coast = (b < 0) !== (bl < 0) || (b < 0) !== (bu < 0);
+                    c = coast ? [70, 62, 48] : [96, 140, 186];
+                }
+            }
+            D[o] = c[0]; D[o + 1] = c[1]; D[o + 2] = c[2]; D[o + 3] = 255;
+        }
+    }
+    cv.getContext('2d').putImageData(img, 0, 0);
+}
+// 港へ入る航路の長さ[m]（泊地の端から）。浅瀬の多い海域を抜けて、十分な深さが
+// 1.5km 続く所まで伸ばす。途中に本当の陸（島など）があれば、その手前で止める。
+function worldPortChannelLen(p) {
+    if (p._chLen) return p._chLen;
+    const T = PORT_TYPES[p.type], F = _worldFrame(p.lat, p.lon), br = p.seaBearing * Math.PI / 180;
+    const sx = Math.sin(br), sz = Math.cos(br);
+    let len = 9000, deepFrom = -1;
+    for (let d = 0; d <= 9000; d += 100) {
+        const a = T.basin + d;
+        const x = F.C.x + (a * sx) / WORLD_R * F.E.x + (a * sz) / WORLD_R * F.N.x;
+        const y = F.C.y + (a * sx) / WORLD_R * F.E.y + (a * sz) / WORLD_R * F.N.y;
+        const z = F.C.z + (a * sx) / WORLD_R * F.E.z + (a * sz) / WORLD_R * F.N.z;
+        const l = Math.hypot(x, y, z), ux = x / l, uy = y / l, uz = z / l;
+        const e = worldNoiseE(ux, uy, uz, 16);
+        if (e >= 0) { len = Math.max(600, d - 150); break; }          // 島・岬：その手前まで
+        // 航路の幅いっぱい（両脇も）深いか
+        let deep = -worldHeightAt(ux, uy, uz, 16) > T.depth + 6;
+        if (deep) deepFrom = deepFrom < 0 ? d : deepFrom; else deepFrom = -1;
+        if (deepFrom >= 0 && d - deepFrom >= 1500) { len = Math.max(1200, deepFrom + 400); break; }
+    }
+    p._chLen = len;
+    return len;
+}
+window.worldPortChannelLen = worldPortChannelLen;
+// 港の手直し（泊地・航路の浚渫、44-world-terrain.js の _portAdjust）を地図にも入れるための、
+// 港それぞれの面（港の点に接する面）での形
+function _wmPortShapes(lon0, lon1, lat0, lat1) {
+    if (!world.ports || typeof _portAdjust !== 'function') return [];
+    const out = [];
+    const cl = worldLatLonToUnit((lat0 + lat1) / 2, (lon0 + lon1) / 2);
+    const rad = worldDistance(lat0, lon0, lat1, lon1) / 2 + 8000;
+    for (const p of world.ports) {
+        const d = Math.acos(Math.max(-1, Math.min(1, cl.x * p.u.x + cl.y * p.u.y + cl.z * p.u.z))) * WORLD_R;
+        if (d > rad) continue;
+        const T = PORT_TYPES[p.type], br = p.seaBearing * Math.PI / 180;
+        const quayLen = T.quay;
+        out.push({ F: _worldFrame(p.lat, p.lon), S: [{ x: 0, z: 0, sx: Math.sin(br), sz: Math.cos(br), quayLen, apron: 0, basin: T.basin, depth: T.depth, chLen: worldPortChannelLen(p) }] });
+    }
+    return out;
+}
+function _wmApplyPorts(ps, u, h) {
+    for (const q of ps) {
+        const F = q.F;
+        const dot = u.x * F.C.x + u.y * F.C.y + u.z * F.C.z;
+        if (dot < 0.999998) continue;                      // 約9km より遠い
+        const x = WORLD_R * (u.x * F.E.x + u.y * F.E.y + u.z * F.E.z) / dot;
+        const z = WORLD_R * (u.x * F.N.x + u.y * F.N.y + u.z * F.N.z) / dot;
+        if (h < 0 || x * q.S[0].sx + z * q.S[0].sz > 0) h = _portAdjust(h, x, z, q.S);   // 陸（岸壁の後ろ）はそのまま
+    }
+    return h;
+}
 // 緯度・経度の範囲を絵にする（少しずつ。終わったら done(canvas)）
 function _wmRender(w, h, lon0, lon1, lat0, lat1, oct, done) {
     const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
-    const g = cv.getContext('2d'), img = g.createImageData(w, h), D = img.data;
+    cv.img = cv.getContext('2d').createImageData(w, h);
+    cv.H = new Float32Array(w * h);
+    cv.rows = 0;
+    cv.ext = { lon0, lon1, lat0, lat1 };
     const job = ++_wm.job;
     let row = 0;
     const u = {};
+    const ports = oct >= 12 ? _wmPortShapes(lon0, lon1, lat0, lat1) : [];
+    cv.ports = ports;
     const step = () => {
         if (job !== _wm.job && oct !== WORLD_OCT_MAP - 2) return;   // 新しい作り直しが始まった（全体図は止めない）
-        const t0 = performance.now();
+        const t0 = performance.now(), r0 = row;
         while (row < h && performance.now() - t0 < 12) {
             const lat = lat1 - (row + 0.5) / h * (lat1 - lat0);
             for (let x = 0; x < w; x++) {
                 const lon = lon0 + (x + 0.5) / w * (lon1 - lon0);
                 worldLatLonToUnit(lat, lon, u);
-                const c = _wmColor(worldNoiseE(u.x, u.y, u.z, oct));
-                const o = (row * w + x) * 4;
-                D[o] = c[0]; D[o + 1] = c[1]; D[o + 2] = c[2]; D[o + 3] = 255;
+                let hh = worldHeightAt(u.x, u.y, u.z, oct);
+                if (ports.length) hh = _wmApplyPorts(ports, u, hh);
+                cv.H[row * w + x] = hh;
             }
             row++;
         }
-        if (row < h) { setTimeout(step, 0); if ((row & 15) === 0) { g.putImageData(img, 0, 0); done(cv, false); } return; }
-        g.putImageData(img, 0, 0);
+        cv.rows = row;
+        _wmPaint(cv, r0, row);
+        if (row < h) { setTimeout(step, 0); if ((row & 15) === 0 || row - r0 > 15) done(cv, false); return; }
         done(cv, true);
     };
     step();
 }
+// 海図と地形図を切り替える（作った高さはそのまま使って塗り直す）
+function worldMapSetChart(on) {
+    _wm.chart = !!on;
+    try { localStorage.setItem('susuru_wm_chart', _wm.chart ? '1' : '0'); } catch (e) { /* ignore */ }
+    for (const cv of [_wm.base || _wm.basePartial, _wm.detail]) if (cv && cv.H) _wmPaint(cv, 0, cv.rows);
+    const b = document.getElementById('wp-chart'); if (b) b.classList.toggle('on', _wm.chart);
+    worldMapRedraw(true);
+}
+window.worldMapSetChart = worldMapSetChart;
+try { _wm.chart = localStorage.getItem('susuru_wm_chart') === '1'; } catch (e) { /* ignore */ }
 
 function _wmEnsureDom() {
     if (document.getElementById('world-panel')) return;
@@ -494,6 +618,7 @@ function _wmEnsureDom() {
                 <button id="wp-mode-ocean" onclick="worldSetMode('ocean')">🌊 海だけ</button>
                 <button id="wp-mode-world" onclick="worldSetMode('world')">🌍 世界を航海</button>
             </span>
+            <button id="wp-chart" class="wp-chartbtn" onclick="worldMapSetChart(!_wm.chart)">📘 海図</button>
             <button class="wp-close" onclick="toggleWorldMap(false)">✕</button>
         </div>
         <div class="wp-body">
@@ -610,7 +735,8 @@ function worldMapRedraw(quick) {
     if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
     const g = cv.getContext('2d');
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.fillStyle = '#0d2a44'; g.fillRect(0, 0, W, H);
+    g.fillStyle = _wm.chart ? '#e4edf5' : '#0d2a44'; g.fillRect(0, 0, W, H);
+    const chartBtn = document.getElementById('wp-chart'); if (chartBtn) chartBtn.classList.toggle('on', !!_wm.chart);
     document.getElementById('wp-mode-ocean').classList.toggle('on', world.mode === 'ocean');
     document.getElementById('wp-mode-world').classList.toggle('on', world.mode === 'world');
     const st = document.getElementById('wp-status');
@@ -650,8 +776,55 @@ function worldMapRedraw(quick) {
             _wmRender(rw, rh, lon0, lon1, lat0, lat1, oct, (c, fin) => { if (_wm.detailKey === key) { _wm.detail = c; worldMapRedraw(true); } });
         }
     }
+    // 海図：水深の数字（拡大したとき。細かい絵の高さから拾う）
+    if (_wm.chart && _wm.zoom >= 24 && _wm.detail && _wm.detail.H && _wm.detail.rows === _wm.detail.height) {
+        const Dt = _wm.detail, E = Dt.ext, dw = Dt.width, dh = Dt.height;
+        g.font = 'italic 10px serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+        const GAP = 46;
+        for (let sy = GAP / 2; sy < H; sy += GAP) {
+            for (let sx = GAP / 2 + ((sy / GAP) & 1) * GAP / 2; sx < W; sx += GAP) {
+                const lon = _wm.cx + (sx - W / 2) * dpd, lat = _wm.cy - (sy - H / 2) * dpd;
+                const ix = Math.floor((lon - E.lon0) / (E.lon1 - E.lon0) * dw), iy = Math.floor((E.lat1 - lat) / (E.lat1 - E.lat0) * dh);
+                if (ix < 0 || iy < 0 || ix >= dw || iy >= dh) continue;
+                const h = Dt.H[iy * dw + ix];
+                if (h >= -0.5) continue;
+                const d = -h;
+                g.fillStyle = d < 10 ? '#1b3552' : '#4d6780';
+                g.fillText(d < 20 ? d.toFixed(0) : String(Math.round(d / 5) * 5), sx, sy);
+            }
+        }
+        g.textAlign = 'start';
+    }
+    // 海図：港へ入る航路（浚渫してある所）を破線で。ここを外れると浅瀬があるかもしれない
+    if (_wm.chart && _wm.zoom >= 24 && world.ports) {
+        g.save();
+        g.strokeStyle = 'rgba(190, 40, 150, 0.85)'; g.lineWidth = 1.4; g.setLineDash([6, 4]);
+        for (const p of world.ports) {
+            const s0 = _wmToScreen(p.lat, p.lon, cv);
+            if (s0.x < -400 || s0.x > W + 400 || s0.y < -400 || s0.y > H + 400) continue;
+            const T = PORT_TYPES[p.type], F = _worldFrame(p.lat, p.lon), br = p.seaBearing * Math.PI / 180;
+            const sx = Math.sin(br), sz = Math.cos(br);
+            const toS = (a, b) => {
+                const x = a * sx + b * sz, z = a * sz - b * sx;          // 港の a（沖へ）・b（岸沿い）→ 東・北
+                const ux = F.C.x + x / WORLD_R * F.E.x + z / WORLD_R * F.N.x, uy = F.C.y + x / WORLD_R * F.E.y + z / WORLD_R * F.N.y, uz = F.C.z + x / WORLD_R * F.E.z + z / WORLD_R * F.N.z;
+                const l = Math.hypot(ux, uy, uz), ll = worldUnitToLatLon({ x: ux / l, y: uy / l, z: uz / l });
+                return _wmToScreen(ll.lat, ll.lon, cv);
+            };
+            for (const side of [-1, 1]) {
+                g.beginPath();
+                const aEnd = T.basin + worldPortChannelLen(p) - 300;
+                for (let a = T.basin * 0.76; a <= aEnd; a += 200) {
+                    const ch = Math.max(90, T.quay / 4) + Math.max(0, a - T.basin) * 0.06;
+                    const q = toS(a, side * ch);
+                    if (a === T.basin * 0.76) g.moveTo(q.x, q.y); else g.lineTo(q.x, q.y);
+                }
+                g.stroke();
+            }
+        }
+        g.restore();
+    }
     // 緯線・経線
-    g.strokeStyle = 'rgba(255,255,255,0.12)'; g.lineWidth = 1;
+    g.strokeStyle = _wm.chart ? 'rgba(40,80,130,0.22)' : 'rgba(255,255,255,0.12)'; g.lineWidth = 1;
     const gridStep = _wm.zoom < 3 ? 30 : _wm.zoom < 12 ? 10 : _wm.zoom < 60 ? 2 : 0.5;
     for (let lat = -90; lat <= 90; lat += gridStep) { const y = _wmToScreen(lat, _wm.cx, cv).y; g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); }
     const lonStart = Math.floor((_wm.cx - W / 2 * dpd) / gridStep) * gridStep;
@@ -668,8 +841,13 @@ function worldMapRedraw(quick) {
             g.fillStyle = T.color; g.strokeStyle = '#0a1932'; g.lineWidth = 1.5;
             g.beginPath(); g.arc(s.x, s.y, r, 0, Math.PI * 2); g.fill(); g.stroke();
             if (_wm.zoom >= 4 || T.size >= 3 || p === _wm.sel) {
-                g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillText(p.name, s.x + r + 3.5, s.y + 1);
-                g.fillStyle = '#ffffff'; g.fillText(p.name, s.x + r + 3, s.y);
+                if (_wm.chart) {
+                    g.lineWidth = 3; g.strokeStyle = 'rgba(255,255,255,0.85)'; g.strokeText(p.name, s.x + r + 3, s.y);
+                    g.fillStyle = '#16283c'; g.fillText(p.name, s.x + r + 3, s.y);
+                } else {
+                    g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillText(p.name, s.x + r + 3.5, s.y + 1);
+                    g.fillStyle = '#ffffff'; g.fillText(p.name, s.x + r + 3, s.y);
+                }
             }
         }
     } else if (!_wm.portsBusy) {

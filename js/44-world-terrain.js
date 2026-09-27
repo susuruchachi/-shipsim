@@ -38,14 +38,14 @@ window.terrain = terrain;
 //  船の近くの港の「形」を、物理の面の座標で持っておく（ワーカーにも渡す）
 function _portShape(p) {
     const T = PORT_TYPES[p.type];
-    const quayLen = { fishing: 170, town: 320, city: 720, cargo: 1050, naval: 640 }[p.type];
+    const quayLen = T.quay;
     const apron = { fishing: 45, town: 70, city: 130, cargo: 190, naval: 110 }[p.type];
     const basin = T.basin;
     const loc = worldUnitToLocal(p.u);
     const br = p.seaBearing * Math.PI / 180;
     // s：海の方、l：岸沿い（s を右に90°）
     return { id: p.id, type: p.type, x: loc.x, z: loc.z, sx: Math.sin(br), sz: Math.cos(br),
-             quayLen, apron, basin, depth: T.depth, seed: p.seed, name: p.name };
+             quayLen, apron, basin, depth: T.depth, seed: p.seed, name: p.name, chLen: worldPortChannelLen(p) };
 }
 // 高さに港の手直しを加える（ワーカーと同じ式。関数の中身を文字列にしてワーカーへ渡す）
 function _portAdjust(h, x, z, shapes) {
@@ -69,11 +69,14 @@ function _portAdjust(h, x, z, shapes) {
             // 岸壁のすぐ前（10m 以内）は垂直な岸壁の外なので、さらに確実に掘る
             if (a < 12 && Math.abs(b) < half) h = Math.min(h, want);
         }
-        // 泊地から沖へ続く航路（自然の深さが足りるまで）
-        const ch = Math.max(90, half * 0.5);
-        if (a >= S.basin - 120 && a < S.basin + 2500 && Math.abs(b) < ch + 60) {
+        // 泊地から沖へ続く航路。浅瀬や岩があっても、ここだけは必ず通れる
+        // （沖へ行くほど少し広がる。航路を外れると浅瀬があることもある）
+        // 長さは港ごと（43-world.js の worldPortChannelLen）。本当の陸（高さ6m以上）は削らない
+        const ch = Math.max(90, half * 0.5) + Math.max(0, a - S.basin) * 0.06;
+        const chEnd = S.basin + (S.chLen || 4000);
+        if (a >= S.basin - 120 && a < chEnd && Math.abs(b) < ch + 60 && h < 6) {
             const want = -S.depth - 2;
-            const k = Math.min(1, (ch + 60 - Math.abs(b)) / 60) * Math.min(1, (S.basin + 2500 - a) / 300);
+            const k = Math.min(1, (ch + 60 - Math.abs(b)) / 60) * Math.min(1, (chEnd - a) / 400);
             if (h > want) h = h + (want - h) * k;
         }
     }
@@ -92,6 +95,8 @@ function _trWorker() {
         ${_wNoise3.toString()}
         ${worldNoiseE.toString()}
         ${worldHeightFromE.toString()}
+        ${worldShoal.toString()}
+        ${worldHeightAt.toString()}
         ${_portAdjust.toString()}
         onmessage = (ev) => {
             const q = ev.data;
@@ -105,7 +110,7 @@ function _trWorker() {
                     const a = x / WORLD_R, b = z / WORLD_R;
                     let ux = C.x + a * E.x + b * N.x, uy = C.y + a * E.y + b * N.y, uz = C.z + a * E.z + b * N.z;
                     const l = Math.hypot(ux, uy, uz);
-                    let h = worldHeightFromE(worldNoiseE(ux / l, uy / l, uz / l, q.oct));
+                    let h = worldHeightAt(ux / l, uy / l, uz / l, q.oct);
                     if (q.shapes.length) h = _portAdjust(h, x, z, q.shapes);
                     H[j * n + i] = h;
                 }
@@ -215,7 +220,7 @@ function _trRequest(cx, cz) {
         maxH = Math.max(maxH, worldHeightAtLocal(x, z, 12));
     }
     terrain.center = { x: cx, z: cz };
-    if (maxH < -60 && !_trNearbyShapes(cx, cz, TR_FAR.half).length) {
+    if (maxH < -140 && !_trNearbyShapes(cx, cz, TR_FAR.half).length) {   // 大陸棚（浅瀬があり得る所）も無い外洋
         _trDispose(terrain.near); _trDispose(terrain.far);
         terrain.near = terrain.far = null;
         return;
@@ -233,6 +238,8 @@ function _trOnHeights(msg) {
     if (msg.id !== terrain.reqId || world.mode !== 'world' || !terrain.center) return;
     const { x: cx, z: cz } = terrain.center;
     if (msg.which === 'near') {
+        terrain.nearH = { H: msg.H, n: TR_NEAR.n, half: TR_NEAR.half, cx, cz };
+        _brkBuild(terrain.nearH);
         _trDispose(terrain.near);
         terrain.near = _trBuildMesh(msg.H, TR_NEAR.n, TR_NEAR.half, cx, cz, null);
         if (terrain.near) scene.add(terrain.near);
@@ -441,6 +448,8 @@ function _trClearAll() {
     terrain.ports.clear();
     terrain.grounded = false;
     terrain.depth = null;
+    terrain.nearH = null;
+    _brkBuild(null);
 }
 
 // モードが変わった・港へ移動した（43-world.js から）
@@ -449,6 +458,92 @@ function worldTerrainModeChanged(moved) {
     if (world.mode === 'world') { worldBuildPorts(); terrain._dirty = true; }
 }
 window.worldTerrainModeChanged = worldTerrainModeChanged;
+
+// ════════════════════════════════════════════════════════════════
+//  浅瀬・岩礁の白波（水面の下の浅瀬は見えないので、波が砕ける白い泡で分かるように）
+// ════════════════════════════════════════════════════════════════
+const BRK_MAX = 2500;
+const _brk = { pts: null, xz: null, base: null, phase: null, n: 0, lastT: -1 };
+function _brkMaterial() {
+    return new THREE.ShaderMaterial({
+        uniforms: { uSize: { value: 26 }, uScale: { value: 400 } },
+        vertexShader: `
+            attribute float aAlpha;
+            varying float vA;
+            uniform float uSize, uScale;
+            void main() {
+                vec4 mv = modelViewMatrix * vec4(position, 1.0);
+                vA = aAlpha;
+                gl_PointSize = aAlpha <= 0.001 ? 0.0 : min(160.0, uSize * uScale / max(1.0, -mv.z));
+                gl_Position = projectionMatrix * mv;
+            }`,
+        fragmentShader: `
+            varying float vA;
+            void main() {
+                vec2 p = gl_PointCoord * 2.0 - 1.0;
+                float r = dot(p, p);
+                if (r > 1.0) discard;
+                gl_FragColor = vec4(vec3(0.93, 0.96, 0.98), vA * (1.0 - r) * (1.0 - r));
+            }`,
+        transparent: true, depthWrite: false,
+    });
+}
+// 近くの格子の高さから、白波の立つ所（深さ3.5mより浅い海）を拾う
+function _brkBuild(G) {
+    if (_brk.pts) { scene.remove(_brk.pts); _brk.pts.geometry.dispose(); _brk.pts = null; }
+    _brk.n = 0;
+    if (!G) return;
+    const { H, n, half, cx, cz } = G, step = half * 2 / (n - 1);
+    const list = [];
+    for (let j = 1; j < n - 1; j++) for (let i = 1; i < n - 1; i++) {
+        const h = H[j * n + i];
+        if (h > -3.5 && h < 0.3) list.push(i, j, h);
+    }
+    let cnt = list.length / 3;
+    if (!cnt) return;
+    const stride = Math.max(1, cnt / BRK_MAX);
+    const N = Math.min(BRK_MAX, cnt);
+    const pos = new Float32Array(N * 3), alpha = new Float32Array(N);
+    _brk.xz = new Float32Array(N * 2); _brk.base = new Float32Array(N); _brk.phase = new Float32Array(N);
+    const r = _wRng(Math.round(cx * 7 + cz * 13) | 0);
+    for (let k = 0; k < N; k++) {
+        const q = Math.floor(k * stride) * 3;
+        const x = cx - half + (list[q] + r() - 0.5) * step, z = cz - half + (list[q + 1] + r() - 0.5) * step;
+        _brk.xz[k * 2] = x; _brk.xz[k * 2 + 1] = z;
+        _brk.base[k] = 0.35 + 0.5 * Math.min(1, (list[q + 2] + 3.5) / 3);   // 浅いほど白い
+        _brk.phase[k] = r() * Math.PI * 2;
+        pos[k * 3] = x; pos[k * 3 + 2] = z;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('aAlpha', new THREE.BufferAttribute(alpha, 1));
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(cx, 0, cz), half * 1.5);
+    _brk.pts = new THREE.Points(geo, _brkMaterial());
+    _brk.pts.frustumCulled = false;
+    _brk.pts.renderOrder = 2;
+    _brk.n = N;
+    scene.add(_brk.pts);
+}
+function _brkUpdate(t) {
+    if (!_brk.pts || t - _brk.lastT < 0.1) return;
+    _brk.lastT = t;
+    const geo = _brk.pts.geometry, P = geo.attributes.position.array, A = geo.attributes.aAlpha.array;
+    const hs = Math.max(0, window._seaHs || 0);
+    const sea = Math.min(1.3, 0.35 + hs / 2.5);
+    const cam = camera.position;
+    const hasH = typeof getOceanHeight === 'function';
+    _brk.pts.material.uniforms.uScale.value = (renderer.domElement.height || 800) / (2 * Math.tan(camera.fov * Math.PI / 360));
+    for (let k = 0; k < _brk.n; k++) {
+        const x = _brk.xz[k * 2], z = _brk.xz[k * 2 + 1];
+        const d = Math.hypot(x - cam.x, z - cam.z);
+        if (d > 5000) { A[k] = 0; continue; }
+        P[k * 3 + 1] = (hasH ? getOceanHeight(x, z, t) : 0) + 0.25;
+        const pulse = 0.5 + 0.5 * Math.sin(t * 1.1 + _brk.phase[k]);
+        A[k] = _brk.base[k] * sea * (0.25 + 0.75 * pulse * pulse) * Math.min(1, (5000 - d) / 1500);
+    }
+    geo.attributes.position.needsUpdate = true;
+    geo.attributes.aAlpha.needsUpdate = true;
+}
 
 // ════════════════════════════════════════════════════════════════
 //  座礁
@@ -484,6 +579,8 @@ function _trCheckGrounding(t, dt) {
         terrain.depth = -mid;
         terrain._bowShallow = bow > -draft;
         terrain._sternShallow = stern > -draft;
+        terrain._bowWarn = bow > -draft - 3;          // 船首・船尾の下があと3mで底
+        terrain._sternWarn = stern > -draft - 3;
         const wasGrounded = terrain.grounded;
         terrain.grounded = terrain._bowShallow || terrain._sternShallow || mid > -draft;
         if (terrain.grounded && !wasGrounded && Math.abs(physics.speed || 0) > 0.6 && typeof audioWaveImpact === 'function') {
@@ -504,6 +601,7 @@ function _trCheckGrounding(t, dt) {
 //  毎フレーム（17-main-loop.js から）
 // ════════════════════════════════════════════════════════════════
 function updateWorldTerrain(t, dt) {
+    if (typeof updateHornEcho === 'function') updateHornEcho(t);   // 汽笛のこだま（45-horn-echo.js）
     if (world.mode !== 'world') {
         if (terrain.near || terrain.far || terrain.ports.size) _trClearAll();
         return;
@@ -522,6 +620,7 @@ function updateWorldTerrain(t, dt) {
     // 灯台の灯り：夜だけ光る
     const nf = (typeof lightingNightFactor !== 'undefined') ? lightingNightFactor : 0;
     if (_pMats.lamp) _pMats.lamp.emissiveIntensity = 0.3 + 3 * nf;     // 灯台はどれも同じ材質
+    _brkUpdate(t);
     _trCheckGrounding(t, dt);
 }
 window.updateWorldTerrain = updateWorldTerrain;

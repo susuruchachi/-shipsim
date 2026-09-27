@@ -1088,8 +1088,11 @@ function updateUI() {
                 const np = updateUI._np, T = window.terrain;
                 const depth = (T && T.depth != null) ? `  水深 ${Math.max(0, T.depth).toFixed(0)} m` : '';
                 _pp.style.display = '';
-                _pp.style.color = (T && T.grounded) ? '#ff8a73' : '#c9f0ff';
-                _pp.innerText = (T && T.grounded) ? `⚠ 座礁しています${depth}` : `Port     : ${np ? np.port.name + ' ' + (np.dist / 1852).toFixed(1) + ' NM' : '—'}${depth}`;
+                // キールの下の余裕が 5m を切ったら黄色で知らせる
+                const ukc = (T && T.depth != null && typeof worldShipDraft === 'function') ? T.depth - worldShipDraft() : 99;
+                const shallow = !(T && T.grounded) && (ukc < 5 || (T && (T._bowWarn || T._sternWarn)));
+                _pp.style.color = (T && T.grounded) ? '#ff8a73' : shallow ? '#ffd35a' : '#c9f0ff';
+                _pp.innerText = (T && T.grounded) ? `⚠ 座礁しています${depth}` : shallow ? `⚠ 浅い！${depth}（キール下 ${Math.max(0, ukc).toFixed(1)} m）` : `Port     : ${np ? np.port.name + ' ' + (np.dist / 1852).toFixed(1) + ' NM' : '—'}${depth}`;
             }
         } else {
             // 海だけのモード：出発点からの位置[m]

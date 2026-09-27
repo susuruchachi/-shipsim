@@ -76,6 +76,7 @@ window.BRIDGE_BELLS = BRIDGE_BELLS;
 const bridgeUI = {
     telegraph: 'olympic', wheel: 'classic', wheelText: 'R.M.S. OLYMPIC', waitAnswer: true, bell: 'auto',
     tgTheme: 'auto', tgLit: true,     // 盤面の色（auto/white/black）・暗くなったら盤面を光らせる
+    wheelBell: true,                  // 古典的な舵輪：1周ごとにベルを鳴らす
 };
 window.bridgeUI = bridgeUI;
 const _br = {
@@ -1221,7 +1222,7 @@ function updateBridge(t) {
         }
         physics.helmOrder = _br.wheelDeg / lock * 35;
         // 古典的な舵輪：1周ごとにベル（テレグラフと同じ音）
-        if (bridgeUI.wheel === 'classic') {
+        if (bridgeUI.wheel === 'classic' && bridgeUI.wheelBell !== false) {
             const turn = Math.trunc(_br.wheelDeg / 360);
             if (_br.lastTurn === undefined) _br.lastTurn = turn;
             if (turn !== _br.lastTurn) {
@@ -1249,9 +1250,9 @@ function updateBridge(t) {
 window.updateBridge = updateBridge;
 
 // ── 保存・読み込み ──
-function getBridgeConfig() { return { telegraph: bridgeUI.telegraph, wheel: bridgeUI.wheel, wheelText: bridgeUI.wheelText, waitAnswer: bridgeUI.waitAnswer, bell: bridgeUI.bell, tgTheme: bridgeUI.tgTheme, tgLit: bridgeUI.tgLit }; }
+function getBridgeConfig() { return { telegraph: bridgeUI.telegraph, wheel: bridgeUI.wheel, wheelText: bridgeUI.wheelText, waitAnswer: bridgeUI.waitAnswer, bell: bridgeUI.bell, tgTheme: bridgeUI.tgTheme, tgLit: bridgeUI.tgLit, wheelBell: bridgeUI.wheelBell }; }
 function applyBridgeConfig(c) {
-    const d = { telegraph: 'olympic', wheel: 'classic', wheelText: 'R.M.S. OLYMPIC', waitAnswer: true, bell: 'auto', tgTheme: 'auto', tgLit: true };
+    const d = { telegraph: 'olympic', wheel: 'classic', wheelText: 'R.M.S. OLYMPIC', waitAnswer: true, bell: 'auto', tgTheme: 'auto', tgLit: true, wheelBell: true };
     Object.assign(bridgeUI, d, c || {});
     if (!BRIDGE_TELEGRAPHS[bridgeUI.telegraph]) bridgeUI.telegraph = 'olympic';
     if (!BRIDGE_WHEELS[bridgeUI.wheel]) bridgeUI.wheel = 'classic';
@@ -1263,7 +1264,7 @@ window.getBridgeConfig = getBridgeConfig;
 window.applyBridgeConfig = applyBridgeConfig;
 
 function setBridgeOption(key, v) {
-    if (key === 'waitAnswer' || key === 'tgLit') bridgeUI[key] = !!v;
+    if (key === 'waitAnswer' || key === 'tgLit' || key === 'wheelBell') bridgeUI[key] = !!v;
     else bridgeUI[key] = v;
     if (key === 'wheel') _br.wheelDeg = Math.max(-(WHEEL_LOCK_DEG[v] || 360), Math.min(WHEEL_LOCK_DEG[v] || 360, physics.helmOrder / 35 * (WHEEL_LOCK_DEG[v] || 360)));
     applyBridgeLayout();
@@ -1282,6 +1283,7 @@ function renderBridgePanel() {
     if (wh) wh.innerHTML = Object.entries(BRIDGE_WHEELS).map(([k, l]) => `<option value="${k}"${k === bridgeUI.wheel ? ' selected' : ''}>${l}</option>`).join('');
     const tx = document.getElementById('bridge-wheel-text'); if (tx) tx.value = bridgeUI.wheelText;
     const wa = document.getElementById('bridge-wait-answer'); if (wa) wa.checked = bridgeUI.waitAnswer;
+    const wb = document.getElementById('bridge-wheel-bell'); if (wb) wb.checked = bridgeUI.wheelBell !== false;
 }
 window.renderBridgePanel = renderBridgePanel;
 
