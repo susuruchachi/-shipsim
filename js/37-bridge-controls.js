@@ -235,7 +235,7 @@ function _gongRing(c, dest, t0, answer, steps) {
 // 交互に叩く。1打ずつは短く減衰するが、速く叩くので重なって「ジリリリ」と続く。
 // 2つのベルは少し高さが違い、打ち子の当たる「カチ」も混ざる
 // 電話ベルの2つの椀の高さ[Hz]（指令・応答）
-const PHONE_BELL_F = { order: [2250, 2520], answer: [1720, 1900] };
+const PHONE_BELL_F = { order: [1250, 1400], answer: [980, 1090] };
 function _phoneRing(c, dest, t0, answer, steps) {
     const [fA, fB] = PHONE_BELL_F[answer ? 'answer' : 'order'];
     const bufA = _gongStrikeBuffer(c, fA, false, 0.28, answer ? 0.6 : 1);
@@ -251,26 +251,19 @@ function _phoneRing(c, dest, t0, answer, steps) {
     const verb = _gongVerb(c, dest);
     const send = c.createGain(); send.gain.value = answer ? 0.45 : 0.14;
     node.connect(send); send.connect(verb);
-    // 鳴る長さ：ハンドルを大きく動かすほど長い。「ジリリン、ジリリン」と2回に分けて鳴らす
-    const bursts = answer ? 1 : (steps >= 3 ? 2 : 1);
+    // 1回の「ジリン」：打ち子が数回だけ速く当たって、あとは余韻（何段動かしても1回）
     const rate = 19 + Math.random() * 3;            // 1秒に叩く回数
-    let s = t0;
-    for (let b = 0; b < bursts; b++) {
-        const len = answer ? 0.55 : 0.6 + 0.08 * Math.min(4, steps || 1);
-        const n = Math.round(len * rate);
-        for (let k = 0; k < n; k++) {
-            const src = c.createBufferSource();
-            src.buffer = (k & 1) ? bufB : bufA;
-            src.playbackRate.value = 1 + (Math.random() - 0.5) * 0.003;
-            const g = c.createGain();
-            // 鳴り始めは打ち子の振れが小さく、すぐ強くなって、最後に弱まる
-            const env = Math.min(1, 0.45 + k / 3) * (k > n - 4 ? 0.6 : 1);
-            g.gain.value = env * (0.75 + 0.25 * Math.random());
-            src.connect(g); g.connect(out);
-            src.start(s + k / rate + (Math.random() - 0.5) * 0.004);
-            src.stop(s + k / rate + 1.2);
-        }
-        s += len + 0.28;
+    const n = 5;
+    for (let k = 0; k < n; k++) {
+        const src = c.createBufferSource();
+        src.buffer = (k & 1) ? bufB : bufA;
+        src.playbackRate.value = 1 + (Math.random() - 0.5) * 0.003;
+        const g = c.createGain();
+        // 最初の一打が強く、あとは打ち子の振れが小さくなっていく
+        g.gain.value = [1, 0.8, 0.7, 0.55, 0.4][k] * (0.85 + 0.15 * Math.random());
+        src.connect(g); g.connect(out);
+        src.start(t0 + k / rate + (k ? (Math.random() - 0.5) * 0.004 : 0));
+        src.stop(t0 + k / rate + 1.2);
     }
 }
 
