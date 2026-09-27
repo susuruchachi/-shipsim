@@ -85,15 +85,21 @@ const AREA_LIGHT_SHADOW_REFRESH = 4.0;
 // 影用SpotLightの広がり。面の全体を覆える程度に広く取る。
 const AREA_LIGHT_SPOT_ANGLE = Math.PI / 3;
 // 照射方向の合わせ込み。
-//  定義ノードは次の規約で向き・大きさを表す（BlenderのエリアライトをEmptyに
-//  変換したものが、glTF書き出し後この向きになる）:
-//      面の法線 = ローカル +Y （この方向を照らす）
+//  定義ノードは次の規約で向き・大きさを表す:
+//      面の法線 = ローカル ±Y（照らす向き。下の areaLightEmitSign）
 //      面の幅   = ローカル X 方向、スケール x が実寸
 //      面の高さ = ローカル Z 方向、スケール z が実寸
+//  ・発光パネル（26-glow-emitters.js が作る）はローカル +Y を照らす。
+//  ・Blender のエリアライト（Empty に変換したもの）は、Blender ではローカル -Z を
+//    照らす。glTF は Blender の Z 上向きを Y 上向きに直して書き出すので
+//    （(x, y, z) → (x, z, -y)）、Blender の -Z はローカル **-Y** になる。
+//    以前は +Y を照らすとしていたため、天井のすぐ下に置いたライトが天井を
+//    向いていた（影が無いので天井を突き抜けて上の甲板を照らしていた）。
 //  three.js の RectAreaLight は、面がローカル XY 平面にあり
-//  **ローカル -Z 方向を照らす**（実測で確認）。X軸まわりに +90° 回して子に
-//  持たせると、光の -Z が親の +Y、光の X が親の X、光の Y が親の Z に一致する。
+//  **ローカル -Z 方向を照らす**（実測で確認）。X軸まわりに ±90° 回して子に
+//  持たせると、光の -Z が親の ±Y に一致する。
 const AREA_LIGHT_EMIT_ROT_X = Math.PI / 2;
+function areaLightEmitSign(def) { return def && def.kind === 'empty' ? -1 : 1; }
 
 // ════════════════════════════════════════════════════════════════
 //  枠に入らなかった遠くの灯り（簡易の照明）
@@ -133,6 +139,8 @@ let _alLastT       = -1;
 let _alShadowRefreshAt  = 0;
 let _alShadowRefreshIdx = 0;
 let _alGlowFactor  = 0;    // 発光パネルの明るさ（昼夜×windowGlowMult、updateWindowGlowが設定）
+let _alLive        = [];   // 点いている定義（カメラに近い順。割り当て直しのたびに更新）
+let _alBakeProxies = [];   // 照明を焼き込んでいる間の、水面・雨用の「灯りの代わり」
 
 const _alTmpPos   = new THREE.Vector3();
 const _alTmpQuat  = new THREE.Quaternion();
@@ -220,12 +228,20 @@ function _alMakeSlot(withShadow, mapSize) {
     }
 
     if (typeof scene !== 'undefined' && scene) scene.add(root);
-    return { root, rect, spot, def: null, fade: 0, shadowDirty: false, sig: '' };
+    return { root, rect, spot, def: null, fade: 0, shadowDirty: false, sig: '', emitSign: 1 };
 }
 
+// Blender で置いた本物のエリアライト（kind 'empty'）は数が少なく大事な灯りなので、
+// 画質の枠数とは別に必ず枠を持たせ、いつも点けておく（遠くても消えない）
+const AREA_LIGHT_EMPTY_MAX = 16;
+function _alEmptyCount() {
+    let n = 0; for (const d of areaLightDefs) if (d.kind === 'empty') n++;
+    return Math.min(AREA_LIGHT_EMPTY_MAX, n);
+}
 function _alRebuildSlots(force) {
     const b = getAreaLightBudget();
-    const want = Math.min(b.active, areaLightDefs.length);
+    const nGlow = areaLightDefs.length - _alEmptyCount();
+    const want = _alEmptyCount() + Math.min(b.active, nGlow);
     const wantShadows = Math.min(b.shadows, want);
     const haveShadows = areaLightSlots.filter(s => s.spot).length;
     // 枠の構成が変わらないなら作り直さない。作り直すとシャドウマップを捨てる
@@ -263,6 +279,8 @@ function buildAreaLights(model, empties) {
         node.position.copy(empty.position);
         node.quaternion.copy(empty.quaternion);
         node.scale.copy(empty.scale);
+        // 読み込んだときの向き（古い保存データを今の向きの決まりに直すときに比べる。13・08）
+        node.userData.origQuat = empty.quaternion.clone();
         node.name = 'AreaLightNode_' + (empty.name || idx);
         parent.add(node);
         parent.remove(empty);
@@ -407,12 +425,16 @@ function _alRebind(cam) {
         live.push(d);
     }
     live.sort((a, b) => a._dist - b._dist);
+    _alLive = live;
 
     const shadowSlots = areaLightSlots.filter(s => s.spot);
     const plainSlots  = areaLightSlots.filter(s => !s.spot);
-    // 一番近いものに影を付ける。
-    const forShadow = live.slice(0, shadowSlots.length);
-    const forPlain  = live.slice(shadowSlots.length, shadowSlots.length + plainSlots.length);
+    // 本物のエリアライトは必ず枠に入れる（近い順の先頭に置く）。残りは近い順。
+    // 一番先頭のものに影を付ける。
+    const prio = live.filter(d => d.kind === 'empty').slice(0, AREA_LIGHT_EMPTY_MAX)
+        .concat(live.filter(d => d.kind !== 'empty'));
+    const forShadow = prio.slice(0, shadowSlots.length);
+    const forPlain  = prio.slice(shadowSlots.length, shadowSlots.length + plainSlots.length);
     _alAssignTier(shadowSlots, forShadow);
     _alAssignTier(plainSlots, forPlain);
 
@@ -478,7 +500,7 @@ function _fillUpdate(cam) {
         const range = Math.min(FILL_LIGHT_MAX_RANGE, Math.sqrt(power / (Math.PI * FILL_LIGHT_MIN_E)));
         // 位置と面の向き（ローカル +Y）をカメラ座標へ
         _alTmpPos.setFromMatrixPosition(d.node.matrixWorld).applyMatrix4(view);
-        _fillN.set(0, 1, 0).applyQuaternion(_alTmpQuat).transformDirection(view);
+        _fillN.set(0, areaLightEmitSign(d), 0).applyQuaternion(_alTmpQuat).transformDirection(view);
         const r0 = n * 4, r1 = (FILL_TEX_W + n) * 4, r2 = (FILL_TEX_W * 2 + n) * 4;
         D[r0] = _alTmpPos.x; D[r0 + 1] = _alTmpPos.y; D[r0 + 2] = _alTmpPos.z; D[r0 + 3] = range;
         D[r1] = _fillN.x;    D[r1 + 1] = _fillN.y;    D[r1 + 2] = _fillN.z;    D[r1 + 3] = area;
@@ -578,6 +600,28 @@ function updateAreaLights(t) {
         _alRebind(cam);
     }
 
+    // 照明を焼き込んでいる間（40-light-bake.js）は、船を照らすのは焼き込んだ値なので、
+    // 面光源の枠と簡易照明は止める。水面の映り込みと雨の照らされ方には、近い灯りの
+    // 位置・色・明るさだけを渡す（シーンのライトではないので、船の描画は重くならない）
+    if (typeof lightBakeActive === 'function' && lightBakeActive()) {
+        for (const slot of areaLightSlots) { slot.root.visible = false; slot.fade = 0; }
+        fillLightUniforms.uFillCount.value = 0;
+        _alBakeProxies = [];
+        for (const d of _alLive) {
+            if (_alBakeProxies.length >= 10) break;
+            if (!_alDefVisible(d)) continue;
+            if (!d._proxy) {
+                const node = d.node;
+                d._proxy = { isBakeProxy: true, color: d.color, intensity: 0,
+                             getWorldPosition(v) { node.updateWorldMatrix(true, false); return v.setFromMatrixPosition(node.matrixWorld); } };
+            }
+            d._proxy.intensity = _alDefIntensity(d) * 0.7;
+            _alBakeProxies.push(d._proxy);
+        }
+        return;
+    }
+    _alBakeProxies = [];
+
     // 念のための定期的な影の描き直し（1枠ずつ順番に）
     const boundShadowSlots = areaLightSlots.filter(s => s.spot && s.def);
     if (boundShadowSlots.length > 0 && t >= _alShadowRefreshAt) {
@@ -608,6 +652,15 @@ function updateAreaLights(t) {
         slot.fade = Math.min(1, slot.fade + dt / AREA_LIGHT_FADE_IN);
         const fade = slot.fade * slot.fade * (3 - 2 * slot.fade);
         const inten = _alDefIntensity(def) * fade;
+
+        // 照らす向き（発光パネルは +Y、Blender のエリアライトは -Y）
+        const emitSign = areaLightEmitSign(def);
+        if (slot.emitSign !== emitSign) {
+            slot.emitSign = emitSign;
+            slot.rect.rotation.x = emitSign * AREA_LIGHT_EMIT_ROT_X;
+            if (slot.spot) { slot.spot.target.position.set(0, emitSign, 0); slot.shadowDirty = true; }
+            slot.root.updateMatrixWorld(true);
+        }
 
         slot.rect.width  = w;
         slot.rect.height = h;
@@ -663,6 +716,7 @@ function getAreaLightDefs() { return areaLightDefs; }
 // glbLights に入っているエリアライトは「シーンに居ないデータ保持役」なので、
 // ワールド座標を持たない。実際にシーンに居る枠のライトを返す。
 function getAreaLightSceneLights() {
+    if (typeof lightBakeActive === 'function' && lightBakeActive()) return _alBakeProxies;
     const out = [];
     for (const s of areaLightSlots) {
         if (s.root.visible && s.rect.intensity > 0) out.push(s.rect);

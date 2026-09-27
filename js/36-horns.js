@@ -140,9 +140,14 @@ function _voiceSteam(dest, f, v, variant) {
     return {
         stop(when) {
             when = Math.max(when, c.currentTime);
-            for (const { o, mul } of oscs) { o.frequency.cancelScheduledValues(when); o.frequency.setTargetAtTime(f * mul * 0.9, when, 0.18); }
+            // 弁が閉じると蒸気圧が落ちて、ほんの少し（半音の半分ほど）下がりながら
+            // すぐに止む。以前は1割も下げてゆっくり消していたので「ゥオァ…」と
+            // 下がって聞こえた。残るのは蒸気の「シュッ」だけ
+            for (const { o, mul } of oscs) { o.frequency.cancelScheduledValues(when); o.frequency.setTargetAtTime(f * mul * 0.972, when, 0.07); }
+            breathBp.frequency.cancelScheduledValues(when);
+            breathBp.frequency.setTargetAtTime(f * 0.972, when, 0.07);
             out.gain.cancelScheduledValues(when);
-            out.gain.setTargetAtTime(0, when, 0.13);
+            out.gain.setTargetAtTime(0, when, 0.075);
             hissG.gain.cancelScheduledValues(when);
             hissG.gain.setTargetAtTime(0.2 * v, when, 0.02);
             hissG.gain.setTargetAtTime(0, when + 0.15, 0.2);
@@ -172,7 +177,7 @@ function _voiceAirHorn(dest, f, v, bright) {
     return {
         stop(when) {
             when = Math.max(when, c.currentTime);
-            for (const o of [o1, o2]) { o.frequency.cancelScheduledValues(when); o.frequency.setTargetAtTime(f * 0.92, when, 0.08); }
+            for (const o of [o1, o2]) { o.frequency.cancelScheduledValues(when); o.frequency.setTargetAtTime(f * 0.96, when, 0.06); }
             out.gain.cancelScheduledValues(when);
             out.gain.setTargetAtTime(0, when, 0.06);
             _stopAll(nodes, when + 0.8);

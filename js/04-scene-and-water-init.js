@@ -155,7 +155,7 @@ function init() {
     createWakeParticleSystem();
     loadEmbeddedOBJ();
     initDeckLightPool();  // 甲板照明ライトプール初期化
-    if (bloomEnabled) initBloomComposer();  // ブルームポストプロセス初期化（使わないときは作業用の画像も作らない）
+    if (bloomEnabled) initBloomComposer();  // ブルームポストプロセス初期化（使わないときは作業用の画像も作らない。後でONにしたらそのとき作る）
 
     physics.cgWorldX = shipGroup.position.x;
     physics.cgWorldZ = shipGroup.position.z;
@@ -447,7 +447,7 @@ function createWater() {
         // いるのでワールド座標を持たない。実際にシーンで光っている枠のライト
         // （25-area-lights.js）を代わりに足す。
         const lights = (window.glbLights || [])
-            .filter(l => l.visible && l.intensity > 0 && !(l.userData && l.userData.isAreaLight))
+            .filter(l => (l.visible || (l.userData && l.userData.bakedHidden)) && l.intensity > 0 && !(l.userData && l.userData.isAreaLight))
             .concat(typeof getAreaLightSceneLights === 'function' ? getAreaLightSceneLights() : []);
         const cnt = Math.min(lights.length, WATER_SHIP_LIGHT_MAX);
         waterUniforms.shipLightCount.value = cnt;

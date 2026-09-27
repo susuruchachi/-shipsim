@@ -59,8 +59,17 @@ const HELM_RATE = 20;          // 舵が舵輪の指示へ追いつく速さ[度
 const HELM_KEY_RATE = 60;      // A/Dキーで舵輪を回す速さ（舵角換算[度/秒]）
 const TG_ANSWER_DELAY = 1.3;   // 機関室が応答するまで[秒]
 
+// テレグラフのベルの音（auto：デザインに合わせる。オリンピック級・クイーン・メリー風は
+// 真鍮のゴング、現代型は電子音、ほかは以前の小さなベル）
+const BRIDGE_BELLS = {
+    auto:     'デザインに合わせる',
+    gong:     '真鍮のゴング（本物らしい音）',
+    classic:  '小さなベル（以前の音）',
+    electric: '電子音',
+};
+window.BRIDGE_BELLS = BRIDGE_BELLS;
 const bridgeUI = {
-    telegraph: 'olympic', wheel: 'classic', wheelText: 'R.M.S. OLYMPIC', waitAnswer: true,
+    telegraph: 'olympic', wheel: 'classic', wheelText: 'R.M.S. OLYMPIC', waitAnswer: true, bell: 'auto',
 };
 window.bridgeUI = bridgeUI;
 const _br = {
@@ -91,13 +100,133 @@ function _tgPos(design, order, special) {
 // ════════════════════════════════════════════════════════════════
 //  音：テレグラフのベル
 // ════════════════════════════════════════════════════════════════
-// 「ジリンジリン」：小さなベルを打ち子が速く連打する音。機関室の応答は
-// 少し遠く、音程の違うベルで返ってくる。現代型は電子音。
-function telegraphBell(kind, answer) {
+// 本物のチャドバーン（オリンピック級の船橋のテレグラフ）は、ハンドルを動かすと
+// 中の打ち子が真鍮のお椀形のゴングを「チリリン、チリリン」と連打し、機関室の
+// テレグラフも同じようなゴングで応える。
+//   gong    : 真鍮のゴング。1打ぶんの音（ゴングの倍音・うなり・打ち子の当たる音）を
+//             一度だけ計算して作り、それを少しずつ強さ・音程・間隔を変えて打つ。
+//             船橋の中の響きも少し足す。機関室の応答は低めで遠く、こもって聞こえる
+//   classic : 以前の小さなベル（速い連打）
+//   electric: 現代型の電子音
+function _bellKind() {
+    if (bridgeUI.bell && bridgeUI.bell !== 'auto') return bridgeUI.bell;
+    const d = bridgeUI.telegraph;
+    if (d === 'olympic' || d === 'queenmary') return 'gong';
+    if (d === 'modern') return 'electric';
+    return 'classic';
+}
+
+const _gong = { ctx: null, buf: {}, verb: null };
+// 1打ぶんのゴングの音（f0：いちばん低い音の高さ）
+function _gongStrikeBuffer(c, f0, dark) {
+    const key = f0 + ':' + (dark ? 1 : 0);
+    if (_gong.ctx !== c) { _gong.ctx = c; _gong.buf = {}; _gong.verb = null; }
+    if (_gong.buf[key]) return _gong.buf[key];
+    const sr = c.sampleRate, len = Math.floor(sr * 2.6);
+    const buf = c.createBuffer(1, len, sr);
+    const d = buf.getChannelData(0);
+    // お椀形のベルの倍音（整数倍ではない）。それぞれ2本のわずかにずれた音にして、
+    // 本物のベルのような「ワンワン」といううなりを出す
+    const parts = [
+        { r: 0.5,  a: 0.10, t: 1.6 },
+        { r: 1.0,  a: 1.00, t: 2.1 },
+        { r: 2.32, a: 0.55, t: 1.25 },
+        { r: 3.97, a: 0.34, t: 0.7 },
+        { r: 5.91, a: 0.20, t: 0.42 },
+        { r: 8.13, a: dark ? 0.04 : 0.10, t: 0.22 },
+        { r: 10.6, a: dark ? 0.01 : 0.05, t: 0.12 },
+    ];
+    for (const p of parts) {
+        const f = f0 * p.r;
+        if (f > sr * 0.45) continue;
+        const beat = 0.6 + p.r * 0.35;          // うなりの速さ[Hz]
+        const w1 = 2 * Math.PI * (f - beat / 2) / sr, w2 = 2 * Math.PI * (f + beat / 2) / sr;
+        const ph1 = Math.random() * 6.28, ph2 = Math.random() * 6.28;
+        const k = 1 / (p.t * sr);
+        for (let i = 0; i < len; i++) {
+            const env = Math.exp(-i * k);
+            if (env < 1e-4) break;
+            d[i] += p.a * env * 0.5 * (Math.sin(w1 * i + ph1) + Math.sin(w2 * i + ph2));
+        }
+    }
+    // 打ち子が当たる「カッ」（ごく短い金属的な雑音）
+    let lp = 0;
+    const clickLen = Math.floor(sr * 0.012);
+    for (let i = 0; i < clickLen; i++) {
+        const n = Math.random() * 2 - 1;
+        lp += (n - lp) * 0.55;
+        d[i] += (n - lp) * 0.5 * Math.exp(-i / (sr * 0.0025));
+    }
+    // 立ち上がりを 1ms かけて滑らかに（プチッという音を防ぐ）
+    const a = Math.floor(sr * 0.001);
+    for (let i = 0; i < a; i++) d[i] *= i / a;
+    let peak = 0; for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(d[i]));
+    for (let i = 0; i < len; i++) d[i] /= peak || 1;
+    _gong.buf[key] = buf;
+    return buf;
+}
+// 船橋の中の短い響き（作った雑音の残響）
+function _gongVerb(c, dest) {
+    if (_gong.ctx !== c) { _gong.ctx = c; _gong.buf = {}; _gong.verb = null; }
+    if (!_gong.verb) {
+        const sr = c.sampleRate, len = Math.floor(sr * 0.9);
+        const ir = c.createBuffer(2, len, sr);
+        for (let ch = 0; ch < 2; ch++) {
+            const d = ir.getChannelData(ch);
+            for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3) * Math.exp(-i / (sr * 0.18));
+        }
+        const conv = c.createConvolver();
+        conv.buffer = ir;
+        const g = c.createGain(); g.gain.value = 0.35;
+        conv.connect(g); g.connect(dest);
+        _gong.verb = conv;
+    }
+    return _gong.verb;
+}
+
+function _gongRing(c, dest, t0, answer, steps) {
+    const f0 = answer ? 930 : 1175;
+    const buf = _gongStrikeBuffer(c, f0, answer);
+    const out = c.createGain();
+    out.gain.value = answer ? 0.32 : 0.55;
+    let node = out;
+    if (answer) {
+        // 機関室の応答：下の方から伝わってくるので、こもって遠い
+        const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2600; lp.Q.value = 0.5;
+        out.connect(lp); node = lp;
+    }
+    node.connect(dest);
+    const verb = _gongVerb(c, dest);
+    const send = c.createGain(); send.gain.value = answer ? 0.9 : 0.45;
+    node.connect(send); send.connect(verb);
+    // 打つ回数：ハンドルを大きく動かすほど長く鳴る
+    const n = answer ? 5 + Math.floor(Math.random() * 2) : Math.min(14, 5 + 2 * Math.max(1, steps || 1));
+    let s = t0;
+    for (let k = 0; k < n; k++) {
+        const src = c.createBufferSource();
+        src.buffer = buf;
+        src.playbackRate.value = 1 + (Math.random() - 0.5) * 0.004;
+        const g = c.createGain();
+        // 打つ強さはばらつき、最後は少し弱まる
+        const vel = (0.72 + 0.28 * Math.random()) * (1 - 0.35 * k / n);
+        g.gain.value = vel;
+        // 弱く打つと高い音が出にくい
+        const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 0.4;
+        lp.frequency.value = 3500 + 9000 * vel;
+        src.connect(lp); lp.connect(g); g.connect(out);
+        src.start(s);
+        src.stop(s + 2.6);
+        // 打ち子の間隔（ラチェットなので少し不規則）
+        s += (1 / 8.5) * (0.85 + Math.random() * 0.3);
+    }
+}
+
+function telegraphBell(kind, answer, steps) {
     if (typeof audioEnsure !== 'function' || !audioEnsure() || !audio.buses.bridge) return;
     const c = audio.ctx, dest = audio.buses.bridge;
     const t0 = c.currentTime + 0.01;
-    if (kind === 'modern') {
+    const bell = _bellKind();
+    if (bell === 'electric') {
         // 電子音「ピピッ・ピピッ」
         for (let i = 0; i < (answer ? 2 : 4); i++) {
             const o = c.createOscillator(); o.type = 'square';
@@ -111,6 +240,12 @@ function telegraphBell(kind, answer) {
             o.connect(_mkFilter('lowpass', 5000, 0.7, g)); g.connect(dest);
             o.start(s); o.stop(s + 0.1);
         }
+        return;
+    }
+    if (bell === 'gong') {
+        // ハンドルが止まる「カチッ」（真鍮の機構の低めの音）
+        if (!answer && typeof audioBurst === 'function') audioBurst(dest, { dur: 0.05, attack: 0.001, gain: 0.18, type: 'bandpass', freq: 900, q: 2.5 });
+        _gongRing(c, dest, t0 + (answer ? 0 : 0.03), answer, steps);
         return;
     }
     const f = answer ? 1650 : (kind === 'warship' ? 2600 : 2100);
@@ -148,7 +283,7 @@ function onTelegraphOrder(prev, next, prevSpecial) {
     const ps = prevSpecial !== undefined ? prevSpecial : physics.telegraphSpecial;
     if (prevSpecial === undefined) physics.telegraphSpecial = '';
     if (prev === next && ps === physics.telegraphSpecial) return;
-    telegraphBell(bridgeUI.telegraph, false);
+    telegraphBell(bridgeUI.telegraph, false, Math.abs((next || 0) - (prev || 0)) || 1);
     // 機関終了で止めた機関を起こすには時間がかかる
     const wake = (physics.telegraphAnswerSpecial === 'fwe' && physics.telegraphSpecial !== 'fwe') ? TG_FWE_WAKE : 1;
     _br.answerAt = performance.now() + TG_ANSWER_DELAY * wake * 1000 * (0.8 + Math.random() * 0.5);
@@ -767,6 +902,14 @@ window.bridgeWheelActive = bridgeWheelActive;
 function bridgeHelmRate() { return HELM_RATE; }
 window.bridgeHelmRate = bridgeHelmRate;
 
+// 針・ハンドルを目標へ回す量。一気に指令を変えても、途中の目盛りを通って
+// 「くるっ」と回る（最高 speed 目盛り/秒。着く直前はゆっくり止まる）
+function _sweep(d, dt, speed) {
+    const v = Math.min(speed, Math.abs(d) * 9 + 0.4);
+    const step = Math.min(Math.abs(d), v * dt);
+    return Math.sign(d) * step;
+}
+
 // 毎フレーム
 function updateBridge(t) {
     const dt = (_br.lastT < 0) ? 0 : Math.min(0.1, Math.max(0, t - _br.lastT));
@@ -787,10 +930,10 @@ function updateBridge(t) {
     // 針・ハンドルの動き（なめらかに）
     if (!_br.tgDrag) {
         const d = _tgPos(design, order, special) - _br.tgHandle;
-        if (Math.abs(d) > 0.001) { _br.tgHandle += d * (1 - Math.exp(-dt / 0.08)); _br.dirtyT = true; }
+        if (Math.abs(d) > 0.001) { _br.tgHandle += _sweep(d, dt, 7.0); _br.dirtyT = true; }
     }
     const da = _tgPos(design, physics.telegraphAnswer, ansSpecial) - _br.answer;
-    if (Math.abs(da) > 0.001) { _br.answer += da * (1 - Math.exp(-dt / 0.15)); _br.dirtyT = true; }
+    if (Math.abs(da) > 0.001) { _br.answer += _sweep(da, dt, 3.2); _br.dirtyT = true; }
 
     // 舵輪：A/Dキーで回す
     const lock = WHEEL_LOCK_DEG[bridgeUI.wheel] || 360;
@@ -814,9 +957,9 @@ function updateBridge(t) {
 window.updateBridge = updateBridge;
 
 // ── 保存・読み込み ──
-function getBridgeConfig() { return { telegraph: bridgeUI.telegraph, wheel: bridgeUI.wheel, wheelText: bridgeUI.wheelText, waitAnswer: bridgeUI.waitAnswer }; }
+function getBridgeConfig() { return { telegraph: bridgeUI.telegraph, wheel: bridgeUI.wheel, wheelText: bridgeUI.wheelText, waitAnswer: bridgeUI.waitAnswer, bell: bridgeUI.bell }; }
 function applyBridgeConfig(c) {
-    const d = { telegraph: 'olympic', wheel: 'classic', wheelText: 'R.M.S. OLYMPIC', waitAnswer: true };
+    const d = { telegraph: 'olympic', wheel: 'classic', wheelText: 'R.M.S. OLYMPIC', waitAnswer: true, bell: 'auto' };
     Object.assign(bridgeUI, d, c || {});
     if (!BRIDGE_TELEGRAPHS[bridgeUI.telegraph]) bridgeUI.telegraph = 'olympic';
     if (!BRIDGE_WHEELS[bridgeUI.wheel]) bridgeUI.wheel = 'classic';
@@ -836,6 +979,8 @@ function setBridgeOption(key, v) {
 window.setBridgeOption = setBridgeOption;
 
 function renderBridgePanel() {
+    const bl = document.getElementById('bridge-bell');
+    if (bl) bl.innerHTML = Object.entries(BRIDGE_BELLS).map(([k, l]) => `<option value="${k}"${k === (bridgeUI.bell || 'auto') ? ' selected' : ''}>${l}</option>`).join('');
     const tg = document.getElementById('bridge-telegraph');
     if (tg) tg.innerHTML = Object.entries(BRIDGE_TELEGRAPHS).map(([k, l]) => `<option value="${k}"${k === bridgeUI.telegraph ? ' selected' : ''}>${l}</option>`).join('');
     const wh = document.getElementById('bridge-wheel');

@@ -146,9 +146,24 @@ function getSceneDepthTexture() {
 }
 
 function setBloomEnabled(enabled) {
-    bloomEnabled = enabled;
+    bloomEnabled = !!enabled;
+    if (bloomEnabled && !bloomComposer) initBloomComposer();
 }
-function setBloomStrength(v)   { if (bloomPass) bloomPass.strength   = v; }
+function setBloomStrength(v)   { bloomBaseStrength = v; if (bloomPass) bloomPass.strength = v; }
+
+// 毎フレーム：霧・雨の中ではブルームを弱めて切る（発光面はにじませず、くっきり
+// 遠くから見えるようにする）。戻り値：このフレームでブルームを使うか
+function updateBloomForWeather() {
+    if (!bloomEnabled || !bloomPass) return false;
+    const w = window.weather;
+    const haze = (w && w.enabled) ? Math.max(0, (w.haze || 1) - 1) : 0;
+    const rain = (w && w.enabled && typeof w.rain === 'number') ? w.rain : 0;
+    const fog  = (w && w.enabled && typeof w.fog === 'number') ? w.fog : 0;
+    const wet = haze * 0.25 + rain * 0.6 + fog * 1.0;
+    const k = 1 - THREE.MathUtils.smoothstep(wet, 0.08, 0.5);
+    bloomPass.strength = bloomBaseStrength * k;
+    return k > 0.02;
+}
 function setBloomRadius(v)     { if (bloomPass) bloomPass.radius     = v; }
 function setBloomThreshold(v)  { if (bloomPass) bloomPass.threshold  = v; }
 
@@ -243,10 +258,13 @@ function updateFunnelUplights() {
     if (funnelUplights.length === 0) return;
     const nf = lightingNightFactor;
     const targetIntensity = funnelUplightEnabled ? nf : 0;
+    // 照明を焼き込んでいる間（40-light-bake.js）は、明るさだけ動かして灯り自体は消す
+    // （焼き込んだ明るさに、この明るさの割合が掛かる）
+    const baked = typeof lightBakeHides === 'function' && lightBakeHides('F');
     funnelUplights.forEach(fu => {
         [fu.spotL, fu.spotR].forEach(s => {
             s.intensity += (fu.baseIntensity * targetIntensity - s.intensity) * 0.08;
-            s.visible = s.intensity > 0.01;
+            s.visible = s.intensity > 0.01 && !baked;
         });
     });
 }
@@ -432,7 +450,8 @@ function updateDeckLightPool() {
             const tgt = deckLightTargets[i];
             if (tgt) tgt.position.copy(localPt).add(tgtDir);
             sp.intensity = 1.8 * nf * deckLightIntensityMult;
-            sp.visible = true;
+            // 照明を焼き込んでいる間は、全部の甲板灯の明かりが焼き込んであるので消す
+            sp.visible = !(typeof lightBakeHides === 'function' && lightBakeHides('D'));
         } else {
             sp.visible = false;
             sp.intensity = 0;

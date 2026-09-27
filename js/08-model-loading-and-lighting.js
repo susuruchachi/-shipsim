@@ -549,7 +549,16 @@ function applyGlbLightSettingsData(settingsArr) {
         if (an && saved.areaNode) {
             const sn = saved.areaNode;
             if (sn.pos)   an.position.set(sn.pos.x, sn.pos.y, sn.pos.z);
-            if (sn.rot)   an.rotation.set(sn.rot.x, sn.rot.y, sn.rot.z, sn.rot.order || 'XYZ');
+            if (sn.rot) {
+                an.rotation.set(sn.rot.x, sn.rot.y, sn.rot.z, sn.rot.order || 'XYZ');
+                // 古い保存データ（ローカル +Y を照らす決まりだった頃）で、読み込んだときの
+                // 向きから手で回してあるもの＝その頃の決まりで向きを合わせたもの。
+                // 照らす向きが変わらないよう、ローカルX軸まわりに180°回して今の決まり
+                // （-Y を照らす）に直す。回していないものは、今の決まりで正しい向きになる。
+                if (sn.conv !== 2 && an.userData.origQuat && an.quaternion.angleTo(an.userData.origQuat) > 0.02) {
+                    an.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI));
+                }
+            }
             if (sn.scale) an.scale.set(sn.scale.x, sn.scale.y, sn.scale.z);
             // RectAreaLight本体は「スケールを持たない光源ノード」の子として
             // ローカル原点に置いてあり、位置はそのノードが areaNode から毎フレーム
@@ -670,7 +679,11 @@ function applyGlbLightIntensities() {
         light.userData.targetIntensity = base * glbLightMaster * factor;
         light.userData.targetVisible   = wantVisible;
         light.intensity = light.userData.targetIntensity;
-        light.visible = wantVisible;
+        // 照明を焼き込んでいる間（40-light-bake.js）は、焼き込み済みの点・スポットの
+        // ライトは消す（水面の映り込み用に、点いているはずかどうかは残しておく）
+        const bakedHide = !light.userData.isAreaLight && typeof lightBakeHides === 'function' && lightBakeHides('L', light);
+        light.visible = wantVisible && !bakedHide;
+        light.userData.bakedHidden = wantVisible && bakedHide;
         if (light.userData.mirrorLight) {
             light.userData.mirrorLight.intensity = light.intensity;
             light.userData.mirrorLight.visible = light.visible;

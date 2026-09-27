@@ -304,6 +304,91 @@ function audioBurst(dest, { when = 0, dur = 0.4, attack = 0.01, gain = 0.3, type
     s.stop(t0 + attack + dur + 0.05);
 }
 
+// ════════════════════════════════════════════════════════════════
+//  大波がぶつかる音
+// ════════════════════════════════════════════════════════════════
+//  「ドーン」（船体に響く低い音）＋「ザバァーン」（砕ける水）＋しぶきが降る音。
+//  船が大きく重いほど低く長く響き、波が高いほど大きい。
+//    ・船首・船尾が波に叩きつけられたとき（21-bow-stern-effects.js のスラミング）
+//    ・うねりが高いときは、ときどき大きな波が舷側に当たる
+//  音はぶつかった場所から、距離に応じて遅れて・小さく・左右に振って聞こえる。
+function _audioShipHeft() {
+    const L = Math.max(5, (physics.scale || 1) * 12);          // 船の長さ[m]
+    const size = Math.min(2, Math.max(0.1, L / 150));
+    const m = Math.max(0.1, physics.mass || 1);
+    const heavy = Math.min(1.25, Math.max(0.25, Math.log10(1 + m) / Math.log10(60)));
+    return { size, heavy };
+}
+function audioWaveImpact(pos, strength) {
+    if (!audio.ctx || !audio.env || strength <= 0.01) return;
+    const c = audio.ctx, E = audio.env;
+    const cam = camera.position;
+    const d = pos.distanceTo(cam);
+    const when = Math.min(2.5, d / AUDIO_SPEED_OF_SOUND);
+    const g = strength / (1 + Math.max(0, d - 25) / 70);
+    if (g < 0.01) return;
+    // 左右の向き
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+    const dir = pos.clone().sub(cam).normalize();
+    const pan = c.createStereoPanner ? c.createStereoPanner() : null;
+    const dest = c.createGain();
+    dest.gain.value = 1;
+    if (pan) { pan.pan.value = Math.max(-0.9, Math.min(0.9, dir.dot(right))); dest.connect(pan); pan.connect(E.outdoor); }
+    else dest.connect(E.outdoor);
+    const { size, heavy } = _audioShipHeft();
+    const t0 = c.currentTime + when;
+    // 船体に響く「ドーン」：大きく重い船ほど低く長い
+    const fr = 34 + 70 / (1 + 2.2 * size);
+    const o = c.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(fr * 1.25, t0);
+    o.frequency.exponentialRampToValueAtTime(fr, t0 + 0.25);
+    const og = c.createGain();
+    og.gain.setValueAtTime(0, t0);
+    og.gain.linearRampToValueAtTime(0.5 * g * heavy, t0 + 0.02);
+    og.gain.exponentialRampToValueAtTime(0.0005, t0 + 0.5 + 1.2 * size * heavy);
+    o.connect(og); og.connect(_audioSat ? _audioSat(1.8, dest) : dest);
+    o.start(t0); o.stop(t0 + 0.6 + 1.3 * size * heavy);
+    audioBurst(dest, { when, dur: 0.8 + 1.6 * size * heavy, attack: 0.015, gain: 0.7 * g * (0.5 + 0.5 * heavy), type: 'lowpass', freq: 70 + 120 / (1 + size), q: 0.7, kind: 'brown' });
+    // 砕ける水「ザバァーン」
+    audioBurst(dest, { when: when + 0.03, dur: 1.1 + 0.9 * Math.min(1.5, strength), attack: 0.06, gain: 0.45 * g, type: 'bandpass', freq: 550 + 450 / (1 + size), q: 0.55 });
+    audioBurst(dest, { when: when + 0.02, dur: 0.9, attack: 0.03, gain: 0.3 * g, type: 'lowpass', freq: 380, q: 0.5, kind: 'brown' });
+    // 打ち上がったしぶきが降ってくる
+    audioBurst(dest, { when: when + 0.35 + 0.2 * size, dur: 1.3 + 0.8 * strength, attack: 0.35, gain: 0.14 * g, type: 'highpass', freq: 2200, q: 0.5 });
+    setTimeout(() => { try { dest.disconnect(); if (pan) pan.disconnect(); } catch (e) { /* ignore */ } }, (when + 6) * 1000);
+}
+window.audioWaveImpact = audioWaveImpact;
+
+function _audioWaveImpacts(t, half) {
+    const E = audio.env;
+    const hs = Math.max(0, window._seaHs || 0);                 // 有義波高[m]
+    const seaK = Math.min(1.6, Math.max(0.25, hs / 4));
+    // 船首・船尾のスラミング
+    const bowEv = window._bowSlamEvent, sternEv = window._sternSlamEvent;
+    if (bowEv && bowEv !== E.lastBowEv) {
+        E.lastBowEv = bowEv;
+        const k = Math.min(2, 0.5 + (bowEv.slamRatio || 0) * 0.6) * seaK;
+        audioWaveImpact(audioShipPoint(0, 0, half * 0.92, new THREE.Vector3()), k);
+    }
+    if (sternEv && sternEv !== E.lastSternEv) {
+        E.lastSternEv = sternEv;
+        const k = Math.min(1.5, 0.4 + (sternEv.slamRatio || 0) * 0.45) * seaK;
+        audioWaveImpact(audioShipPoint(0, 0, -half * 0.92, new THREE.Vector3()), k);
+    }
+    // うねりが高いと、ときどき大きな波が舷側に当たる（波高1.5mくらいから）
+    if (!E.sideNext) E.sideNext = t + 3;
+    if (t > E.sideNext) {
+        const rate = Math.max(0, hs - 1.5) * 0.18;               // 1秒あたりの回数（波高6mで約0.8回）
+        E.sideNext = t + (rate > 0 ? (0.4 + Math.random() * 1.6) / rate : 3);
+        if (rate > 0) {
+            const side = Math.random() < 0.5 ? -1 : 1;
+            const hp = window.hullProfile;
+            const beam = (hp && hp.ready && hp.halfBeam) ? hp.halfBeam : half * 0.12;
+            const p = audioShipPoint(side * beam, 0, (Math.random() * 1.6 - 0.8) * half, new THREE.Vector3());
+            audioWaveImpact(p, seaK * (0.3 + 0.6 * Math.random()));
+        }
+    }
+}
+
 // 雷鳴：距離[m]から音が届くまで遅れて鳴る（29-weather-fx.js の落雷から呼ぶ）
 function audioThunder(dist, power, hasBolt) {
     if (!audio.ctx || (audio.ctx.state !== 'running' && !_audioOffline()) || !audio.env) return;
@@ -390,16 +475,8 @@ function _audioUpdateEnv(t, dt) {
         const rpm = Math.abs(physics.propRpm || 0);
         E.sternEm.update(audioShipPoint(0, 0, -half * 0.95, audio._tmpB || (audio._tmpB = new THREE.Vector3())));
         E.sternGain.gain.setTargetAtTime(0.3 * rpm * (0.5 + 0.5 * s) + 0.15 * Math.pow(s, 1.5), now, 0.3);
-        // 船首が波に突っ込んだ（17-main-loop.js のスラム判定）
-        const slam = window._bowSlamCount || 0;
-        if (slam > audio.lastSlam) {
-            const bow = audioShipPoint(0, 0, half, new THREE.Vector3());
-            const d = bow.distanceTo(cam);
-            const g = 1 / (1 + Math.max(0, d - 30) / 60);
-            audioBurst(E.outdoor, { when: Math.min(2, d / AUDIO_SPEED_OF_SOUND), dur: 0.6, attack: 0.01, gain: 0.45 * g, type: 'lowpass', freq: 160, q: 0.7, kind: 'brown' });
-            audioBurst(E.outdoor, { when: Math.min(2, d / AUDIO_SPEED_OF_SOUND) + 0.05, dur: 1.2, attack: 0.04, gain: 0.35 * g, type: 'bandpass', freq: 900, q: 0.5 });
-        }
-        audio.lastSlam = slam;
+        // 大波がぶつかる音（船首・船尾が波に叩きつけられた・大きな波が舷側に当たる）
+        _audioWaveImpacts(t, half);
     }
 
     // ── 雨 ──

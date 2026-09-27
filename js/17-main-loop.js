@@ -665,6 +665,8 @@ function animate() {
     // エリアライト・発光パネル（25-area-lights.js）。船の位置・姿勢が確定した
     // この位置で呼ぶ。影マップを描き直さないフレームは影の変換行列だけを
     // 更新するので、ここより前で呼ぶと影が1フレーム分船に置いていかれる。
+    // 船の照明の焼き込み（40-light-bake.js）：焼き込みを少しずつ進め、昼夜などの倍率を渡す
+    if (typeof updateLightBake === 'function') updateLightBake(t);
     if (typeof updateAreaLights === 'function') updateAreaLights(t);
     if (typeof updateGlowHalos === 'function') updateGlowHalos();   // 遠景用の光のにじみ（26）
     // 音（35-audio-engine.js / 36-horns.js）：機関・環境音・汽笛の位置と音量
@@ -688,7 +690,8 @@ function animate() {
         particleFogUniforms.uFogDensity.value = scene.fog.density || 0;
     }
 
-    if (bloomEnabled && bloomComposer) {
+    const _useBloom = bloomEnabled && bloomComposer && (typeof updateBloomForWeather !== 'function' || updateBloomForWeather());
+    if (_useBloom) {
         renderWithBloom();
     } else {
         renderer.shadowMap.needsUpdate = true;   // 影は本描画で1回だけ（04参照）

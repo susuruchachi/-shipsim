@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" id="meta-viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#0a1a2a">
     <meta name="mobile-web-app-capable" content="yes">
@@ -1099,6 +1099,9 @@
         <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">デザイン:</span>
           <select id="bridge-telegraph" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;" onchange="setBridgeOption('telegraph', this.value)"></select>
         </div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">ベルの音:</span>
+          <select id="bridge-bell" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;" onchange="setBridgeOption('bell', this.value); telegraphBell(bridgeUI.telegraph, false, 2)"></select>
+        </div>
         <div class="sp-row">
           <label class="sp-toggle"><input type="checkbox" id="bridge-wait-answer" checked onchange="setBridgeOption('waitAnswer', this.checked)"> 機関室の応答（ベル）を待ってから機関が動く</label>
         </div>
@@ -1124,6 +1127,28 @@
     </div>
 
     <div class="settings-page" id="tab-perf">
+      <div class="sp-section">
+        <div class="sp-section-title">💡 照明の焼き込み（この端末の設定）</div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="bake-enabled" checked onchange="setLightBakeEnabled(this.checked)"> 船の灯りを焼き込んで軽くする（夜がとても軽くなる）</label>
+        </div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">細かさ:</span>
+          <select id="bake-detail" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;" onchange="setLightBakeDetail(this.value)">
+            <option value="fine">細かい（約0.6m・きれい）</option>
+            <option value="normal" selected>ふつう（約1m）</option>
+            <option value="coarse">粗い（約1.6m・軽い）</option>
+          </select>
+          <button class="sp-add-btn" type="button" onclick="rebakeLights()">今すぐ焼き直す</button>
+        </div>
+        <div id="bake-status" style="font-size:10px;color:#9fb8c8;margin:2px 0 4px;"></div>
+        <div style="font-size:10px;color:#888;">
+          窓・灯具・エリアライト・煙突の照明・甲板灯が船を照らす明るさを、船ごとに一度だけ計算して端末に保存します。
+          全部の灯りが影付きで照らし（壁を抜けません）、毎フレームの計算はほとんど無くなります。<br>
+          灯りを動かしたり明るさを変えたりすると、少し待ってから自動で焼き直します（数秒〜数十秒。その間は前の結果のまま）。
+          昼夜・明るさのスライダー・煙突照明のオン/オフは、焼き直さずにすぐ反映されます。<br>
+          細かさを下げたときは、船を読み込み直すと反映されます。
+        </div>
+      </div>
       <div class="sp-section">
         <div class="sp-section-title">🎬 スクショと一緒に動画も保存（この端末の設定）</div>
         <div class="sp-row">
@@ -1225,6 +1250,8 @@
 <script src="js/37-bridge-controls.js"></script>
 <script src="js/38-clip-recorder.js"></script>
 <script src="js/39-android-app.js"></script>
+<script src="js/40-light-bake.js"></script>
+<script src="js/41-no-zoom.js"></script>
 <script src="js/17-main-loop.js"></script>
 <script src="js/18-hull-wake-physics.js"></script>
 <script src="js/19-swe-fluid.js"></script>
