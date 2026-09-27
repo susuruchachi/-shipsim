@@ -1224,7 +1224,7 @@ function updateBridge(t) {
         }
         physics.helmOrder = _br.wheelDeg / lock * 35;
         // 古典的な舵輪：1周ごとにベル（テレグラフと同じ音）
-        if (bridgeUI.wheel === 'classic' && bridgeUI.wheelBell !== false) {
+        if (bridgeUI.wheel === 'classic' && bridgeUI.wheelBell !== false && !_br.autoHelm) {   // 自動航行が回すときは鳴らさない
             const turn = Math.trunc(_br.wheelDeg / 360);
             if (_br.lastTurn === undefined) _br.lastTurn = turn;
             if (turn !== _br.lastTurn) {

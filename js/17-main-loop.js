@@ -140,6 +140,11 @@ function animate() {
             }
             else if (keys.a || touchLeft) physics.rudderAngle = Math.max(-35.0, physics.rudderAngle - 50 * subDt);
             else if (keys.d || touchRight) physics.rudderAngle = Math.min(35.0, physics.rudderAngle + 50 * subDt);
+            else if (window.autopilot && autopilot.active && Number.isFinite(physics.autoRudder)) {
+                // 自動航行（49-autopilot.js）：ボタン操作の船でも、指示の舵角へ舵取機の速さで
+                const d = physics.autoRudder - physics.rudderAngle, step = 8 * subDt;
+                physics.rudderAngle += Math.abs(d) <= step ? d : Math.sign(d) * step;
+            }
             else physics.rudderAngle += (0.0 - physics.rudderAngle) * 6 * subDt;
         } else {
             physics.rudderAngle += (0.0 - physics.rudderAngle) * 6 * subDt;
@@ -644,6 +649,7 @@ function animate() {
     // この位置で呼ぶ。影マップを描き直さないフレームは影の変換行列だけを
     // 更新するので、ここより前で呼ぶと影が1フレーム分船に置いていかれる。
     // 船の照明の焼き込み（40-light-bake.js）：焼き込みを少しずつ進め、昼夜などの倍率を渡す
+    if (typeof updateAutopilot === 'function') updateAutopilot(t, physicsDt);  // 自動航行（49-autopilot.js）
     if (typeof updateTugs === 'function') updateTugs(t, dt);                 // タグボート（47-tugboats.js）
     if (typeof updateMinimap === 'function') updateMinimap(t);               // 小さな地図（48-minimap.js）
     if (typeof updateWorldTerrain === 'function') updateWorldTerrain(t, dt);
@@ -1050,6 +1056,8 @@ function updateUI() {
 
     // 羅針盤の方位（右に回ると増える）。physics.heading は上から見て左回りに増えるので逆にする
     let deg = Math.floor((360 - physics.heading % 360) % 360); if (deg < 0) deg += 360; if (deg >= 360) deg -= 360;
+    // 世界を航海するモード：その場所での真方位（49-autopilot.js）
+    if (window.world && world.mode === 'world' && typeof worldTrueCompass === 'function') deg = Math.floor(worldTrueCompass()) % 360;
     $('ui-heading').innerText = `Heading  : ${deg}°`;
 
     const gameHours = Math.floor(physics.gameTime / (physics.dayDuration / 24)) % 24;

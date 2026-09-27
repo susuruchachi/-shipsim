@@ -124,6 +124,14 @@ function _mmDraw() {
             g.restore();
         }
     }
+    // 自動航行の航路
+    const rp = (typeof autopilotRoutePoints === 'function') ? autopilotRoutePoints() : null;
+    if (rp && rp.length > 1) {
+        g.strokeStyle = _wm.chart ? '#c0208a' : '#ff5ad0'; g.lineWidth = 1.6;
+        g.beginPath();
+        rp.forEach((q, i) => { const loc = worldUnitToLocal(worldLatLonToUnit(q.lat, q.lon)); if (!Number.isFinite(loc.x)) return; const s = toS(loc.x, loc.z); if (i === 0) g.moveTo(s.x, s.y); else g.lineTo(s.x, s.y); });
+        g.stroke();
+    }
     // タグボート
     if (window.tugs) for (const t of tugs) {
         const q = toS(t.pos.x, t.pos.z);

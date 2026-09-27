@@ -719,14 +719,20 @@ function _wmShowInfo() {
     if (!p) { el.style.display = 'none'; return; }
     const T = PORT_TYPES[p.type];
     let dist = '';
+    let apBtn = '';
     if (world.mode === 'world') {
         const ll = worldShipLatLon();
         dist = `　今の場所から ${(worldDistance(ll.lat, ll.lon, p.lat, p.lon) / 1852).toFixed(0)} 海里`;
+        if (typeof rhumbCourse === 'function') {
+            const rc = rhumbCourse(ll.lat, ll.lon, p.lat, p.lon);
+            dist += `（航程線の針路 ${Math.round(rc.course).toString().padStart(3, '0')}°・${(rc.dist / 1852).toFixed(0)} 海里）`;
+        }
+        if (typeof autopilotStart === 'function') apBtn = `<button onclick="autopilotStart(world.ports.find(q => q.id === '${p.id}'))">🧭 ここへ自動航行</button>`;
     }
     el.style.display = 'block';
     el.innerHTML = `<div class="wp-pname"><i style="background:${T.color}"></i>${p.name}</div>
         <div class="wp-pmeta">${T.label}・${worldFmtLatLon(p.lat, p.lon)}${dist}</div>
-        <div class="wp-pbtns"><button onclick="worldStartAtPort(world.ports.find(q => q.id === '${p.id}')); toggleWorldMap(false);">⚓ この港から出航</button>
+        <div class="wp-pbtns">${apBtn}<button onclick="worldStartAtPort(world.ports.find(q => q.id === '${p.id}')); toggleWorldMap(false);">⚓ この港から出航</button>
         <button onclick="_wm.sel=null;_wmShowInfo();worldMapRedraw(true)">閉じる</button></div>`;
 }
 window._wmShowInfo = _wmShowInfo;
@@ -862,11 +868,29 @@ function worldMapRedraw(quick) {
         _wm.portsBusy = true;
         setTimeout(() => { worldBuildPorts(); _wm.portsBusy = false; worldMapRedraw(true); }, 30);
     }
+    // 自動航行の航路（49-autopilot.js）
+    const rp = (typeof autopilotRoutePoints === 'function') ? autopilotRoutePoints() : null;
+    if (rp && rp.length > 1) {
+        g.save();
+        g.strokeStyle = _wm.chart ? '#c0208a' : '#ff5ad0'; g.lineWidth = 2; g.setLineDash([]);
+        g.beginPath();
+        let prevX = null;
+        rp.forEach((q, i) => {
+            const s = _wmToScreen(q.lat, q.lon, cv);
+            // 経度 ±180 をまたぐ所は線を切る
+            if (i === 0 || (prevX !== null && Math.abs(s.x - prevX) > W / 2)) g.moveTo(s.x, s.y); else g.lineTo(s.x, s.y);
+            prevX = s.x;
+        });
+        g.stroke();
+        g.fillStyle = g.strokeStyle;
+        for (const q of rp) if (q.wp) { const s = _wmToScreen(q.lat, q.lon, cv); g.beginPath(); g.arc(s.x, s.y, 3, 0, Math.PI * 2); g.fill(); }
+        g.restore();
+    }
     // 船
     if (world.mode === 'world') {
         const ll = worldShipLatLon();
         const s = _wmToScreen(ll.lat, ll.lon, cv);
-        g.save(); g.translate(s.x, s.y); g.rotate(worldCompass(physics.heading) * Math.PI / 180);
+        g.save(); g.translate(s.x, s.y); g.rotate((typeof worldTrueCompass === 'function' ? worldTrueCompass() : worldCompass(physics.heading)) * Math.PI / 180);
         g.fillStyle = '#ffffff'; g.strokeStyle = '#ff3b30'; g.lineWidth = 2;
         g.beginPath(); g.moveTo(0, -11); g.lineTo(7, 8); g.lineTo(0, 4); g.lineTo(-7, 8); g.closePath(); g.fill(); g.stroke();
         g.restore();
