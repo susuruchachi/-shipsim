@@ -134,6 +134,35 @@
         body.hud-hidden #bake-hud { display: none !important; }
         body.hud-hidden #telemetry-panel, body.hud-hidden #btn-horn { display: none !important; }
         body.menu-open #btn-horn { left: 310px; }
+        /* 汽笛信号（36-horns.js）：📯 の右の「信号」ボタンと、そこから開く一覧 */
+        #btn-horn-sig {
+            bottom: calc(221px + env(safe-area-inset-bottom)); left: 112px;
+            width: 48px; height: 48px; font-size: 13px; letter-spacing: 1px;
+        }
+        #btn-horn-sig.on { background: rgba(255, 210, 120, 0.45); border-color: #ffd278; }
+        body.menu-open #btn-horn-sig { left: 392px; }
+        body.hud-hidden #btn-horn-sig, body.hud-hidden #horn-sig-panel { display: none !important; }
+        #horn-sig-panel {
+            position: fixed; z-index: 30; display: none; width: 264px; max-width: calc(100vw - 16px);
+            padding: 8px; border-radius: 10px; box-sizing: border-box;
+            background: rgba(8, 20, 40, 0.92); border: 1px solid rgba(0, 255, 204, 0.5);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5); color: #cfe; font-size: 11px;
+        }
+        #horn-sig-panel.open { display: block; }
+        #horn-sig-panel .hs-title { color: #00ffcc; font-weight: bold; margin: 0 2px 6px; }
+        #horn-sig-panel .hs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+        #horn-sig-panel button {
+            font-family: inherit; color: #e8fff8; background: rgba(0, 255, 204, 0.08);
+            border: 1px solid rgba(0, 255, 204, 0.4); border-radius: 6px; cursor: pointer;
+            touch-action: manipulation;
+        }
+        #horn-sig-panel button:active { background: rgba(0, 255, 204, 0.35); }
+        #horn-sig-panel .hs-btn { display: flex; flex-direction: column; align-items: flex-start; padding: 5px 7px; text-align: left; }
+        #horn-sig-panel .hs-btn.fog { border-color: rgba(160, 190, 255, 0.5); background: rgba(120, 150, 255, 0.1); }
+        #horn-sig-panel .hs-pat { font-size: 15px; letter-spacing: 2px; color: #ffd278; line-height: 1.1; }
+        #horn-sig-panel .hs-name { font-size: 11px; font-weight: bold; }
+        #horn-sig-panel .hs-mean { font-size: 10px; opacity: 0.7; }
+        #horn-sig-panel .hs-stop { width: 100%; margin-top: 6px; padding: 5px; }
         body.menu-open #btn-faster { left: 310px; }
         body.menu-open #btn-slower { left: 310px; }
 

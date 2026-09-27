@@ -320,9 +320,34 @@ function _audioShipHeft() {
     const heavy = Math.min(1.25, Math.max(0.25, Math.log10(1 + m) / Math.log10(60)));
     return { size, heavy };
 }
-function audioWaveImpact(pos, strength) {
+// 連続で叩かれても音が積み重ならないように、間隔と同時に鳴る数を絞る。
+//  ・前の音から IMPACT_GAP 秒（大きく重い船ほど長い）は次を鳴らさない
+//    （ただし前よりずっと強い一撃は 0.8 秒あければ通す）
+//  ・続けざまに当たっているあいだは、少しずつ控えめにする
+//  ・響いている音は最大 IMPACT_MAX_VOICES 個まで
+const IMPACT_GAP = 2.4;
+const IMPACT_MAX_VOICES = 2;
+function _impactGate(E, now, strength, heft) {
+    const gap = IMPACT_GAP * (0.8 + 0.5 * heft.size * heft.heavy);
+    const since = now - (E.impactLastT === undefined ? -99 : E.impactLastT);
+    const lastK = E.impactLastK || 0;
+    const bigger = since > 0.8 && strength > 1.8 * lastK;
+    if (since < gap && !bigger) return 0;
+    E.impactVoices = (E.impactVoices || []).filter(end => end > now);
+    if (E.impactVoices.length >= IMPACT_MAX_VOICES && !bigger) return 0;
+    // 続けざまの強さ（0〜1）：数秒で抜ける
+    E.impactRun = (E.impactRun || 0) * Math.exp(-Math.max(0, since) / 8) + 1;
+    E.impactLastT = now;
+    E.impactLastK = strength;
+    return strength / (1 + 0.35 * Math.max(0, E.impactRun - 1));
+}
+function audioWaveImpact(pos, strength, force) {
     if (!audio.ctx || !audio.env || strength <= 0.01) return;
     const c = audio.ctx, E = audio.env;
+    if (!force) {
+        strength = _impactGate(E, c.currentTime, strength, _audioShipHeft());
+        if (strength <= 0.01) return;
+    }
     const cam = camera.position;
     const d = pos.distanceTo(cam);
     const when = Math.min(2.5, d / AUDIO_SPEED_OF_SOUND);
@@ -362,6 +387,7 @@ function audioWaveImpact(pos, strength) {
     audioBurst(dest, { when: when + 0.02, dur: 1.6 + 1.2 * size, attack: 0.03, gain: 0.6 * g, type: 'lowpass', freq: 320, q: 0.5, kind: 'brown' });
     // 打ち上がったしぶきが降ってくる
     audioBurst(dest, { when: when + 0.45 + 0.25 * size, dur: 2 + 1.2 * strength, attack: 0.4, gain: 0.2 * g, type: 'highpass', freq: 2000, q: 0.5 });
+    (E.impactVoices || (E.impactVoices = [])).push(t0 + ring);
     setTimeout(() => { try { dest.disconnect(); if (pan) pan.disconnect(); } catch (e) { /* ignore */ } }, (when + 12) * 1000);
 }
 window.audioWaveImpact = audioWaveImpact;

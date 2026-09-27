@@ -797,8 +797,65 @@ function _bindHold(el, down, up) {
 document.addEventListener('DOMContentLoaded', () => {
     const btn = document.getElementById('btn-horn');
     if (btn) _bindHold(btn, hornPressMain, hornReleaseMain);
+    _hornSigSetup();
     renderSoundPanel();
 });
+
+// ── 汽笛信号のボタン（📯 の横の「信号」から開く） ──
+const HORN_SIG_BUTTONS = [
+    ['L', null, '━', '長音1回', '出港・注意'],
+    ['S', null, '•', '短音1回', '右へ転じる'],
+    ['SS', null, '••', '短音2回', '左へ転じる'],
+    ['SSS', null, '•••', '短音3回', '後進中'],
+    ['SSSSS', null, '•••••', '短音5回', '警告・疑問'],
+    ['LLL', null, '━━━', '長音3回', '汽笛の挨拶'],
+    ['L', 'fog', '━', '霧笛 長音1回', '霧中・航行中'],
+    ['LL', 'fog', '━━', '霧笛 長音2回', '霧中・停止中'],
+];
+function _hornSigSetup() {
+    const horn = document.getElementById('btn-horn');
+    if (!horn || document.getElementById('btn-horn-sig')) return;
+    const b = document.createElement('div');
+    b.id = 'btn-horn-sig';
+    b.className = 'control-btn';
+    b.title = '汽笛信号';
+    b.textContent = '信号';
+    horn.after(b);
+    const panel = document.createElement('div');
+    panel.id = 'horn-sig-panel';
+    panel.innerHTML = '<div class="hs-title">汽笛信号</div><div class="hs-grid">' +
+        HORN_SIG_BUTTONS.map((x, i) => `<button class="hs-btn${x[1] ? ' fog' : ''}" data-i="${i}"><span class="hs-pat">${x[2]}</span><span class="hs-name">${x[3]}</span><span class="hs-mean">${x[4]}</span></button>`).join('') +
+        '</div><button class="hs-stop">■ 止める</button>';
+    document.body.appendChild(panel);
+    const place = () => {
+        const r = b.getBoundingClientRect();
+        panel.style.left = Math.max(8, Math.min(window.innerWidth - panel.offsetWidth - 8, r.left)) + 'px';
+        panel.style.bottom = Math.max(8, window.innerHeight - r.top + 10) + 'px';
+    };
+    const setOpen = (on) => {
+        panel.classList.toggle('open', on);
+        b.classList.toggle('on', on);
+        if (on) place();
+    };
+    b.addEventListener('click', (e) => { e.stopPropagation(); setOpen(!panel.classList.contains('open')); });
+    panel.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const btn = e.target.closest('.hs-btn');
+        if (btn) {
+            const x = HORN_SIG_BUTTONS[+btn.dataset.i];
+            playHornSignal(x[0], x[1] || undefined);
+            return;
+        }
+        if (e.target.closest('.hs-stop')) stopHornSignal();
+    });
+    // 画面のほかの所を触ったら閉じる
+    document.addEventListener('pointerdown', (e) => {
+        if (!panel.classList.contains('open')) return;
+        if (panel.contains(e.target) || b.contains(e.target)) return;
+        setOpen(false);
+    });
+    window.addEventListener('resize', () => { if (panel.classList.contains('open')) place(); });
+}
 const _keyHeld = {};
 window.addEventListener('keydown', (e) => {
     const tag = document.activeElement && document.activeElement.tagName;
