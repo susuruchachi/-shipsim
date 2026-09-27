@@ -1073,22 +1073,14 @@
       </div>
       <div class="sp-section">
         <div class="sp-section-title">⚙ 機関音</div>
-        <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">形式:</span>
-          <select id="engine-sound-type" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;" onchange="setEngineSound('type', this.value)"></select>
-        </div>
-        <div class="sp-row"><span class="sp-label">音量:</span>
-          <input type="range" id="engine-sound-volume" class="sp-slider" min="0" max="1.5" step="0.05" value="1" oninput="setEngineSound('volume', this.value)"></div>
-        <div class="sp-xyz-row">
-          <span class="sp-axis-label">機関室 X:</span><input type="number" id="engine-sound-x" class="sp-xyz-input" value="0" step="0.1" oninput="setEngineSound('x', this.value)">
-          <span class="sp-axis-label">Y:</span><input type="number" id="engine-sound-y" class="sp-xyz-input" value="0" step="0.1" oninput="setEngineSound('y', this.value)">
-          <span class="sp-axis-label">Z:</span><input type="number" id="engine-sound-z" class="sp-xyz-input" value="0" step="0.1" oninput="setEngineSound('z', this.value)">
-        </div>
-        <div class="sp-row" style="gap:8px;flex-wrap:wrap;">
-          <label class="sp-toggle"><input type="checkbox" id="engine-sound-sym" onchange="setEngineSound('sym', this.checked)"> シンメトリー（左右2か所の機関室）</label>
-          <button class="sp-gizmo-btn" id="gizmo-engine" onclick="toggleGizmo('engine')">📍 ギズモ</button>
+        <div id="engine-list"></div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+          <select id="engine-add-type" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;"></select>
+          <button class="sp-add-btn" type="button" onclick="engineAdd()">＋ 機関音を足す</button>
         </div>
         <div style="font-size:10px;color:#888;margin-top:4px;">
-          音はスクリューの回転数に合わせて変わります（加速・逆転中は力強く）。船内にいると大きく聞こえます。
+          音はスクリューの回転数に合わせて変わります（加速・逆転中は力強く）。船内にいると大きく聞こえます。<br>
+          機関音はいくつでも置けます（例：左右のレシプロと中央のタービン）。「⧉ 複製」「⇆ 反対舷に複製」でコピーできます。
         </div>
       </div>
     </div>

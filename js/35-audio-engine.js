@@ -63,7 +63,7 @@ function audioEnsure() {
 // 音の経路を組み立てる（オフラインでの書き出し・確認にも使えるよう分けてある）
 function _audioSetupGraph(c) {
     audio.ctx = c;
-    audio.engine = null; audio.engineType = null; audio.lastT = -1;
+    audio.engines = []; audio.lastT = -1;   // 機関音（複数。36-horns.js の shipSound.engines と同じ並び）
     // 前の経路の汽笛の音源は使えないので捨てる（36-horns.js）
     if (typeof _hornRuntime !== 'undefined') _hornRuntime.length = 0;
 
@@ -508,19 +508,16 @@ const ENGINE_TYPES = {
 };
 window.ENGINE_TYPES = ENGINE_TYPES;
 
-function _audioDisposeEngine() {
-    const N = audio.engine;
+function _audioDisposeEngine(N) {
     if (!N) return;
     for (const n of N.nodes) { try { if (n.stop) n.stop(); } catch (e) { /* ignore */ } try { n.disconnect(); } catch (e) { /* ignore */ } }
     if (N.em) N.em.disconnect();
     if (N.em2) N.em2.disconnect();
-    audio.engine = null;
 }
 
+// 機関音1つぶんの音の仕組みを作る（形式が「なし」なら null）
 function _audioBuildEngine(type) {
-    _audioDisposeEngine();
-    audio.engineType = type;
-    if (!type || type === 'none' || !ENGINE_TYPES[type]) return;
+    if (!type || type === 'none' || !ENGINE_TYPES[type]) return null;
     const c = audio.ctx;
     const nodes = [];
     const keep = (n) => { nodes.push(n); return n; };
@@ -620,16 +617,25 @@ function _audioBuildEngine(type) {
         N.p.motor2 = keep(_mkGain(0, out));
         N.p.motorOsc2 = keep(_mkOsc('triangle', 600, N.p.motor2));
     }
-    audio.engine = N;
+    return N;
 }
 
+// 機関音は複数置ける（例：レシプロ2基と中央のタービン、左右の機関室など）。
+// どれも同じスクリューの回転数に合わせて鳴る
 function _audioUpdateEngine(t, dt) {
-    const type = (typeof shipSound !== 'undefined' && shipSound.engine) ? shipSound.engine.type : 'steam_recip';
-    if (type !== audio.engineType) _audioBuildEngine(type);
-    const N = audio.engine;
-    if (!N) return;
-    const now = audio.ctx.currentTime;
-    const T = ENGINE_TYPES[type];
+    const list = (typeof shipSound !== 'undefined' && Array.isArray(shipSound.engines)) ? shipSound.engines : [];
+    if (!audio.engines) audio.engines = [];
+    // 数・形式が変わったものを作り直す
+    for (let i = 0; i < Math.max(list.length, audio.engines.length); i++) {
+        const t0 = list[i] ? list[i].type : null;
+        const want = (t0 && t0 !== 'none' && ENGINE_TYPES[t0]) ? t0 : null;
+        const N = audio.engines[i];
+        if ((N ? N.type : null) !== want) {
+            if (N) _audioDisposeEngine(N);
+            audio.engines[i] = want ? _audioBuildEngine(want) : null;
+        }
+    }
+    audio.engines.length = list.length;
     const r = Math.min(1, Math.abs(physics.propRpm || 0));
     const slip = (typeof getPropSlip === 'function') ? getPropSlip() : 0;
     const load = Math.min(1, r * (0.6 + 0.8 * slip));             // 加速・逆転中ほど苦しそうに
@@ -638,18 +644,25 @@ function _audioUpdateEngine(t, dt) {
     audio._engLive = (audio._engLive === undefined) ? liveTarget
         : audio._engLive + (liveTarget - audio._engLive) * Math.min(1, (dt || 0) / (liveTarget ? 3 : 6));
     const live = audio._engLive;
+    list.forEach((E, i) => { const N = audio.engines[i]; if (N) _audioUpdateOneEngine(N, E, i, r, load, live); });
+}
+
+function _audioUpdateOneEngine(N, E, idx, r, load, live) {
+    const now = audio.ctx.currentTime;
+    const type = N.type;
+    const T = ENGINE_TYPES[type];
     const run = (T.idle || 0) * live + (1 - (T.idle || 0)) * r;    // 機関の回転（アイドリング込み）
     const revHz = (T.maxRpm || 60) / 60 * run;
     const set = (param, v, tc = 0.15) => param.setTargetAtTime(v, now, tc);
-    const vol = (shipSound && shipSound.engine && Number.isFinite(shipSound.engine.volume)) ? shipSound.engine.volume : 1;
+    const vol = Number.isFinite(E.volume) ? E.volume : 1;
 
     // 機関室の位置（煙突の下あたり、船体の中）。船内にいると大きく聞こえる
     const indoor = window.shelterIndoor || 0;
-    const ep = (typeof shipSound !== 'undefined' && shipSound.enginePos) ? shipSound.enginePos : { x: 0, y: 0, z: 0 };
-    const sym = !!(typeof shipSound !== 'undefined' && shipSound.engineSym && Math.abs(ep.x) > 1e-3);
+    const ex = E.x || 0, ey = E.y || 0, ez = E.z || 0;
+    const sym = !!(E.sym && Math.abs(ex) > 1e-3);
     const eg = vol * (0.55 + 0.45 * indoor) * (sym ? 0.5 : 1);
-    N.em.update(audioShipPoint(ep.x, ep.y, ep.z, audio._tmpE || (audio._tmpE = new THREE.Vector3())), eg);
-    N.em2.update(audioShipPoint(-ep.x, ep.y, ep.z, audio._tmpE2 || (audio._tmpE2 = new THREE.Vector3())), sym ? eg : 0);
+    N.em.update(audioShipPoint(ex, ey, ez, audio._tmpE || (audio._tmpE = new THREE.Vector3())), eg);
+    N.em2.update(audioShipPoint(-ex, ey, ez, audio._tmpE2 || (audio._tmpE2 = new THREE.Vector3())), sym ? eg : 0);
 
     set(N.p.aux.gain, (type === 'electric' ? 0.004 : 0.02 + 0.02 * r) * (0.35 + 0.65 * live));   // 補機（発電機）は機関終了でも少し回る
     set(N.p.hum.gain, 0.025 + 0.03 * run);

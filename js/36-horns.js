@@ -50,10 +50,13 @@ const _hornRuntime = [];   // 汽笛ごとの { em, out, voices, presses, strike
 function _defaultShipSound() {
     return {
         horns: [_defaultHorn('steam_chime')],
-        engine: { type: 'steam_recip', volume: 1 },
-        enginePos: { x: 0, y: 0, z: 0 },
-        engineSym: false,   // 左右対称の2か所から鳴らす（推進器のシンメトリーと同じ）
+        // 機関音は複数置ける（sym：左右対称の2か所から鳴らす。推進器のシンメトリーと同じ）
+        engines: [_defaultEngine('steam_recip')],
     };
+}
+function _defaultEngine(type) {
+    const T = (typeof ENGINE_TYPES !== 'undefined' && ENGINE_TYPES[type]) || { label: type };
+    return { name: T.label.replace(/（.*$/, ''), type, volume: 1, x: 0, y: 0, z: 0, sym: false };
 }
 function _defaultHorn(type) {
     // 置き場所：いちばん前の煙突の前側の上（汽笛は煙突に付いていることが多い）
@@ -436,7 +439,17 @@ function updateHorns(t, dt) {
 // ════════════════════════════════════════════════════════════════
 //  保存・読み込み（13-save-load-config.js から呼ぶ）
 // ════════════════════════════════════════════════════════════════
-function getShipSoundConfig() { return JSON.parse(JSON.stringify(shipSound)); }
+function getShipSoundConfig() {
+    const c = JSON.parse(JSON.stringify(shipSound));
+    // 前の版でも読めるよう、1つ目の機関音を以前の形でも書いておく
+    const e0 = shipSound.engines[0];
+    if (e0) {
+        c.engine = { type: e0.type, volume: e0.volume };
+        c.enginePos = { x: e0.x, y: e0.y, z: e0.z };
+        c.engineSym = !!e0.sym;
+    }
+    return c;
+}
 function applyShipSoundConfig(s) {
     if (audio.ctx) {
         stopHornSignal();
@@ -445,9 +458,19 @@ function applyShipSoundConfig(s) {
     _hornRuntime.length = 0;
     const d = _defaultShipSound();
     shipSound.horns = (s && Array.isArray(s.horns)) ? s.horns.map(h => Object.assign(_defaultHorn(h.type || 'steam_single'), h)) : d.horns;
-    shipSound.engine = Object.assign(d.engine, (s && s.engine) || {});
-    shipSound.enginePos = Object.assign(d.enginePos, (s && s.enginePos) || {});
-    shipSound.engineSym = !!(s && s.engineSym);
+    if (s && Array.isArray(s.engines)) {
+        shipSound.engines = s.engines.map(e => Object.assign(_defaultEngine(e.type || 'steam_recip'), e));
+    } else if (s && s.engine) {
+        // 以前の保存データ（機関音は1つだけだった）
+        const e = _defaultEngine(s.engine.type || 'steam_recip');
+        if (Number.isFinite(s.engine.volume)) e.volume = s.engine.volume;
+        Object.assign(e, s.enginePos || {});
+        e.sym = !!s.engineSym;
+        shipSound.engines = [e];
+    } else {
+        shipSound.engines = d.engines;
+    }
+    delete shipSound.engine; delete shipSound.enginePos; delete shipSound.engineSym;
     _soundMarkersDirty = true;
     renderSoundPanel();
 }
@@ -517,14 +540,46 @@ function renderSoundPanel() {
             _bindHold(btn, () => hornPress(i), () => hornRelease(i));
         });
     }
-    const eng = document.getElementById('engine-sound-type');
-    if (eng) {
-        eng.innerHTML = Object.entries(ENGINE_TYPES).map(([k, T]) => `<option value="${k}"${k === shipSound.engine.type ? ' selected' : ''}>${T.label}</option>`).join('');
+    const elist = document.getElementById('engine-list');
+    if (elist) {
+        elist.innerHTML = '';
+        shipSound.engines.forEach((e, i) => {
+            const typeOpts = Object.entries(ENGINE_TYPES).map(([k, T]) => `<option value="${k}"${k === e.type ? ' selected' : ''}>${T.label}</option>`).join('');
+            const card = document.createElement('div');
+            card.className = 'sp-item-card';
+            card.innerHTML = `
+                <div class="sp-item-header">
+                    <span class="sp-item-title">⚙ #${i + 1}
+                        <input type="text" value="${_esc(e.name || '')}" style="${_selStyle}width:9em;" oninput="shipSound.engines[${i}].name=this.value">
+                    </span>
+                    <button class="sp-remove-btn" onclick="engineRemove(${i})">✕</button>
+                </div>
+                <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+                    <span class="sp-label" style="min-width:0;">形式:</span>
+                    <select style="${_selStyle}max-width:100%;" onchange="engineSet(${i},'type',this.value)">${typeOpts}</select>
+                </div>
+                <div class="sp-row" style="gap:6px;">
+                    <span class="sp-label" style="min-width:0;">音量:</span>
+                    <input type="range" class="sp-slider" min="0" max="1.5" step="0.05" value="${e.volume != null ? e.volume : 1}" oninput="engineSet(${i},'volume',this.value)">
+                </div>
+                <div class="sp-xyz-row">
+                    <span class="sp-axis-label">X:</span><input type="number" id="engine-x-${i}" class="sp-xyz-input" value="${e.x}" step="0.1" oninput="engineSet(${i},'x',this.value)">
+                    <span class="sp-axis-label">Y:</span><input type="number" id="engine-y-${i}" class="sp-xyz-input" value="${e.y}" step="0.1" oninput="engineSet(${i},'y',this.value)">
+                    <span class="sp-axis-label">Z:</span><input type="number" id="engine-z-${i}" class="sp-xyz-input" value="${e.z}" step="0.1" oninput="engineSet(${i},'z',this.value)">
+                </div>
+                <div class="sp-row" style="gap:8px;flex-wrap:wrap;">
+                    <label class="sp-toggle"><input type="checkbox" ${e.sym ? 'checked' : ''} onchange="engineSet(${i},'sym',this.checked)"> シンメトリー（左右2か所）</label>
+                    <button class="sp-gizmo-btn" id="gizmo-engine-${i}" onclick="toggleGizmo('engine', ${i})">📍 ギズモ</button>
+                    <button class="sp-gizmo-btn" onclick="engineCopy(${i}, false)" title="同じ設定の機関音をもう1つ作る">⧉ 複製</button>
+                    <button class="sp-gizmo-btn" onclick="engineCopy(${i}, true)" title="左右反対側（Xを反転）に同じ機関音を作る">⇆ 反対舷に複製</button>
+                </div>`;
+            elist.appendChild(card);
+        });
     }
-    const ev = document.getElementById('engine-sound-volume');
-    if (ev) ev.value = shipSound.engine.volume != null ? shipSound.engine.volume : 1;
-    ['x', 'y', 'z'].forEach((k) => { const el = document.getElementById('engine-sound-' + k); if (el) el.value = shipSound.enginePos[k]; });
-    const es = document.getElementById('engine-sound-sym'); if (es) es.checked = !!shipSound.engineSym;
+    const eadd = document.getElementById('engine-add-type');
+    if (eadd && !eadd.options.length) {
+        eadd.innerHTML = Object.entries(ENGINE_TYPES).filter(([k]) => k !== 'none').map(([k, T]) => `<option value="${k}">${T.label}</option>`).join('');
+    }
     // 端末ごとの設定
     const S = audio.settings;
     const set = (id, v, prop = 'value') => { const el = document.getElementById(id); if (el) el[prop] = v; };
@@ -568,10 +623,11 @@ function hornRemove(i) {
 }
 function hornSetType(i, type) {
     const h = shipSound.horns[i];
-    // 種類を変えたら、その種類らしい音階に置き換える（名前もそのままなら合わせる）
+    // 種類を変えても音階はそのまま（名前が種類の名前のままなら、新しい種類の名前に合わせる）
     const oldLabel = HORN_TYPES[h.type] ? HORN_TYPES[h.type].label.replace(/（.*$/, '') : '';
     h.type = type;
-    h.notes = HORN_TYPES[type].notes.slice();
+    // 音階は変えない（ユーザーが決めた音のまま、鳴り方だけ変える）
+    if (!h.notes || !h.notes.length) h.notes = HORN_TYPES[type].notes.slice();
     if (!h.name || h.name === oldLabel) h.name = HORN_TYPES[type].label.replace(/（.*$/, '');
     renderSoundPanel();
 }
@@ -588,19 +644,52 @@ function hornRemoveNote(i, j) {
     h.notes.splice(j, 1);
     renderSoundPanel();
 }
-function setEngineSound(key, v) {
-    if (key === 'type') shipSound.engine.type = v;
-    else if (key === 'volume') shipSound.engine.volume = parseFloat(v) || 0;
-    else if (key === 'sym') shipSound.engineSym = !!v;
-    else shipSound.enginePos[key] = parseFloat(v) || 0;
+function engineSet(i, key, v) {
+    const e = shipSound.engines[i];
+    if (!e) return;
+    if (key === 'type') {
+        const oldLabel = ENGINE_TYPES[e.type] ? ENGINE_TYPES[e.type].label.replace(/（.*$/, '') : '';
+        e.type = v;
+        if (!e.name || e.name === oldLabel) { e.name = ENGINE_TYPES[v].label.replace(/（.*$/, ''); renderSoundPanel(); }
+    }
+    else if (key === 'volume') e.volume = parseFloat(v) || 0;
+    else if (key === 'sym') { e.sym = !!v; _soundMarkersDirty = true; }
+    else { e[key] = parseFloat(v) || 0; }
 }
-Object.assign(window, { hornAdd, hornRemove, hornSetType, hornSetNote, hornAddNote, hornRemoveNote, setEngineSound, setHornAuto });
+function engineAdd() {
+    const sel = document.getElementById('engine-add-type');
+    shipSound.engines.push(_defaultEngine(sel && sel.value ? sel.value : 'steam_recip'));
+    _soundMarkersDirty = true;
+    renderSoundPanel();
+}
+function engineRemove(i) {
+    shipSound.engines.splice(i, 1);
+    if (typeof disableGizmo === 'function') disableGizmo();
+    _soundMarkersDirty = true;
+    renderSoundPanel();
+}
+// 機関音をコピーする（すぐ後ろに入れる）。mirror：左右反対側（X を反転）に置く
+function engineCopy(i, mirror) {
+    const src = shipSound.engines[i];
+    if (!src) return;
+    const e = JSON.parse(JSON.stringify(src));
+    if (mirror) e.x = -(e.x || 0);
+    e.name = (src.name || '') + (mirror ? '（反対舷）' : '（コピー）');
+    shipSound.engines.splice(i + 1, 0, e);
+    if (typeof disableGizmo === 'function') disableGizmo();
+    _soundMarkersDirty = true;
+    renderSoundPanel();
+}
+// 以前の画面・保存形式からの呼び出し用（1つ目の機関音を変える）
+function setEngineSound(key, v) { if (!shipSound.engines.length) shipSound.engines.push(_defaultEngine('steam_recip')); engineSet(0, key, v); }
+Object.assign(window, { hornAdd, hornRemove, hornSetType, hornSetNote, hornAddNote, hornRemoveNote, setEngineSound, setHornAuto,
+                        engineSet, engineAdd, engineRemove, engineCopy });
 
 // ════════════════════════════════════════════════════════════════
 //  音の位置の目印とギズモ（船体設定を開いている間だけ表示）
 // ════════════════════════════════════════════════════════════════
 //  汽笛：黄色の角錐、機関室：赤い立方体（シンメトリーのときは反対側に薄い印）
-let _soundMarkers = { horns: [], engine: null, engineMirror: null };
+let _soundMarkers = { horns: [], engines: [] };   // engines: [{ m, mirror }]
 let _soundMarkersDirty = true;
 function _mkSoundMarker(color, geo) {
     const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.9 }));
@@ -613,15 +702,19 @@ function _rebuildSoundMarkers() {
     _soundMarkersDirty = false;
     if (typeof shipGroup === 'undefined' || !shipGroup) return;
     for (const m of _soundMarkers.horns) if (m.parent) m.parent.remove(m);
-    [_soundMarkers.engine, _soundMarkers.engineMirror].forEach(m => { if (m && m.parent) m.parent.remove(m); });
+    for (const e of _soundMarkers.engines) [e.m, e.mirror].forEach(m => { if (m && m.parent) m.parent.remove(m); });
     _soundMarkers.horns = shipSound.horns.map(() => { const m = _mkSoundMarker(0xffd23c, new THREE.ConeGeometry(0.12, 0.3, 4)); shipGroup.add(m); return m; });
-    _soundMarkers.engine = _mkSoundMarker(0xff4444, new THREE.BoxGeometry(0.25, 0.25, 0.25)); shipGroup.add(_soundMarkers.engine);
-    _soundMarkers.engineMirror = _mkSoundMarker(0xff4444, new THREE.BoxGeometry(0.25, 0.25, 0.25));
-    _soundMarkers.engineMirror.material.opacity = 0.35; shipGroup.add(_soundMarkers.engineMirror);
+    _soundMarkers.engines = shipSound.engines.map(() => {
+        const m = _mkSoundMarker(0xff4444, new THREE.BoxGeometry(0.25, 0.25, 0.25)); shipGroup.add(m);
+        const mirror = _mkSoundMarker(0xff4444, new THREE.BoxGeometry(0.25, 0.25, 0.25));
+        mirror.material.opacity = 0.35; shipGroup.add(mirror);
+        return { m, mirror };
+    });
 }
 function _updateSoundMarkers() {
-    if (_soundMarkersDirty || _soundMarkers.horns.length !== shipSound.horns.length
-        || (_soundMarkers.engine && typeof shipGroup !== 'undefined' && _soundMarkers.engine.parent !== shipGroup)) _rebuildSoundMarkers();
+    const e0 = _soundMarkers.engines[0];
+    if (_soundMarkersDirty || _soundMarkers.horns.length !== shipSound.horns.length || _soundMarkers.engines.length !== shipSound.engines.length
+        || (e0 && typeof shipGroup !== 'undefined' && e0.m.parent !== shipGroup)) _rebuildSoundMarkers();
     const panel = document.getElementById('settings-panel');
     const show = !!(panel && panel.classList.contains('open'));
     const dragging = typeof currentGizmoType !== 'undefined' ? currentGizmoType : null;
@@ -630,14 +723,22 @@ function _updateSoundMarkers() {
         m.visible = show;
         if (!(dragging === 'horn' && currentGizmoIndex === i)) m.position.set(h.x, h.y, h.z);
     });
-    const e = _soundMarkers.engine, em = _soundMarkers.engineMirror, p = shipSound.enginePos;
-    if (e) { e.visible = show; if (dragging !== 'engine') e.position.set(p.x, p.y, p.z); }
-    if (em) { em.visible = show && !!shipSound.engineSym && Math.abs(p.x) > 1e-3; em.position.set(-p.x, p.y, p.z); }
+    shipSound.engines.forEach((p, i) => {
+        const mk = _soundMarkers.engines[i]; if (!mk) return;
+        mk.m.visible = show;
+        if (!(dragging === 'engine' && currentGizmoIndex === i)) mk.m.position.set(p.x, p.y, p.z);
+        mk.mirror.visible = show && !!p.sym && Math.abs(p.x) > 1e-3;
+        mk.mirror.position.set(-mk.m.position.x, mk.m.position.y, mk.m.position.z);
+    });
 }
 // 10-ship-editor-propulsors.js の toggleGizmo / onGizmoChange から呼ばれる
 function getExtraGizmoTarget(type, index) {
     if (type === 'horn') { _updateSoundMarkers(); return { mesh: _soundMarkers.horns[index], btnId: `gizmo-horn-${index}` }; }
-    if (type === 'engine') { _updateSoundMarkers(); return { mesh: _soundMarkers.engine, btnId: 'gizmo-engine' }; }
+    if (type === 'engine') {
+        _updateSoundMarkers();
+        const i = index >= 0 ? index : 0;
+        return { mesh: _soundMarkers.engines[i] && _soundMarkers.engines[i].m, btnId: `gizmo-engine-${i}` };
+    }
     return null;
 }
 function onExtraGizmoChange(type, index, target) {
@@ -650,9 +751,11 @@ function onExtraGizmoChange(type, index, target) {
         return true;
     }
     if (type === 'engine') {
-        const e = shipSound.enginePos;
+        const i = index >= 0 ? index : 0;
+        const e = shipSound.engines[i];
+        if (!e) return true;
         e.x = r(p.x); e.y = r(p.y); e.z = r(p.z);
-        ['x', 'y', 'z'].forEach(k => { const el = document.getElementById('engine-sound-' + k); if (el) el.value = e[k]; });
+        ['x', 'y', 'z'].forEach(k => { const el = document.getElementById(`engine-${k}-${i}`); if (el) el.value = e[k]; });
         return true;
     }
     return false;
