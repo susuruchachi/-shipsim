@@ -68,13 +68,21 @@ function createGlobalSmokeSystem() {
             #endif
             varying float vFogDist;
             bool isPerspectiveMatrix(mat4 m) { return m[2][3] == -1.0; }
+            varying float vNear;
             void main() {
                 vAge = age; vRand = rand;
+                // 消えた粒（age > 1）は描かない。以前は大きさが age に比例したまま
+                // （不活性は age=999）画面いっぱいの点として毎回塗られ、全部の画素を
+                // 捨てていたので、煙だけで描画時間の大半を使っていた。
+                if (age > 1.0) { vNear = 0.0; vFogDist = 0.0; gl_PointSize = 0.0; gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
                 vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
                 vFogDist = -mvPos.z;
                 // Smaller, more gradual growth avoids the "blobby" look on small/slow ships
                 float baseSize = (7.0 + 42.0 * age + rand * 16.0) * sizeScale;
-                gl_PointSize = baseSize * (300.0 / -mvPos.z);
+                float ps = baseSize * (300.0 / max(0.01, -mvPos.z));
+                // カメラのすぐ近くの煙は画面を大きく覆うだけで重いので、大きくなるほど薄くして上限で止める
+                vNear = 1.0 - smoothstep(260.0, 520.0, ps);
+                gl_PointSize = min(ps, 520.0);
                 gl_Position = projectionMatrix * mvPos;
                 // v153-fix3: EXT_frag_depthに依存しない経路のみを使う。
                 #ifdef USE_LOGDEPTHBUF
@@ -95,6 +103,7 @@ function createGlobalSmokeSystem() {
             varying float vFogDist;
             varying float vAge;
             varying float vRand;
+            varying float vNear;
             // v153-fix3: EXT_frag_depthに依存しない経路のみを使う。
             #ifdef USE_LOGDEPTHBUF
                 uniform float logDepthBufFC;
@@ -102,10 +111,11 @@ function createGlobalSmokeSystem() {
             void main() {
                 // v153-fix3: 対数深度は頂点シェーダー側でgl_Position.zに直接
                 // エンコード済み。フラグメント側で追加の書き込みは不要。
-                if (vAge > 1.0) discard;
+                if (vAge > 1.0 || vNear <= 0.0) discard;
                 float alpha = smoothstep(0.0, 0.08, vAge) * (1.0 - smoothstep(0.35, 1.0, vAge));
-                alpha *= dens * (0.2 + 0.8 * vRand);
+                alpha *= dens * (0.2 + 0.8 * vRand) * vNear;
                 vec4 tex = texture2D(map, gl_PointCoord);
+                if (tex.a * alpha < 0.004) discard;
                 vec3 finalColor = color * lightFactor;
                 gl_FragColor = vec4(finalColor, tex.a * alpha);
                 {
