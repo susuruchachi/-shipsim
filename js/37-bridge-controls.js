@@ -63,7 +63,8 @@ const TG_ANSWER_DELAY = 1.3;   // 機関室が応答するまで[秒]
 // 真鍮のゴング、現代型は電子音、ほかは以前の小さなベル）
 const BRIDGE_BELLS = {
     auto:     'デザインに合わせる',
-    gong:     '真鍮のゴング（本物らしい音）',
+    phone:    '電話のようなベル（ジリリン）',
+    gong:     '真鍮のゴング（コーン）',
     classic:  '小さなベル（以前の音）',
     electric: '電子音',
 };
@@ -103,7 +104,8 @@ function _tgPos(design, order, special) {
 // 本物のチャドバーン（オリンピック級の船橋のテレグラフ）は、ハンドルを動かすと
 // 中の打ち子が真鍮のお椀形のゴングを「チリリン、チリリン」と連打し、機関室の
 // テレグラフも同じようなゴングで応える。
-//   gong    : 真鍮のゴング。1打ぶんの音（ゴングの倍音・うなり・打ち子の当たる音）を
+//   phone   : 電話のようなベル「ジリリン」（オリンピック級・クイーン・メリー風の標準）
+//   gong    : 真鍮のゴング「コーン」。1打ぶんの音（ゴングの倍音・うなり・打ち子の当たる音）を
 //             一度だけ計算して作り、それを少しずつ強さ・音程・間隔を変えて打つ。
 //             船橋の中の響きも少し足す。機関室の応答は低めで遠く、こもって聞こえる
 //   classic : 以前の小さなベル（速い連打）
@@ -111,18 +113,19 @@ function _tgPos(design, order, special) {
 function _bellKind() {
     if (bridgeUI.bell && bridgeUI.bell !== 'auto') return bridgeUI.bell;
     const d = bridgeUI.telegraph;
-    if (d === 'olympic' || d === 'queenmary') return 'gong';
+    if (d === 'olympic' || d === 'queenmary') return 'phone';
     if (d === 'modern') return 'electric';
     return 'classic';
 }
 
 const _gong = { ctx: null, buf: {}, verb: null };
 // 1打ぶんのゴングの音（f0：いちばん低い音の高さ）
-function _gongStrikeBuffer(c, f0, dark) {
-    const key = f0 + ':' + (dark ? 1 : 0);
+// decay：減衰の長さの倍率（1＝ゴング、0.3くらい＝電話の小さなベル）
+function _gongStrikeBuffer(c, f0, dark, decay = 1) {
+    const key = f0 + ':' + (dark ? 1 : 0) + ':' + decay;
     if (_gong.ctx !== c) { _gong.ctx = c; _gong.buf = {}; _gong.verb = null; }
     if (_gong.buf[key]) return _gong.buf[key];
-    const sr = c.sampleRate, len = Math.floor(sr * 2.6);
+    const sr = c.sampleRate, len = Math.floor(sr * Math.max(0.6, 2.6 * decay));
     const buf = c.createBuffer(1, len, sr);
     const d = buf.getChannelData(0);
     // お椀形のベルの倍音（整数倍ではない）。それぞれ2本のわずかにずれた音にして、
@@ -142,7 +145,7 @@ function _gongStrikeBuffer(c, f0, dark) {
         const beat = 0.6 + p.r * 0.35;          // うなりの速さ[Hz]
         const w1 = 2 * Math.PI * (f - beat / 2) / sr, w2 = 2 * Math.PI * (f + beat / 2) / sr;
         const ph1 = Math.random() * 6.28, ph2 = Math.random() * 6.28;
-        const k = 1 / (p.t * sr);
+        const k = 1 / (p.t * decay * sr);
         for (let i = 0; i < len; i++) {
             const env = Math.exp(-i * k);
             if (env < 1e-4) break;
@@ -221,6 +224,47 @@ function _gongRing(c, dest, t0, answer, steps) {
     }
 }
 
+// 電話のようなベル「ジリリン」：打ち子が2つの小さな椀形のベルを1秒に20回ほど
+// 交互に叩く。1打ずつは短く減衰するが、速く叩くので重なって「ジリリリ」と続く。
+// 2つのベルは少し高さが違い、打ち子の当たる「カチ」も混ざる
+function _phoneRing(c, dest, t0, answer, steps) {
+    const fA = answer ? 1480 : 1880, fB = answer ? 1640 : 2090;
+    const bufA = _gongStrikeBuffer(c, fA, answer, 0.3);
+    const bufB = _gongStrikeBuffer(c, fB, answer, 0.3);
+    const out = c.createGain();
+    out.gain.value = answer ? 0.3 : 0.42;
+    let node = out;
+    if (answer) {
+        const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3200; lp.Q.value = 0.5;
+        out.connect(lp); node = lp;
+    }
+    node.connect(dest);
+    const verb = _gongVerb(c, dest);
+    const send = c.createGain(); send.gain.value = answer ? 0.7 : 0.3;
+    node.connect(send); send.connect(verb);
+    // 鳴る長さ：ハンドルを大きく動かすほど長い。「ジリリン、ジリリン」と2回に分けて鳴らす
+    const bursts = answer ? 1 : (steps >= 3 ? 2 : 1);
+    const rate = 19 + Math.random() * 3;            // 1秒に叩く回数
+    let s = t0;
+    for (let b = 0; b < bursts; b++) {
+        const len = answer ? 0.55 : 0.6 + 0.08 * Math.min(4, steps || 1);
+        const n = Math.round(len * rate);
+        for (let k = 0; k < n; k++) {
+            const src = c.createBufferSource();
+            src.buffer = (k & 1) ? bufB : bufA;
+            src.playbackRate.value = 1 + (Math.random() - 0.5) * 0.003;
+            const g = c.createGain();
+            // 鳴り始めは打ち子の振れが小さく、すぐ強くなって、最後に弱まる
+            const env = Math.min(1, 0.45 + k / 3) * (k > n - 4 ? 0.6 : 1);
+            g.gain.value = env * (0.75 + 0.25 * Math.random());
+            src.connect(g); g.connect(out);
+            src.start(s + k / rate + (Math.random() - 0.5) * 0.004);
+            src.stop(s + k / rate + 1.2);
+        }
+        s += len + 0.28;
+    }
+}
+
 function telegraphBell(kind, answer, steps) {
     if (typeof audioEnsure !== 'function' || !audioEnsure() || !audio.buses.bridge) return;
     const c = audio.ctx, dest = audio.buses.bridge;
@@ -240,6 +284,11 @@ function telegraphBell(kind, answer, steps) {
             o.connect(_mkFilter('lowpass', 5000, 0.7, g)); g.connect(dest);
             o.start(s); o.stop(s + 0.1);
         }
+        return;
+    }
+    if (bell === 'phone') {
+        if (!answer && typeof audioBurst === 'function') audioBurst(dest, { dur: 0.05, attack: 0.001, gain: 0.16, type: 'bandpass', freq: 900, q: 2.5 });
+        _phoneRing(c, dest, t0 + (answer ? 0 : 0.03), answer, steps);
         return;
     }
     if (bell === 'gong') {
