@@ -47,7 +47,8 @@
 
 const LB_RGBM_RANGE = 16.0;
 const LB_TEX_W = 2048;                    // 頂点の表（テクスチャ）の幅
-const LB_CHUNK_ROWS = 128;                // 1回に計算する頂点 = 2048×128
+const LB_CHUNK_ROWS = 32;                 // 1回に計算する頂点 = 2048×32（1回の計算を短くして、焼き込み中もカクつかないように）
+const LB_TRIS_PER_STEP = 4e6;             // 1フレームに影の地図で描く三角形の数の目安（船の三角形数×枚数）
 const LB_CHUNK = LB_TEX_W * LB_CHUNK_ROWS;
 const LB_ATLAS = 2048;                    // 影の地図をまとめる画像の大きさ
 const LB_TILE = 256;                      // 灯り1つぶんの影の地図
@@ -1062,7 +1063,7 @@ function _lbRestoreRenderState(s) {
 }
 
 // 影の地図を撮る（views は1回の計算ぶん、最大64枚）。船の基準の姿勢で呼ぶ
-function _lbRenderViews(gpu, views, meshes) {
+function _lbRenderViews(gpu, views, meshes, from = 0, to = views.length) {
     const st = _lbSaveRenderState();
     const rt = gpu.atlas, cam = gpu.cam, VD = gpu.viewTex.image.data;
     try {
@@ -1075,7 +1076,8 @@ function _lbRenderViews(gpu, views, meshes) {
         renderer.setClearColor(0xffffff, 1);
         const vp = new THREE.Matrix4();
         const up = new THREE.Vector3();
-        views.forEach((v, j) => {
+        for (let j = from; j < to; j++) {
+            const v = views[j];
             const tx = j % LB_TILES_ROW, ty = (j / LB_TILES_ROW) | 0;
             rt.viewport.set(tx * LB_TILE, ty * LB_TILE, LB_TILE, LB_TILE);
             rt.scissor.set(tx * LB_TILE, ty * LB_TILE, LB_TILE, LB_TILE);
@@ -1103,7 +1105,7 @@ function _lbRenderViews(gpu, views, meshes) {
             const o4 = (4 * LB_TILES + j) * 4;
             VD[o4] = tx; VD[o4 + 1] = ty; VD[o4 + 2] = cam.far;
             VD[o4 + 3] = 2 * Math.tan(THREE.MathUtils.degToRad(v.fov) / 2) / LB_TILE;
-        });
+        }
         rt.scissorTest = false;
         rt.viewport.set(0, 0, LB_ATLAS, LB_ATLAS);
         rt.scissor.set(0, 0, LB_ATLAS, LB_ATLAS);
@@ -1312,6 +1314,9 @@ function* _lbJob(job) {
     }
 
     // ── 5. GPU で計算 ──
+    // 灯りの組（64灯・影の地図64枚まで）ごとに、影の地図を1回だけ撮り、その組が届く
+    // 頂点の塊を順に計算する（以前は塊ごとに同じ灯りの影の地図を撮り直していた）。
+    // 1フレームに進めるのは、影の地図 LB_VIEWS_PER_STEP 枚か、塊1つの計算まで。
     const outputs = {};
     for (const ch of set) outputs[ch] = meshes.map((m, mi) => new Uint8Array(counts[mi] * 4));
     const meshOf = (g) => {   // 通し番号 → メッシュ番号（二分探索）
@@ -1319,76 +1324,125 @@ function* _lbJob(job) {
         while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (meshStart[mid] <= g) lo = mid; else hi = mid - 1; }
         return lo;
     };
-    const gpu = _lbCreateGpu();
-    const acc = new Float32Array(LB_CHUNK * 3);
     const nChunks = Math.ceil(N / LB_CHUNK);
-    const cMin = new THREE.Vector3(), cMax = new THREE.Vector3(), tmpV = new THREE.Vector3();
-    let stepsDone = 0;
-    // 進み具合の見積もり（灯りと頂点の塊の組の数）
-    const totalSteps = Math.max(1, nChunks * set.length);
-    try {
-        for (let ci = 0; ci < nChunks; ci++) {
-            const c0 = ci * LB_CHUNK, cn = Math.min(LB_CHUNK, N - c0);
-            // 頂点の表を書く
-            const PD = gpu.posTex.image.data, ND = gpu.nrmTex.image.data;
-            PD.fill(0); ND.fill(0);
-            cMin.set(Infinity, Infinity, Infinity); cMax.set(-Infinity, -Infinity, -Infinity);
-            for (let k = 0; k < cn; k++) {
-                const g = order[c0 + k];
-                const x = P[g * 3], y = P[g * 3 + 1], z = P[g * 3 + 2];
-                PD[k * 4] = x; PD[k * 4 + 1] = y; PD[k * 4 + 2] = z; PD[k * 4 + 3] = 1;
-                ND[k * 4] = Nq[g * 3] + 128; ND[k * 4 + 1] = Nq[g * 3 + 1] + 128; ND[k * 4 + 2] = Nq[g * 3 + 2] + 128; ND[k * 4 + 3] = 255;
-                if (x < cMin.x) cMin.x = x; if (y < cMin.y) cMin.y = y; if (z < cMin.z) cMin.z = z;
-                if (x > cMax.x) cMax.x = x; if (y > cMax.y) cMax.y = y; if (z > cMax.z) cMax.z = z;
-            }
-            gpu.posTex.needsUpdate = true;
-            gpu.nrmTex.needsUpdate = true;
-            const box = new THREE.Box3(cMin.clone(), cMax.clone());
+    // 並べた順の頂点の表（塊ごとにテクスチャへ写すだけにする）と、塊の範囲
+    const PDall = new Float32Array(N * 4), NDall = new Uint8Array(N * 4);
+    const boxes = [];
+    for (let ci = 0; ci < nChunks; ci++) {
+        const c0 = ci * LB_CHUNK, cn = Math.min(LB_CHUNK, N - c0);
+        const bmin = new THREE.Vector3(Infinity, Infinity, Infinity), bmax = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+        for (let k = 0; k < cn; k++) {
+            const g = order[c0 + k], o = (c0 + k) * 4;
+            const x = P[g * 3], y = P[g * 3 + 1], z = P[g * 3 + 2];
+            PDall[o] = x; PDall[o + 1] = y; PDall[o + 2] = z; PDall[o + 3] = 1;
+            NDall[o] = Nq[g * 3] + 128; NDall[o + 1] = Nq[g * 3 + 1] + 128; NDall[o + 2] = Nq[g * 3 + 2] + 128; NDall[o + 3] = 255;
+            if (x < bmin.x) bmin.x = x; if (y < bmin.y) bmin.y = y; if (z < bmin.z) bmin.z = z;
+            if (x > bmax.x) bmax.x = x; if (y > bmax.y) bmax.y = y; if (z > bmax.z) bmax.z = z;
+        }
+        boxes.push(new THREE.Box3(bmin, bmax));
+    }
+    yield 'frame';
+    if (job.aborted) return;
 
-            for (const ch of set) {
-                // この塊に届く灯りだけ
-                const near = lights[ch].filter(L => box.distanceToPoint(tmpV.copy(L.pos)) <= L.range);
-                acc.fill(0);
-                let i0 = 0;
-                while (i0 < near.length) {
-                    // 1回ぶん（灯り64・影の地図64枚まで）
-                    const batch = [];
-                    let nv = 0;
-                    while (i0 < near.length && batch.length < LB_MAX_LIGHTS && nv + near[i0].views.length <= LB_TILES) {
-                        batch.push(near[i0]); nv += near[i0].views.length; i0++;
-                    }
-                    const views = [];
-                    batch.forEach(L => L.views.forEach(v => views.push(v)));
-                    _lbCanonical(() => _lbRenderViews(gpu, views, meshes));
-                    _lbWriteLights(gpu, batch);
+    // 灯りを空間の順に並べて組にする（近い灯り同士が同じ組になり、届く塊が少なくなる）
+    const tmpV = new THREE.Vector3();
+    // 1フレームに撮る影の地図の枚数：重い船ほど少なく（1枚＝船全体を1回描く）
+    let shipTris = 0;
+    meshes.forEach(m => { const g = m.geometry; shipTris += (g.index ? g.index.count : g.attributes.position.count) / 3; });
+    const LB_VIEWS_PER_STEP = Math.max(1, Math.min(16, Math.floor(LB_TRIS_PER_STEP / Math.max(1, shipTris))));
+    const plan = {};
+    let totalSteps = 0;
+    for (const ch of set) {
+        const Ls = lights[ch].slice();
+        const lmin = new THREE.Vector3(Infinity, Infinity, Infinity), lmax = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+        Ls.forEach(L => { lmin.min(L.pos); lmax.max(L.pos); });
+        const ext = lmax.clone().sub(lmin);
+        const q = (L) => {
+            const f = (v, lo, e) => Math.min(1023, Math.max(0, ((v - lo) / Math.max(1e-6, e) * 1023) | 0));
+            const sp = (x) => { x &= 0x3ff; x = (x | (x << 16)) & 0x30000ff; x = (x | (x << 8)) & 0x300f00f; x = (x | (x << 4)) & 0x30c30c3; x = (x | (x << 2)) & 0x9249249; return x; };
+            return (sp(f(L.pos.x, lmin.x, ext.x)) | (sp(f(L.pos.y, lmin.y, ext.y)) << 1) | (sp(f(L.pos.z, lmin.z, ext.z)) << 2)) >>> 0;
+        };
+        Ls.forEach(L => { L._z = q(L); });
+        Ls.sort((x, y) => x._z - y._z);
+        const batches = [];
+        let i0 = 0;
+        while (i0 < Ls.length) {
+            const batch = [];
+            let nv = 0;
+            while (i0 < Ls.length && batch.length < LB_MAX_LIGHTS && nv + Ls[i0].views.length <= LB_TILES) {
+                batch.push(Ls[i0]); nv += Ls[i0].views.length; i0++;
+            }
+            if (!batch.length) { i0++; continue; }   // 影の地図が多すぎる灯り（起こらない）
+            const reach = [];
+            for (let ci = 0; ci < nChunks; ci++) {
+                if (batch.some(L => boxes[ci].distanceToPoint(tmpV.copy(L.pos)) <= L.range)) reach.push(ci);
+            }
+            if (!reach.length) continue;
+            const views = [];
+            batch.forEach(L => L.views.forEach(v => views.push(v)));
+            batches.push({ batch, reach, views });
+            totalSteps += Math.ceil(views.length / LB_VIEWS_PER_STEP) + reach.length;
+        }
+        plan[ch] = batches;
+    }
+    totalSteps = Math.max(1, totalSteps);
+
+    const gpu = _lbCreateGpu();
+    let stepsDone = 0;
+    const progress = () => {
+        const frac = stepsDone / totalSteps;
+        _lbSetStatus(`照明を焼き込んでいます… ${Math.round(frac * 100)}%`, 0.32 + 0.66 * frac);
+    };
+    try {
+        for (const ch of set) {
+            const accAll = new Float32Array(N * 3);
+            for (const { batch, reach, views } of plan[ch]) {
+                // 影の地図を少しずつ撮る
+                for (let j = 0; j < views.length; j += LB_VIEWS_PER_STEP) {
+                    const j1 = Math.min(views.length, j + LB_VIEWS_PER_STEP);
+                    _lbCanonical(() => _lbRenderViews(gpu, views, meshes, j, j1));
+                    stepsDone++; progress();
+                    yield 'frame';
+                    if (job.aborted) return;
+                }
+                _lbWriteLights(gpu, batch);
+                // 届く塊を1つずつ計算する
+                for (const ci of reach) {
+                    const c0 = ci * LB_CHUNK, cn = Math.min(LB_CHUNK, N - c0);
+                    const PD = gpu.posTex.image.data, ND = gpu.nrmTex.image.data;
+                    PD.set(PDall.subarray(c0 * 4, (c0 + cn) * 4));
+                    ND.set(NDall.subarray(c0 * 4, (c0 + cn) * 4));
+                    if (cn < LB_CHUNK) { PD.fill(0, cn * 4); ND.fill(0, cn * 4); }
+                    gpu.posTex.needsUpdate = true;
+                    gpu.nrmTex.needsUpdate = true;
                     const buf = _lbBakePass(gpu);
                     for (let k = 0; k < cn; k++) {
                         const a = buf[k * 4 + 3];
                         if (!a) continue;
-                        const s = a * (LB_RGBM_RANGE / (255 * 255));
-                        acc[k * 3] += buf[k * 4] * s; acc[k * 3 + 1] += buf[k * 4 + 1] * s; acc[k * 3 + 2] += buf[k * 4 + 2] * s;
+                        const sc = a * (LB_RGBM_RANGE / (255 * 255)), o = (c0 + k) * 3;
+                        accAll[o] += buf[k * 4] * sc; accAll[o + 1] += buf[k * 4 + 1] * sc; accAll[o + 2] += buf[k * 4 + 2] * sc;
                     }
-                    const frac = (stepsDone + i0 / Math.max(1, near.length)) / totalSteps;
-                    _lbSetStatus(`照明を焼き込んでいます… ${Math.round(frac * 100)}%`, 0.32 + 0.66 * frac);
+                    stepsDone++; progress();
                     yield 'frame';
                     if (job.aborted) return;
                 }
-                // RGBM にして頂点へ
-                const outCh = outputs[ch];
-                for (let k = 0; k < cn; k++) {
-                    const g = order[c0 + k];
-                    const mi = meshOf(g), vi = g - meshStart[mi];
-                    const r = acc[k * 3] / LB_RGBM_RANGE, gg = acc[k * 3 + 1] / LB_RGBM_RANGE, b = acc[k * 3 + 2] / LB_RGBM_RANGE;
-                    let m = Math.min(1, Math.max(r, gg, b, 1e-6));
-                    m = Math.ceil(m * 255) / 255;
-                    const o = vi * 4, O = outCh[mi];
-                    O[o] = Math.min(255, Math.round(r / m * 255));
-                    O[o + 1] = Math.min(255, Math.round(gg / m * 255));
-                    O[o + 2] = Math.min(255, Math.round(b / m * 255));
-                    O[o + 3] = Math.round(m * 255);
-                }
-                stepsDone++;
             }
+            // RGBM にして頂点へ
+            const outCh = outputs[ch];
+            for (let k = 0; k < N; k++) {
+                const g = order[k];
+                const mi = meshOf(g), vi = g - meshStart[mi];
+                const r = accAll[k * 3] / LB_RGBM_RANGE, gg = accAll[k * 3 + 1] / LB_RGBM_RANGE, b = accAll[k * 3 + 2] / LB_RGBM_RANGE;
+                let m = Math.min(1, Math.max(r, gg, b, 1e-6));
+                m = Math.ceil(m * 255) / 255;
+                const o = vi * 4, O = outCh[mi];
+                O[o] = Math.min(255, Math.round(r / m * 255));
+                O[o + 1] = Math.min(255, Math.round(gg / m * 255));
+                O[o + 2] = Math.min(255, Math.round(b / m * 255));
+                O[o + 3] = Math.round(m * 255);
+            }
+            yield 'frame';
+            if (job.aborted) return;
         }
     } finally {
         _lbDisposeGpu(gpu);
