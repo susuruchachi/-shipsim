@@ -241,6 +241,7 @@ function _trOnHeights(msg) {
     if (msg.which === 'near') {
         terrain.nearH = { H: msg.H, n: TR_NEAR.n, half: TR_NEAR.half, cx, cz };
         _brkBuild(terrain.nearH);
+        _trSeabedTex(terrain.nearH);
         _trDispose(terrain.near);
         terrain.near = _trBuildMesh(msg.H, TR_NEAR.n, TR_NEAR.half, cx, cz, null);
         if (terrain.near) scene.add(terrain.near);
@@ -451,6 +452,7 @@ function _trClearAll() {
     terrain.depth = null;
     terrain.nearH = null;
     _brkBuild(null);
+    _trSeabedTex(null);
 }
 
 // モードが変わった・港へ移動した（43-world.js から）
@@ -461,6 +463,48 @@ function worldTerrainModeChanged(moved) {
     if (world.mode === 'world') { worldBuildPorts(); terrain._dirty = true; }
 }
 window.worldTerrainModeChanged = worldTerrainModeChanged;
+
+// ════════════════════════════════════════════════════════════════
+//  浅い海の海底を水面から見えるように（04-scene-and-water-init.js の水のシェーダーへ渡す）
+// ════════════════════════════════════════════════════════════════
+//  船のまわり（細かい格子と同じ ±7km）の海底の 色（rgb）と 深さ/200m（a）を 1 枚の絵にする。
+//  砂地・岩場・海草の生えた所・泥を、深さと傾き、場所ごとのまだらで塗り分ける。
+let _trSbTex = null;
+function _trSeabedTex(G) {
+    const U = window._waterUniforms;
+    if (!U || !U.seabedTex) return;
+    if (!G) { U.seabedRect.value.w = 0; return; }
+    const { H, n, half, cx, cz } = G, step = half * 2 / (n - 1);
+    const data = new Uint8Array(n * n * 4);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+        const k = j * n + i, h = H[k], o = k * 4;
+        const d = Math.max(0, -h);
+        const hx = H[j * n + Math.min(n - 1, i + 1)] - H[j * n + Math.max(0, i - 1)];
+        const hz = H[Math.min(n - 1, j + 1) * n + i] - H[Math.max(0, j - 1) * n + i];
+        const slope = Math.hypot(hx, hz) / (2 * step);
+        const x = cx - half + i * step, z = cz - half + j * step;
+        const mott = (Math.sin(x * 0.013 + z * 0.007) * Math.sin(x * 0.005 - z * 0.011) + 1) * 0.5;
+        let r, g, b;
+        if (slope > 0.12 || (d < 12 && mott > 0.72)) { r = 0.42; g = 0.40; b = 0.36; }         // 岩場
+        else if (d > 8 && d < 30 && mott < 0.35) { r = 0.30; g = 0.42; b = 0.26; }             // 海草
+        else if (d > 60) { r = 0.40; g = 0.42; b = 0.38; }                                    // 泥
+        else { r = 0.80; g = 0.74; b = 0.56; }                                                 // 砂地
+        const shade = 0.85 + 0.3 * mott;
+        data[o] = Math.min(255, r * shade * 255); data[o + 1] = Math.min(255, g * shade * 255); data[o + 2] = Math.min(255, b * shade * 255);
+        data[o + 3] = Math.min(255, Math.round(d / 200 * 255));
+    }
+    if (_trSbTex && (_trSbTex.image.width !== n)) { _trSbTex.dispose(); _trSbTex = null; }
+    if (!_trSbTex) {
+        _trSbTex = new THREE.DataTexture(data, n, n, THREE.RGBAFormat, THREE.UnsignedByteType);
+        _trSbTex.minFilter = THREE.LinearFilter; _trSbTex.magFilter = THREE.LinearFilter;
+        _trSbTex.wrapS = _trSbTex.wrapT = THREE.ClampToEdgeWrapping;
+        _trSbTex.generateMipmaps = false;
+    } else _trSbTex.image.data.set(data);
+    _trSbTex.needsUpdate = true;
+    U.seabedTex.value = _trSbTex;
+    // 点 i の中心が格子の点に来るように、半升ずらす
+    U.seabedRect.value.set(cx - half - step / 2, cz - half - step / 2, n * step, 1);
+}
 
 // ════════════════════════════════════════════════════════════════
 //  浅瀬・岩礁の白波（水面の下の浅瀬は見えないので、波が砕ける白い泡で分かるように）
@@ -610,10 +654,18 @@ function _trHullScore(x, z, h, off, out) {
     const r = h * Math.PI / 180, fx = Math.sin(r), fz = Math.cos(r), sx = Math.cos(r), sz = -Math.sin(r);
     const ox = x + fx * off.a + sx * off.s, oz = z + fz * off.a + sz * off.s;
     let score = 0, hard = 0;
+    // 船底の高さは、今の船の姿勢（波で上下・縦揺れ・横揺れしている）から求める。
+    // 波の山で船が持ち上がれば船底も上がり、座礁していても外れる
+    const hp = window.hullProfile, scl = physics.scale || 1;
+    const M = shipGroup.matrixWorld.elements;
+    const wl = (hp && hp.ready) ? (hp.designWaterlineY || 0) : 0;
     for (const p of _trHullPoints()) {
         const px = ox + fx * p.a + sx * p.s, pz = oz + fz * p.a + sz * p.s;
         const b = worldSeabedAt(px, pz);
-        const c = b + p.d;                               // 正：底（岸壁）が船底より上
+        // 船の中の点（模型の座標）→ ワールドの高さ（行列の y 行だけ使う）
+        const lx = p.s / scl, ly = wl - p.d / scl, lz = p.a / scl;
+        const keelY = M[1] * lx + M[5] * ly + M[9] * lz + M[13];
+        const c = b - keelY;                             // 正：底（岸壁）が船底より上
         if (c > 0) { score += Math.min(12, c); if (out) out.push(p); }
         if (b > 0) hard++;                               // 岸壁・桟橋・陸（水面より上）の中
     }

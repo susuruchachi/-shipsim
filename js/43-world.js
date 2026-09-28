@@ -154,6 +154,12 @@ function worldShoal(ux, uy, uz, h, oct) {
     if (top <= h) return h;
     return h + (top - h) * w;
 }
+// その点のまわりに浅瀬・岩が出ることがないか（大陸棚より深い、または「浅瀬の多い海域」の外）
+function worldShoalFree(ux, uy, uz) {
+    const h = worldHeightFromE(worldNoiseE(ux, uy, uz, 14));
+    if (h < -160) return true;
+    return _wNoise3(ux * 140 + 11.3, uy * 140 - 4.1, uz * 140 + 7.7) < 0.15;
+}
 // 球の上の点の高さ[m]（浅瀬・岩礁込み）
 function worldHeightAt(ux, uy, uz, oct) {
     return worldShoal(ux, uy, uz, worldHeightFromE(worldNoiseE(ux, uy, uz, oct)), oct);
@@ -557,8 +563,9 @@ function worldPortChannelLen(p) {
     if (p._chLen) return p._chLen;
     const T = PORT_TYPES[p.type], F = _worldFrame(p.lat, p.lon), br = p.seaBearing * Math.PI / 180;
     const sx = Math.sin(br), sz = Math.cos(br);
-    let len = 9000, deepFrom = -1;
-    for (let d = 0; d <= 9000; d += 100) {
+    // 浅瀬の出る所（大陸棚で「浅瀬の多い海域」）を抜けて、そうでない所が 1.5km 続くまで伸ばす
+    let len = 25000, deepFrom = -1;
+    for (let d = 0; d <= 25000; d += 100) {
         const a = T.basin + d;
         const x = F.C.x + (a * sx) / WORLD_R * F.E.x + (a * sz) / WORLD_R * F.N.x;
         const y = F.C.y + (a * sx) / WORLD_R * F.E.y + (a * sz) / WORLD_R * F.N.y;
@@ -566,8 +573,8 @@ function worldPortChannelLen(p) {
         const l = Math.hypot(x, y, z), ux = x / l, uy = y / l, uz = z / l;
         const e = worldNoiseE(ux, uy, uz, 16);
         if (e >= 0) { len = Math.max(600, d - 150); break; }          // 島・岬：その手前まで
-        // 航路の幅いっぱい（両脇も）深いか
-        let deep = -worldHeightAt(ux, uy, uz, 16) > T.depth + 6;
+        // 深くて、しかも浅瀬が出ない所か
+        let deep = -worldHeightAt(ux, uy, uz, 16) > T.depth + 6 && worldShoalFree(ux, uy, uz);
         if (deep) deepFrom = deepFrom < 0 ? d : deepFrom; else deepFrom = -1;
         if (deepFrom >= 0 && d - deepFrom >= 1500) { len = Math.max(1200, deepFrom + 400); break; }
     }

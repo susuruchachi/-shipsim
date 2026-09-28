@@ -402,6 +402,10 @@ function createWater() {
         // 水面になり、波の陰に隠れている窓の光まで抽出され、海面から透けて
         // にじんで見えていた。このシェーダーのまま黒く塗れば波で正しく隠れる。
         uBloomDark: { value: 0.0 },
+        // 浅い海の海底（44-world-terrain.js が船のまわりの海底の色・深さを書き込む）
+        //  seabedTex：rgb＝海底の色、a＝深さ/200m。seabedRect：左下 x,z・一辺・使うか(1/0)
+        seabedTex:  { value: null },
+        seabedRect: { value: new THREE.Vector4(0, 0, 1, 0) },
         normalMap1: { value: wNorm1 },
         normalMap2: { value: wNorm2 },
         normalMap3: { value: wNorm3 },
@@ -1467,6 +1471,8 @@ function createWater() {
             uniform sampler2D reflectionTex;
             uniform float     reflectionStrength;
             uniform float     uBloomDark;
+            uniform sampler2D seabedTex;
+            uniform vec4      seabedRect;
             // 太陽シャドウ（v83: 自前サンプリング。Three.js標準のreceiveShadowは
             // 完全自前シェーダーには自動適用されないため、手動で判定する）
             uniform sampler2D sunShadowMap;
@@ -1744,6 +1750,25 @@ function createWater() {
 
                 float depth = vColor.g;
                 vec3 waterBase = mix(deepColor, shallowColor, depth);
+                // ── 浅い海では海底が透けて見える（深さ 200m まで）──
+                // 浅いほどはっきり、深いほど青緑の水に吸われて見えなくなる。
+                // 波の傾きで少しゆらす（光の屈折）。
+                if (seabedRect.w > 0.5) {
+                    vec2 suv = (vWorldPos.xz - seabedRect.xy) / seabedRect.z;
+                    if (suv.x > 0.001 && suv.y > 0.001 && suv.x < 0.999 && suv.y < 0.999) {
+                        vec4 sb0 = texture2D(seabedTex, suv);
+                        float sd0 = sb0.a * 200.0;
+                        vec2 wob = n.xz * min(sd0, 40.0) * 0.15 / seabedRect.z;     // ゆらぎ[m]→テクスチャ座標
+                        vec4 sb = texture2D(seabedTex, suv + wob);
+                        float sd = sb.a * 200.0;
+                        float vis = pow(clamp(1.0 - sd / 200.0, 0.0, 1.0), 1.8) * 0.9;
+                        // 深くなるほど赤が先に吸われて青緑になる。明るさは水の色（昼夜で変わる）に合わせる
+                        vec3 trans = exp(-sd * vec3(0.060, 0.022, 0.016));
+                        float lum = dot(shallowColor, vec3(0.3, 0.5, 0.2));
+                        vec3 seen = sb.rgb * lum * 4.0 * trans + shallowColor * (1.0 - trans) * 0.8;
+                        waterBase = mix(waterBase, seen, vis);
+                    }
+                }
                 // v162: 「凹凸の深さ高さが出てる感じがしない」への対応その2。
                 // specular(下)は太陽の映り込みが鋭い点として光る成分で、凹凸の
                 // "形"そのものを陰影として見せる役割はscatterが担っている
