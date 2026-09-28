@@ -13,7 +13,7 @@
 //  座標：physics.heading は上から見て左回りに増える。船の中の +x は左舷側で、その向きは
 //        (cos h, −sin h)、船首の向きは (sin h, cos h)。右舷は −x。
 
-const TUG_MAX = 4;
+const TUG_MAX = 6;
 // 全力の引く力[N]：船の大きさに合わせた港のタグ（小さい船 12 トン 〜 大きな船 70 トン）
 function _tugPullN() { return Math.max(12, Math.min(70, 10 + (physics.mass || 1))) * 9806; }
 const TUG_LEN = 28, TUG_BEAM = 10;       // タグの大きさ[m]
@@ -118,7 +118,7 @@ function tugStations() {
         });
     }
     // 金物が無くても押せるように、船首・船尾の舷側も
-    for (const [zn, nm] of [[0.75, '船首'], [-0.75, '船尾']]) for (const s of [1, -1]) {
+    for (const [zn, nm] of [[0.75, '船首'], [0, '中央'], [-0.75, '船尾']]) for (const s of [1, -1]) {
         const z = zn * hl, hw = _tugHalfWidth(z);
         out.push({ key: `d${zn}:${s}`, label: `${nm}の${s > 0 ? '左舷' : '右舷'}（舷側）`, x: s * hw, y: wl, z, fitting: false, side: s });
     }
@@ -155,7 +155,14 @@ function tugCall(stationKey) {
         for (let k = 0; k < 16 && !from; k++) {
             const ang = base + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * Math.PI / 8;
             const x = shipGroup.position.x + Math.sin(ang) * r, z = shipGroup.position.z + Math.cos(ang) * r;
-            if (!_tugPts(x, z, ang + Math.PI).some(q => _tugStaticBlocked(q.x, q.z))) from = new THREE.Vector3(x, 0, z);
+            if (_tugPts(x, z, ang + Math.PI).some(q => _tugStaticBlocked(q.x, q.z))) continue;
+            // 船までまっすぐ水の上を来られる所から（岬や砂州の向こうから出てこないように）
+            let clear = true;
+            for (let d = 20; d < r - 60 && clear; d += 20) {
+                const px = x - Math.sin(ang) * d, pz = z - Math.cos(ang) * d;
+                if (_tugStaticBlocked(px, pz) || _tugStaticBlocked(px + Math.cos(ang) * 12, pz - Math.sin(ang) * 12) || _tugStaticBlocked(px - Math.cos(ang) * 12, pz + Math.sin(ang) * 12)) clear = false;
+            }
+            if (clear) from = new THREE.Vector3(x, 0, z);
         }
         if (from) break;
     }
@@ -368,8 +375,44 @@ function _tugGridPath(G, x, z, gx, gz) {
 }
 
 // ── 毎フレーム（物理の早送りに合わせて、細かく刻んで進める）──
+// 船の通った跡（深い水の道）。見通しの利かないタグは、これをたどって船に追いつく
+const _tugCrumbs = [];
+window._tugCrumbs = _tugCrumbs;
+function _tugRecordCrumb() {
+    if (typeof shipGroup === 'undefined' || !shipGroup) return;
+    const p = shipGroup.position, L = _tugCrumbs[_tugCrumbs.length - 1];
+    if (L && Math.hypot(p.x - L.x, p.z - L.z) > 5000) _tugCrumbs.length = 0;      // 港へ移った・原点を移した
+    if (!L || Math.hypot(p.x - L.x, p.z - L.z) > 40) { _tugCrumbs.push({ x: p.x, z: p.z }); if (_tugCrumbs.length > 250) _tugCrumbs.shift(); }
+}
+// タグが通れる見通し（まっすぐ水の上を行けるか。タグの幅の分、左右も見る）
+function _tugLos(x0, z0, x1, z1) {
+    const d = Math.hypot(x1 - x0, z1 - z0); if (d < 1) return true;
+    const ux = (x1 - x0) / d, uz = (z1 - z0) / d;
+    for (let s = 15; s < d; s += 15) {
+        const x = x0 + ux * s, z = z0 + uz * s;
+        if (_tugStaticBlocked(x, z) || _tugStaticBlocked(x - uz * 7, z + ux * 7) || _tugStaticBlocked(x + uz * 7, z - ux * 7)) return false;
+    }
+    return true;
+}
+// 見通しが利かないとき：見える跡のうち、いちばん船に近い（新しい）ものへ
+function _tugCrumbGoal(tg, gx, gz) {
+    tg.losT = (tg.losT || 0) - 1;
+    if (tg.crumbGoal && Math.hypot(tg.crumbGoal.x - tg.pos.x, tg.crumbGoal.z - tg.pos.z) < 30) tg.losT = 0;   // 着いたら次の跡へ
+    if (tg.losT > 0) return tg.crumbGoal || null;
+    tg.losT = 20;                                     // 何ステップかに一度だけ調べる
+    tg.crumbGoal = null;
+    if (Math.hypot(gx - tg.pos.x, gz - tg.pos.z) < 120 || _tugLos(tg.pos.x, tg.pos.z, gx, gz)) return null;
+    for (let i = _tugCrumbs.length - 1; i >= 0; i--) {
+        const c = _tugCrumbs[i];
+        if (Math.hypot(c.x - tg.pos.x, c.z - tg.pos.z) > 3000) continue;
+        if (_tugLos(tg.pos.x, tg.pos.z, c.x, c.z)) { tg.crumbGoal = c; break; }
+    }
+    return tg.crumbGoal;
+}
 function updateTugs(t, dt) {
-    if (!tugs.length || typeof shipGroup === 'undefined' || !shipGroup) { _tugShip.vSway *= 0.95; _tugShip.yawRate *= 0.95; return; }
+    _tugRecordCrumb();
+    // （タグがいない間は船の速さを測らないので、次に呼んだとき古い位置との差で速さが跳ねないよう、測り直す）
+    if (!tugs.length || typeof shipGroup === 'undefined' || !shipGroup) { _tugShip.vSway *= 0.95; _tugShip.yawRate *= 0.95; _tugShip.lastX = null; _tugShip.vx = 0; _tugShip.vz = 0; return; }
     dt = Math.min(2, Math.max(0, dt || 0));
     if (dt <= 0) return;
     shipGroup.updateMatrixWorld();
@@ -378,6 +421,8 @@ function updateTugs(t, dt) {
     if (_tugShip.lastX !== null) {
         _tugShip.vx += ((sp.x - _tugShip.lastX) / dt - _tugShip.vx) * Math.min(1, dt * 4);
         _tugShip.vz += ((sp.z - _tugShip.lastZ) / dt - _tugShip.vz) * Math.min(1, dt * 4);
+        const vv = Math.hypot(_tugShip.vx, _tugShip.vz);
+        if (vv > 25) { _tugShip.vx *= 25 / vv; _tugShip.vz *= 25 / vv; }    // 船が瞬間移動した（港へ移った等）ときの跳ね
     }
     _tugShip.lastX = sp.x; _tugShip.lastZ = sp.z;
     const n = Math.max(1, Math.ceil(dt / 0.1)), h = dt / n;
@@ -409,9 +454,11 @@ function _tugStep(t, dt, last) {
             let side = st.side || 1;
             const hw = _tugHalfWidth(st.z) * sc;
             // 待機：その舷が岸壁・陸で塞がっていたら反対舷に付く
+            // （自動の離着岸で、岸壁側のタグを沖側へ回して待たせるときも：tg.awaySide）
+            let flipped = false;
             if (tg.action === 'standby' && st.side) {
                 const e0 = _tugFromShip(C, st.z * sc, side * (hw + TUG_BEAM / 2 + 3));
-                if (_tugStaticBlocked(e0.x, e0.z)) side = -side;
+                if (tg.awaySide || _tugStaticBlocked(e0.x, e0.z)) { side = -side; flipped = true; }
             }
             const out = { x: F.sx * side, z: F.sz * side };           // 舷の外向き
             const edge = _tugFromShip(C, st.z * sc, st.side ? side * hw : 0);
@@ -437,8 +484,9 @@ function _tugStep(t, dt, last) {
                     tg.pushDir = { x: -F.fx * s2, z: -F.fz * s2 };
                 }
             } else {
-                // 待機：舷側に並んで同じ向き
-                tx = edge.x + out.x * (TUG_BEAM / 2 + 3); tz = edge.z + out.z * (TUG_BEAM / 2 + 3);
+                // 待機：舷側に並んで同じ向き（反対舷へ回ったときは、そこで押し引きしているタグの外側で）
+                const gap = TUG_BEAM / 2 + 3 + (flipped ? TUG_LEN + 8 : 0);
+                tx = edge.x + out.x * gap; tz = edge.z + out.z * gap;
                 tyaw = Math.atan2(F.fx, F.fz);
             }
         }
@@ -466,6 +514,11 @@ function _tugStep(t, dt, last) {
                 goal = tg.path[0];
             }
         }
+        // 港の外で、浅瀬などで船が見えないときは、船の通った跡をたどる
+        if (tg.state === 'coming' && !(tg.path && tg.path.length)) {
+            const cg = _tugCrumbGoal(tg, goal.x, goal.z);
+            if (cg) goal = cg;
+        }
         const gd = Math.hypot(goal.x - tg.pos.x, goal.z - tg.pos.z);
         tg.steerT = (tg.steerT || 0) - dt;
         if (tg.steerT <= 0 || tg.steerAng === undefined) {
@@ -491,7 +544,9 @@ function _tugStep(t, dt, last) {
         const newYaw = tg.yaw + Math.max(-0.5 * dt, Math.min(0.5 * dt, dy));
         // 進めてみて、ぶつかるなら進まない（船に押されたときは外へ押し出す）
         let nx = tg.pos.x + tg.vel.x * dt, nz = tg.pos.z + tg.vel.z * dt;
-        const hitStatic = (x, z, yaw) => _tugPts(x, z, yaw).some(q => _tugStaticBlocked(q.x, q.z));
+        // （もう浅い所に入り込んでいたら（地形の細かい絵ができて浅くなった所など）、抜け出すまでは止めない）
+        const stuckIn = _tugPts(tg.pos.x, tg.pos.z, tg.yaw).some(q => _tugStaticBlocked(q.x, q.z));
+        const hitStatic = (x, z, yaw) => !stuckIn && _tugPts(x, z, yaw).some(q => _tugStaticBlocked(q.x, q.z));
         if (hitStatic(nx, nz, newYaw)) {
             // 横すべりで行けるなら（壁に沿って）
             if (!hitStatic(nx, tg.pos.z, newYaw)) nz = tg.pos.z;

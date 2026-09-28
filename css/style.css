@@ -840,6 +840,9 @@ body.hud-hidden #minimap { display: none !important; }
 #minimap .mm-x { right: -6px; top: -4px; }
 #minimap .mm-plus { left: -6px; bottom: -4px; }
 #minimap .mm-minus { right: -6px; bottom: -4px; }
+#minimap .mm-d { left: 50%; top: -10px; transform: translateX(-50%); font-size: 11px; }
+#minimap .mm-depth { position: absolute; left: 50%; bottom: -30px; transform: translateX(-50%); font-size: 10px; color: #bfe6ff; white-space: nowrap; text-shadow: 0 1px 2px #000; pointer-events: none; }
+#minimap .mm-depth.warn { color: #ff6a5a; font-weight: bold; }
 #minimap .mm-scale { position: absolute; left: 50%; bottom: -16px; transform: translateX(-50%); font-size: 10px; color: #cfe; white-space: nowrap; text-shadow: 0 1px 2px #000; pointer-events: none; }
 @media (max-width: 600px) {
     #minimap, #mm-canvas { width: 120px; height: 120px; }
@@ -853,6 +856,7 @@ body.hud-hidden #minimap { display: none !important; }
 body.hud-hidden #ap-panel { display: none !important; }
 #ap-panel .ap-title { color: #ff8ae0; font-weight: bold; margin-bottom: 2px; }
 #ap-panel .ap-msg { color: #ffe38a; margin: 3px 0; }
+#ap-panel .ap-escort { color: #ffb347; }
 #ap-panel button { font-family: inherit; font-size: 11px; color: #e8fff8; background: rgba(0, 255, 204, 0.08); border: 1px solid rgba(0, 255, 204, 0.4);
     border-radius: 6px; padding: 3px 8px; margin: 3px 3px 0 0; cursor: pointer; touch-action: manipulation; }
 #ap-panel button.on { background: #1c6b5a; color: #fff; border-color: #7ee3c8; }

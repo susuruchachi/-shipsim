@@ -930,6 +930,19 @@ function worldMapRedraw(quick) {
             prevX = s.x;
         });
         g.stroke();
+        // タグの付き添いで通る狭い水路（橙の破線）
+        if (rp.some(q => q.narrow)) {
+            g.strokeStyle = '#ff9f1a'; g.lineWidth = 3; g.setLineDash([5, 3]);
+            g.beginPath();
+            for (let i = 1; i < rp.length; i++) {
+                if (!rp[i].narrow) continue;
+                const a = _wmToScreen(rp[i - 1].lat, rp[i - 1].lon, cv), b = _wmToScreen(rp[i].lat, rp[i].lon, cv);
+                if (Math.abs(a.x - b.x) > W / 2) continue;
+                g.moveTo(a.x, a.y); g.lineTo(b.x, b.y);
+            }
+            g.stroke(); g.setLineDash([]);
+            g.strokeStyle = _wm.chart ? '#c0208a' : '#ff5ad0';
+        }
         g.fillStyle = g.strokeStyle;
         for (const q of rp) if (q.wp) { const s = _wmToScreen(q.lat, q.lon, cv); g.beginPath(); g.arc(s.x, s.y, 3, 0, Math.PI * 2); g.fill(); }
         g.restore();

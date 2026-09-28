@@ -12,12 +12,12 @@
 const MM_RANGES = [2000, 6000, 20000, 60000];
 const MM_TILE = 160;                      // 地面の絵の細かさ（1辺の点の数）
 const MM_TILE_K = 1.6;                    // 地面の絵の広さ（見える半径の何倍）
-const _mm = { show: true, zoom: 1, headUp: false, tile: null, build: null, lastDraw: 0, chart: null };
+const _mm = { show: true, zoom: 1, headUp: false, depth: true, tile: null, build: null, lastDraw: 0, chart: null };
 try {
     const s = JSON.parse(localStorage.getItem('susuru_minimap') || 'null');
-    if (s) { _mm.show = s.show !== false; _mm.zoom = Math.max(0, Math.min(MM_RANGES.length - 1, s.zoom | 0)); _mm.headUp = !!s.headUp; }
+    if (s) { _mm.show = s.show !== false; _mm.zoom = Math.max(0, Math.min(MM_RANGES.length - 1, s.zoom | 0)); _mm.headUp = !!s.headUp; _mm.depth = s.depth !== false; }
 } catch (e) { /* ignore */ }
-function _mmSave() { try { localStorage.setItem('susuru_minimap', JSON.stringify({ show: _mm.show, zoom: _mm.zoom, headUp: _mm.headUp })); } catch (e) { /* ignore */ } }
+function _mmSave() { try { localStorage.setItem('susuru_minimap', JSON.stringify({ show: _mm.show, zoom: _mm.zoom, headUp: _mm.headUp, depth: _mm.depth })); } catch (e) { /* ignore */ } }
 
 function minimapShow(on) {
     _mm.show = !!on; _mmSave();
@@ -30,7 +30,8 @@ function minimapZoom(d) {
     _mm.lastDraw = 0;
 }
 function minimapHeadUp() { _mm.headUp = !_mm.headUp; _mmSave(); _mm.lastDraw = 0; }
-Object.assign(window, { minimapShow, minimapZoom, minimapHeadUp });
+function minimapDepth() { _mm.depth = !_mm.depth; _mmSave(); _mm.lastDraw = 0; }
+Object.assign(window, { minimapShow, minimapZoom, minimapHeadUp, minimapDepth });
 
 function _mmEnsureDom() {
     if (document.getElementById('minimap')) return;
@@ -41,7 +42,9 @@ function _mmEnsureDom() {
         <button class="mm-b mm-plus" title="狭く" onclick="minimapZoom(-1)">＋</button>
         <button class="mm-b mm-minus" title="広く" onclick="minimapZoom(1)">－</button>
         <button class="mm-b mm-x" title="しまう（世界地図から戻せます）" onclick="minimapShow(false)">✕</button>
-        <span class="mm-scale"></span>`;
+        <button class="mm-b mm-d" title="水深の数字を出す／消す" onclick="minimapDepth()">深</button>
+        <span class="mm-scale"></span>
+        <span class="mm-depth"></span>`;
     document.body.appendChild(el);
     el.querySelector('#mm-canvas').addEventListener('click', () => {
         if (typeof toggleWorldMap !== 'function') return;
@@ -89,7 +92,7 @@ function _mmDraw() {
         const r = tp.getBoundingClientRect(), mh = el.offsetHeight || 150;
         const wh = document.getElementById('wheel-widget');
         const floor = (wh && wh.offsetParent) ? wh.getBoundingClientRect().top : window.innerHeight;
-        if (r.bottom + 8 + mh + 22 <= floor - 4) { el.style.top = Math.round(r.bottom + 8) + 'px'; el.style.right = ''; }
+        if (r.bottom + 8 + mh + 36 <= floor - 4) { el.style.top = Math.round(r.bottom + 8) + 'px'; el.style.right = ''; }
         else {
             // 上のボタンの列（スクショ・地図など）より下へ
             let btnBottom = 0;
@@ -127,6 +130,34 @@ function _mmDraw() {
         g.imageSmoothingEnabled = true;
         g.drawImage(T.cv, s0.x - T.R * k, s0.y - T.R * k, 2 * T.R * k, 2 * T.R * k);
     }
+    // 水深の数字（海図のように。船の喫水＋2m より浅い所は赤で）
+    if (_mm.depth && T && T.cv.H) {
+        const N = MM_TILE, draft = (typeof worldShipDraft === 'function') ? worldShipDraft() : 5;
+        const GAP = 24, cr = Math.cos(-rot), sr = Math.sin(-rot);
+        g.save(); g.rotate(-rot);
+        g.font = 'italic 9px serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+        for (let py = -c + GAP / 2; py < c; py += GAP) {
+            for (let px0 = -c + GAP / 2 + ((Math.round((py + c) / GAP) & 1) ? GAP / 2 : 0); px0 < c; px0 += GAP) {
+                if (Math.hypot(px0, py) > c - 8 || Math.hypot(px0, py) < 14) continue;
+                // 画面の点 → 地図の向き（回す前）→ 物理の面
+                const u = px0 * cr - py * sr, v = px0 * sr + py * cr;
+                const x = sx - u / k, z = sz - v / k;
+                const e = T.cx - x, n = z - T.cz;
+                const i = Math.floor((e + T.R) / (2 * T.R) * N), j = Math.floor((T.R - n) / (2 * T.R) * N);
+                if (i < 0 || j < 0 || i >= N || j >= N) continue;
+                const h = T.cv.H[j * N + i];
+                if (!(h < -0.5)) continue;
+                const d = -h;
+                const txt = d < 20 ? d.toFixed(0) : d < 1000 ? String(Math.round(d / 5) * 5) : (d / 1000).toFixed(1) + 'k';
+                const danger = d < draft + 2;
+                g.lineWidth = 2.2; g.strokeStyle = _wm.chart ? 'rgba(255,255,255,0.85)' : 'rgba(6,24,40,0.7)'; g.strokeText(txt, px0, py);
+                g.fillStyle = danger ? '#ff4a3a' : _wm.chart ? '#34506e' : '#bfe6ff';
+                g.fillText(txt, px0, py);
+            }
+        }
+        g.textAlign = 'start';
+        g.restore();
+    }
     // 港
     if (world.ports) {
         g.font = '9px sans-serif'; g.textBaseline = 'middle';
@@ -148,8 +179,16 @@ function _mmDraw() {
     if (rp && rp.length > 1) {
         g.strokeStyle = _wm.chart ? '#c0208a' : '#ff5ad0'; g.lineWidth = 1.6;
         g.beginPath();
-        rp.forEach((q, i) => { const loc = worldUnitToLocal(worldLatLonToUnit(q.lat, q.lon)); if (!Number.isFinite(loc.x)) return; const s = toS(loc.x, loc.z); if (i === 0) g.moveTo(s.x, s.y); else g.lineTo(s.x, s.y); });
+        const sp = rp.map(q => { const loc = worldUnitToLocal(worldLatLonToUnit(q.lat, q.lon)); return Number.isFinite(loc.x) ? toS(loc.x, loc.z) : null; });
+        sp.forEach((s, i) => { if (!s) return; if (i === 0) g.moveTo(s.x, s.y); else g.lineTo(s.x, s.y); });
         g.stroke();
+        // タグの付き添いで通る狭い水路
+        if (rp.some(q => q.narrow)) {
+            g.strokeStyle = '#ff9f1a'; g.lineWidth = 2.4; g.setLineDash([4, 3]);
+            g.beginPath();
+            for (let i = 1; i < sp.length; i++) if (rp[i].narrow && sp[i] && sp[i - 1]) { g.moveTo(sp[i - 1].x, sp[i - 1].y); g.lineTo(sp[i].x, sp[i].y); }
+            g.stroke(); g.setLineDash([]);
+        }
     }
     // タグボート
     if (window.tugs) for (const t of tugs) {
@@ -171,6 +210,18 @@ function _mmDraw() {
     const sc = el.querySelector('.mm-scale');
     if (sc) sc.textContent = `半径 ${viewR >= 1000 ? viewR / 1000 + 'km' : viewR + 'm'}`;
     const nb = el.querySelector('.mm-n'); if (nb) nb.classList.toggle('on', _mm.headUp);
+    const db = el.querySelector('.mm-d'); if (db) db.classList.toggle('on', _mm.depth);
+    // 船の下の水深（喫水と比べて：足りないと赤）
+    const dl = el.querySelector('.mm-depth');
+    if (dl) {
+        const dep = (window.terrain && Number.isFinite(terrain.depth)) ? terrain.depth : null;
+        const draft = (typeof worldShipDraft === 'function') ? worldShipDraft() : 0;
+        if (dep === null) dl.textContent = '';
+        else {
+            dl.textContent = dep > 999 ? `水深 ${(dep / 1000).toFixed(1)}km` : `水深 ${Math.round(dep)}m（余裕 ${Math.round(dep - draft)}m）`;
+            dl.classList.toggle('warn', dep - draft < 3);
+        }
+    }
 }
 
 function updateMinimap(t) {
