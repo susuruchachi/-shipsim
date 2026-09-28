@@ -172,6 +172,16 @@ function _trMaterial() {
     _trMat.customProgramCacheKey = () => 'worldTerrain';
     return _trMat;
 }
+// 港のそばの細かい網の材質：重なる所では手前に描く（粗い網と同じ高さの陸で、ちらつかないように）
+let _trMatFine = null;
+function _trMaterialFine() {
+    if (_trMatFine) return _trMatFine;
+    _trMatFine = _trMaterial().clone();
+    _trMatFine.onBeforeCompile = _trMaterial().onBeforeCompile;
+    _trMatFine.customProgramCacheKey = () => 'worldTerrain';
+    _trMatFine.polygonOffset = true; _trMatFine.polygonOffsetFactor = -2; _trMatFine.polygonOffsetUnits = -4;
+    return _trMatFine;
+}
 // 高さ・傾き → 色
 function _trColor(h, slope, x, z, out, o) {
     let r, g, b;
@@ -188,7 +198,12 @@ function _trColor(h, slope, x, z, out, o) {
 }
 
 // 高さの格子 → 網
-function _trBuildMesh(H, n, half, cx, cz, lowerInside) {
+// その点のまわり（r 点）に水（高さ 0.5m 未満）があるか
+function _trNearWater(H, n, i, j, r) {
+    for (let b = -r; b <= r; b++) { const jj = j + b; if (jj < 0 || jj >= n) continue; for (let a = -r; a <= r; a++) { const ii = i + a; if (ii >= 0 && ii < n && H[jj * n + ii] < 0.5) return true; } }
+    return false;
+}
+function _trBuildMesh(H, n, half, cx, cz, lowerInside, opts) {
     const geo = new THREE.BufferGeometry();
     const P = new Float32Array(n * n * 3), Cc = new Float32Array(n * n * 3);
     const step = half * 2 / (n - 1);
@@ -197,8 +212,9 @@ function _trBuildMesh(H, n, half, cx, cz, lowerInside) {
             const k = j * n + i;
             const x = cx - half + i * step, z = cz - half + j * step;
             let h = H[k];
-            // 粗い格子の、細かい格子と重なる所は沈めて隠す
-            if (lowerInside && Math.abs(x - lowerInside.cx) < lowerInside.half - step && Math.abs(z - lowerInside.cz) < lowerInside.half - step) h = Math.min(h, -30);
+            // 粗い格子の、細かい格子と重なる所は沈めて隠す（waterOnly：細かい網は水の近くだけなので、水の近くの点だけ）
+            if (lowerInside && Math.abs(x - lowerInside.cx) < lowerInside.half - step && Math.abs(z - lowerInside.cz) < lowerInside.half - step
+                && (!lowerInside.waterOnly || _trNearWater(H, n, i, j, 1))) h = Math.min(h, -30);
             // 惑星の丸み：中心から離れるほど下がる
             const d2 = (x - cx) * (x - cx) + (z - cz) * (z - cz);
             P[k * 3] = x; P[k * 3 + 1] = h - d2 / (2 * WORLD_R); P[k * 3 + 2] = z;
@@ -207,12 +223,23 @@ function _trBuildMesh(H, n, half, cx, cz, lowerInside) {
             _trColor(h, Math.hypot(hx, hz) / (2 * step), x, z, Cc, k * 3);
         }
     }
-    // 陸を含むマスだけ三角形にする（水面下だけのマスは作らない）
+    // 陸を含むマスだけ三角形にする（水面下だけのマスは作らない）。
+    // coastOnly（港のそばの細かい網）：水から coastOnly 升以内のマスだけ（内陸は粗い網にまかせて軽く）
+    let nearW = null;
+    if (opts && opts.coastOnly) {
+        nearW = new Uint8Array(n * n);
+        const r = opts.coastOnly;
+        for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+            if (!(H[j * n + i] < 0.5)) continue;
+            for (let b = -r; b <= r; b++) { const jj = j + b; if (jj < 0 || jj >= n) continue; for (let a = -r; a <= r; a++) { const ii = i + a; if (ii >= 0 && ii < n) nearW[jj * n + ii] = 1; } }
+        }
+    }
     const idx = [];
     for (let j = 0; j < n - 1; j++) {
         for (let i = 0; i < n - 1; i++) {
             const a = j * n + i, b = a + 1, c = a + n, d = c + 1;
             if (Math.max(P[a * 3 + 1], P[b * 3 + 1], P[c * 3 + 1], P[d * 3 + 1]) < -0.6) continue;
+            if (nearW && !(nearW[a] || nearW[b] || nearW[c] || nearW[d])) continue;
             idx.push(a, c, b, b, c, d);
         }
     }
@@ -222,7 +249,7 @@ function _trBuildMesh(H, n, half, cx, cz, lowerInside) {
     geo.setIndex(n * n > 65535 ? new THREE.Uint32BufferAttribute(idx, 1) : new THREE.Uint16BufferAttribute(idx, 1));
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
-    const m = new THREE.Mesh(geo, _trMaterial());
+    const m = new THREE.Mesh(geo, opts && opts.coastOnly ? _trMaterialFine() : _trMaterial());
     m.receiveShadow = true;
     m.castShadow = false;
     m.userData.noLightBake = true;
@@ -289,11 +316,11 @@ function _trOnHeights(msg) {
         _brkBuild(terrain.nearH);
         _trSeabedTex(terrain.nearH);
         _trDispose(terrain.near);
-        terrain.near = _trBuildMesh(msg.H, TR_NEAR.n, TR_NEAR.half, cx, cz, terrain.fineOn ? { cx, cz, half: TR_FINE.half } : null);
+        terrain.near = _trBuildMesh(msg.H, TR_NEAR.n, TR_NEAR.half, cx, cz, terrain.fineOn ? { cx, cz, half: TR_FINE.half, waterOnly: true } : null);
         if (terrain.near) scene.add(terrain.near);
     } else if (msg.which === 'fine') {
         _trDispose(terrain.fine);
-        terrain.fine = _trBuildMesh(msg.H, TR_FINE.n, TR_FINE.half, cx, cz, null);
+        terrain.fine = _trBuildMesh(msg.H, TR_FINE.n, TR_FINE.half, cx, cz, null, { coastOnly: 10 });
         if (terrain.fine) scene.add(terrain.fine);
     } else {
         _trDispose(terrain.far);
