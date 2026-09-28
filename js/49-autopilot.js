@@ -90,7 +90,7 @@ function _apWorker() {
             const w = Math.min(1, Math.max(0, (field + 0.02 - 0.18) / 0.2)) * Math.min(1, (h + 130) / 60);
             const n1 = _wNoise3(ux * 1900 - 3.3, uy * 1900 + 8.8, uz * 1900 + 1.2);
             const n2 = _wNoise3(ux * 7000 + 5.5, uy * 7000 - 2.2, uz * 7000 + 9.1);
-            const g1 = 2.8 * 1900 / WORLD_R * rM, g2 = 2.8 * 7000 / WORLD_R * rM;
+            const g1 = 1.8 * 1900 / WORLD_R * rM, g2 = 1.8 * 7000 / WORLD_R * rM;
             const ridge = 1 - Math.max(0, Math.abs(n1) - g1);
             const top = -42 + 40 * ridge * ridge * ridge + 5 * Math.min(1, n2 + g2);
             return top <= h ? h : h + (top - h) * w;
@@ -100,7 +100,7 @@ function _apWorker() {
         function mercY(lat) { const f = Math.max(-89.5, Math.min(89.5, lat)) * RAD; return Math.log(Math.tan(Math.PI / 4 + f / 2)); }
         function latOfY(y) { return (2 * Math.atan(Math.exp(y)) - Math.PI / 2) / RAD; }
         // 格子：緯度・経度の四角（lon は連続させた値）。cost 0 は通れない
-        function makeGrid(lat0, lat1, lon0, lon1, cellDeg, fine, draft) {
+        function makeGrid(lat0, lat1, lon0, lon1, cellDeg, fine, draft, conservative) {
             const nx = Math.max(2, Math.ceil((lon1 - lon0) / cellDeg)), ny = Math.max(2, Math.ceil((lat1 - lat0) / cellDeg));
             const cost = new Float32Array(nx * ny);
             for (let j = 0; j < ny; j++) {
@@ -109,13 +109,14 @@ function _apWorker() {
                     const u = unit(lat, lon0 + (i + 0.5) * cellDeg);
                     let c;
                     if (fine) {
-                        const d = depthAt(lat, lon0 + (i + 0.5) * cellDeg, u, cellDeg * RAD * WORLD_R * 0.75);
+                        // conservative：升目の中に隠れた岩の尾根まで見込む（まっすぐでは通らなかった所を探し直すとき）
+                        const d = depthAt(lat, lon0 + (i + 0.5) * cellDeg, u, conservative ? cellDeg * RAD * WORLD_R * 0.75 : 0);
                         c = d < NEED ? 0 : d < NEED + 10 ? 4 : d < 60 ? 1.6 : 1;
                     } else {
                         const h = worldHeightFromE(worldNoiseE(u[0], u[1], u[2], 10));
                         // 大陸棚の「浅瀬の多い海域」は大洋の道すじでは通らない（まわり道する）
-                        const shoaly = h > -220 && _wNoise3(u[0] * 140 + 11.3, u[1] * 140 - 4.1, u[2] * 140 + 7.7) > 0.12;
-                        c = (h > -20 || shoaly) ? 0 : h > -60 ? 8 : h > -200 ? 3 : 1;
+                        const shoaly = h > -160 && _wNoise3(u[0] * 140 + 11.3, u[1] * 140 - 4.1, u[2] * 140 + 7.7) > 0.18;
+                        c = h > -8 ? 0 : shoaly ? 12 : h > -60 ? 8 : h > -200 ? 3 : 1;
                     }
                     cost[j * nx + i] = c;
                 }
@@ -180,7 +181,7 @@ function _apWorker() {
             const lon0 = Math.min(A.lon, B.lon) - pad / cl, lon1 = Math.max(A.lon, B.lon) + pad / cl;
             const area = (lat1 - lat0) * (lon1 - lon0) * cl;
             const cell = Math.max(MIN_CELL[depth] / WORLD_R / RAD, Math.sqrt(area / 250000));
-            const G = makeGrid(lat0, lat1, lon0, lon1, cell / cl > cell ? cell : cell, true, 0);
+            const G = makeGrid(lat0, lat1, lon0, lon1, cell, true, 0, depth > 0);
             const s = nearestOpen(G, ...cellOf(G, A.lat, A.lon), 6), e = nearestOpen(G, ...cellOf(G, B.lat, B.lon), 6);
             if (!s || !e) return null;
             const path = astar(G, s[0], s[1], (i, j) => i === e[0] && j === e[1], (i, j) => Math.hypot((i - e[0]) * cl, j - e[1]));
@@ -195,6 +196,7 @@ function _apWorker() {
             if (depth >= MIN_CELL.length) { const bad = legBad(A, B); throw new Error('shallow leg at ' + (bad ? bad.lat.toFixed(4) + ',' + bad.lon.toFixed(4) : '?')); }
             let r = repairLeg(A, B, depth, 6000);
             if (!r) r = repairLeg(A, B, depth, 20000);            // 近くに道が無ければ、広く探す
+            if (!r) r = repairLeg(A, B, depth, 45000);
             if (!r) { const bad = legBad(A, B); throw new Error('shallow leg (no way) at ' + (bad ? bad.lat.toFixed(4) + ',' + bad.lon.toFixed(4) : '?')); }
             const simp = simplify(r.G, r.pts);
             const out = [];
@@ -293,9 +295,10 @@ function _apWorker() {
             }
             return out;
         }
-        function fineGrid(c, draft) {
-            const dLat = ${AP_FINE_R} / WORLD_R / RAD, dLon = dLat / Math.max(0.2, Math.cos(c.lat * RAD));
-            const cell = ${AP_FINE_CELL} / WORLD_R / RAD;
+        function fineGrid(c, draft, radiusM) {
+            const R = radiusM || ${AP_FINE_R};
+            const dLat = R / WORLD_R / RAD, dLon = dLat / Math.max(0.2, Math.cos(c.lat * RAD));
+            const cell = Math.max(${AP_FINE_CELL}, R / 125) / WORLD_R / RAD;
             return makeGrid(c.lat - dLat, c.lat + dLat, c.lon - dLon, c.lon + dLon, cell, true, draft);
         }
         let NEED = 10, BAND = 100, CH = [];
@@ -320,8 +323,8 @@ function _apWorker() {
                     return;
                 }
                 // 出発点のまわり：細かい格子で、縁のうち目的地に一番近づける所まで
-                const escape = (P, T) => {
-                    const G = fineGrid(P, q.draft);
+                const escape = (P, T, radiusM) => {
+                    const G = fineGrid(P, q.draft, radiusM);
                     const s = nearestOpen(G, ...cellOf(G, P.lat, P.lon), 8);
                     if (!s) throw new Error('blocked');
                     const [ti, tj] = cellOf(G, T.lat, T.lon);
@@ -331,8 +334,9 @@ function _apWorker() {
                     return { G, pts: simplify(G, [P, ...path.map(([i, j]) => llOf(G, i, j))]) };
                 };
                 let S, E;
-                try { S = escape(A, B); } catch (e) { throw new Error('trapped start'); }
-                try { E = escape(B, A); } catch (e) { throw new Error('trapped goal'); }
+                // 浅瀬に囲まれていたら、もっと広く探す
+                try { S = escape(A, B); } catch (e) { try { S = escape(A, B, 45000); } catch (e2) { throw new Error('trapped start'); } }
+                try { E = escape(B, A); } catch (e) { try { E = escape(B, A, 45000); } catch (e2) { throw new Error('trapped goal'); } }
                 const a = S.pts[S.pts.length - 1], b = E.pts[E.pts.length - 1];
                 // 大洋：粗い格子。見つからなければ広げて探し直す（最後は世界一周）
                 let mid = null, lastErr = 'no ocean path';
@@ -392,7 +396,7 @@ function worldPlanRoute(from, to) {
         w.addEventListener('message', on);
         // 必要な水深：喫水＋余裕（3m）＋波で上下する分。船の幅＋横ずれの分の帯の中で調べる
         const hs = Math.max(0, window._seaHs || 0);
-        const need = draft + 3 + Math.max(1, hs * 0.6);
+        const need = draft + 2 + Math.max(0.5, hs * 0.4);
         const hwM = (typeof worldHullAt === 'function' && window.hullProfile && hullProfile.ready) ? (() => { let m = 0; for (let k = -10; k <= 10; k++) m = Math.max(m, worldHullAt(k / 10 * hullProfile.halfLen).hw); return m; })() : 15;
         // 出発点・目的地のそばの港の、掘ってある航路・泊地
         const ports = [];
@@ -401,7 +405,7 @@ function worldPlanRoute(from, to) {
             const T = PORT_TYPES[P.type], br = P.seaBearing * _apRad;
             ports.push({ lat: P.lat, lon: P.lon, sx: Math.sin(br), sz: Math.cos(br), basin: T.basin, quay: T.quay, depth: T.depth, chLen: worldPortChannelLen(P) });
         }
-        w.postMessage({ id, from, to, draft, need, band: hwM + 80, ports });
+        w.postMessage({ id, from, to, draft, need, band: hwM + 35, ports });
     });
 }
 window.worldPlanRoute = worldPlanRoute;
@@ -442,7 +446,9 @@ async function autopilotStart(port) {
     const np = worldNearestPort(here.lat, here.lon);
     if (np && np.port !== port) {
         const P = np.port, TP = PORT_TYPES[P.type], chL = worldPortChannelLen(P);
-        if (np.dist < TP.basin + chL + 1500) {
+        // （港の航路がこの船に浅いときは、今いる所からそのまま沖へ）
+        const needHere = worldShipDraft() + 2 + Math.max(0.5, Math.max(0, window._seaHs || 0) * 0.4);
+        if (np.dist < TP.basin + chL + 1500 && TP.depth + 2 >= needHere) {
             route.push(Object.assign(portChannelPoint(P, TP.basin + chL - 200), { label: `${P.name} 航路の出口`, channel: true }));
         }
     }
@@ -450,10 +456,11 @@ async function autopilotStart(port) {
     // 目的の港の航路の沖：航路の外で、この船に十分な深さがある所（浅瀬の中に置かない）
     let outerA = T.basin + chLen + 1500;
     {
-        const needD = worldShipDraft() + 3 + Math.max(1, Math.max(0, window._seaHs || 0) * 0.6);
+        const needD = worldShipDraft() + 2 + Math.max(0.5, Math.max(0, window._seaHs || 0) * 0.4);
         for (let a = T.basin + chLen - 300; a < T.basin + chLen + 15000; a += 100) {
             const q = portChannelPoint(port, a), u = worldLatLonToUnit(q.lat, q.lon);
-            if (-worldHeightAt(u.x, u.y, u.z, 16) >= needD || a < T.basin + chLen - 400) { outerA = Math.max(a, T.basin + chLen - 300); break; }
+            // 深さが足りて、しかも浅瀬の出ない所（浅瀬の海域の中の深みに置かない）
+            if (-worldHeightAt(u.x, u.y, u.z, 16) >= needD && (a < T.basin + chLen - 200 || worldShoalFree(u.x, u.y, u.z))) { outerA = a; break; }
         }
     }
     const outer = portChannelPoint(port, outerA);

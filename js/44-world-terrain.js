@@ -465,6 +465,83 @@ function worldTerrainModeChanged(moved) {
 window.worldTerrainModeChanged = worldTerrainModeChanged;
 
 // ════════════════════════════════════════════════════════════════
+//  遠くの水面（波の計算をする水面の外側）
+// ════════════════════════════════════════════════════════════════
+//  波の水面は船のまわり ±1.8km しかないので、その外に見える陸地が宙に浮いて見える。
+//  そこで、波の水面の外側から陸地の範囲（±32km）まで、平らな水面を張る（波の計算はしない）。
+//  色・空の映り込み・霧は近くの水面と同じ値（_waterUniforms）を使うので、昼夜・天気で一緒に変わる。
+let _trFarWater = null;
+function _trFarWaterMesh() {
+    if (_trFarWater) return _trFarWater;
+    const U = window._waterUniforms;
+    if (!U) return null;
+    const OUT = 32000, IN = 1790;           // 内側の穴は波の水面（±1800m の四角）の少し内側
+    const shape = new THREE.Shape();
+    shape.moveTo(-OUT, -OUT); shape.lineTo(OUT, -OUT); shape.lineTo(OUT, OUT); shape.lineTo(-OUT, OUT); shape.lineTo(-OUT, -OUT);
+    const hole = new THREE.Path();
+    hole.moveTo(-IN, -IN); hole.lineTo(-IN, IN); hole.lineTo(IN, IN); hole.lineTo(IN, -IN); hole.lineTo(-IN, -IN);
+    shape.holes.push(hole);
+    const geo = new THREE.ShapeGeometry(shape);
+    geo.rotateX(-Math.PI / 2);
+    const mat = new THREE.ShaderMaterial({
+        uniforms: {
+            deepColor: U.deepColor, shallowColor: U.shallowColor, sunDir: U.sunDir, sunColor: U.sunColor,
+            waterFogColor: U.waterFogColor, waterFogDensity: U.waterFogDensity, uBloomDark: U.uBloomDark,
+            seabedTex: U.seabedTex, seabedRect: U.seabedRect,
+        },
+        vertexShader: `
+            varying vec3 vW;
+            void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+        fragmentShader: `
+            uniform vec3 deepColor, shallowColor, sunDir, sunColor, waterFogColor;
+            uniform float waterFogDensity, uBloomDark;
+            uniform sampler2D seabedTex; uniform vec4 seabedRect;
+            varying vec3 vW;
+            void main() {
+                if (uBloomDark > 0.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+                vec3 viewDir = normalize(cameraPosition - vW);
+                vec3 n = vec3(0.0, 1.0, 0.0);
+                vec3 base = mix(deepColor, shallowColor, 0.6);
+                // 浅い所は海底が透ける（近くの水面と同じ絵を使う）
+                if (seabedRect.w > 0.5) {
+                    vec2 suv = (vW.xz - seabedRect.xy) / seabedRect.z;
+                    if (suv.x > 0.001 && suv.y > 0.001 && suv.x < 0.999 && suv.y < 0.999) {
+                        vec4 sb = texture2D(seabedTex, suv);
+                        float sd = sb.a * 200.0;
+                        float vis = pow(clamp(1.0 - sd / 200.0, 0.0, 1.0), 1.8) * 0.9;
+                        vec3 trans = exp(-sd * vec3(0.060, 0.022, 0.016));
+                        float lum = dot(shallowColor, vec3(0.3, 0.5, 0.2));
+                        base = mix(base, sb.rgb * lum * 4.0 * trans + shallowColor * (1.0 - trans) * 0.8, vis);
+                    }
+                }
+                float fresnel = pow(1.0 - max(0.0, dot(n, viewDir)), 4.0);
+                vec3 skyRefl = vec3(0.30, 0.52, 0.82);
+                vec3 col = mix(base, skyRefl, 0.12 + fresnel * 0.5);
+                vec3 halfDir = normalize(sunDir + viewDir);
+                col += sunColor * pow(max(0.0, dot(n, halfDir)), 60.0) * 0.6;
+                float fd = length(vW - cameraPosition) * waterFogDensity;
+                col = mix(col, waterFogColor, clamp(1.0 - exp(-fd * fd), 0.0, 1.0));
+                gl_FragColor = vec4(col, 1.0);
+            }`,
+    });
+    _trFarWater = new THREE.Mesh(geo, mat);
+    _trFarWater.frustumCulled = false;
+    _trFarWater.userData.noLightBake = true;
+    _trFarWater.renderOrder = -1;
+    return _trFarWater;
+}
+function _trFarWaterUpdate() {
+    const show = world.mode === 'world' && !!(terrain.near || terrain.far);
+    const m = show ? _trFarWaterMesh() : _trFarWater;
+    if (!m) return;
+    if (show && !m.parent) scene.add(m);
+    if (!show && m.parent) m.parent.remove(m);
+    m.visible = show;
+    // 波の水面と同じ所（船について動く）。高さは波の水面の平均の高さ
+    if (show && typeof waterMesh !== 'undefined' && waterMesh) m.position.set(waterMesh.position.x, waterMesh.position.y - 0.05, waterMesh.position.z);
+}
+
+// ════════════════════════════════════════════════════════════════
 //  浅い海の海底を水面から見えるように（04-scene-and-water-init.js の水のシェーダーへ渡す）
 // ════════════════════════════════════════════════════════════════
 //  船のまわり（細かい格子と同じ ±7km）の海底の 色（rgb）と 深さ/200m（a）を 1 枚の絵にする。
@@ -745,8 +822,10 @@ function updateWorldTerrain(t, dt) {
     if (typeof updateHornEcho === 'function') updateHornEcho(t);   // 汽笛のこだま（45-horn-echo.js）
     if (world.mode !== 'world') {
         if (terrain.near || terrain.far || terrain.ports.size) _trClearAll();
+        _trFarWaterUpdate();
         return;
     }
+    _trFarWaterUpdate();
     if (!world.ports) worldBuildPorts();
     // 前回の続き：向きを戻す
     if (world._resumeHeading !== undefined && t > 0.5) { physics.heading = world._resumeHeading; world._resumeHeading = undefined; }

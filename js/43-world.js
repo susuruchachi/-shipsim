@@ -485,7 +485,7 @@ function worldStartAtPort(port) {
         };
         for (let d = mouth + halfLen + 60; d < 15000; d += 100) {
             off = d;
-            if (depthAt(d - halfLen) > need && depthAt(d) > need && depthAt(d + halfLen) > need) break;
+            if (depthAt(d - halfLen) > need && depthAt(d) > need && depthAt(d + halfLen) > need && (() => { const u = unitAt(d); return worldShoalFree(u.x, u.y, u.z); })()) break;
         }
     }
     const ll = worldUnitToLatLon(unitAt(off));
