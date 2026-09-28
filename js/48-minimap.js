@@ -83,12 +83,29 @@ function _mmStepBuild() {
 function _mmDraw() {
     const cv = document.getElementById('mm-canvas'); if (!cv) return;
     const el = document.getElementById('minimap');
-    // TELEMETRY のすぐ下へ
+    // TELEMETRY のすぐ下へ。下の舵輪などとぶつかる（画面が低い）ときは TELEMETRY の左へ
     const tp = document.getElementById('telemetry-panel');
-    if (tp) { const r = tp.getBoundingClientRect(); el.style.top = Math.round(r.bottom + 8) + 'px'; }
+    if (tp) {
+        const r = tp.getBoundingClientRect(), mh = el.offsetHeight || 150;
+        const wh = document.getElementById('wheel-widget');
+        const floor = (wh && wh.offsetParent) ? wh.getBoundingClientRect().top : window.innerHeight;
+        if (r.bottom + 8 + mh + 22 <= floor - 4) { el.style.top = Math.round(r.bottom + 8) + 'px'; el.style.right = ''; }
+        else {
+            // 上のボタンの列（スクショ・地図など）より下へ
+            let btnBottom = 0;
+            for (const id of ['worldmap-toggle', 'screenshot-toggle', 'viewpoint-toggle', 'camera-mode-toggle']) {
+                const b = document.getElementById(id);
+                if (b && b.offsetParent) { const q = b.getBoundingClientRect(); if (q.right > r.left - 200) btnBottom = Math.max(btnBottom, q.bottom); }
+            }
+            el.style.top = Math.round(Math.max(r.top + 14, btnBottom + 18)) + 'px';
+            el.style.right = Math.round(window.innerWidth - r.left + 16) + 'px';
+        }
+    }
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const W = cv.clientWidth || 150;
-    if (cv.width !== Math.round(W * dpr)) { cv.width = cv.height = Math.round(W * dpr); }
+    // 幅と高さの両方を見る（キャンバスは最初 300×150。高解像度の画面だと幅だけ合っていて高さが違うことがある）
+    const px = Math.round(W * dpr);
+    if (cv.width !== px || cv.height !== px) { cv.width = px; cv.height = px; }
     const g = cv.getContext('2d');
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     const c = W / 2, viewR = MM_RANGES[_mm.zoom], k = c / viewR;     // 1m あたりの点
