@@ -125,7 +125,7 @@ const REAL_WORLDS = {
         ports: [
             // イングランド南岸
             // （5番目：航路が通る所。サウサンプトンは東の口：カルショット沖 → カウズ沖 → スピットヘッド → ナブ）
-            ['サウサンプトン港', 'cargo', 50.895, -1.405, [[50.805, -1.300], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]]], ['ポーツマス軍港', 'naval', 50.800, -1.110], ['プリマス軍港', 'naval', 50.375, -4.180],
+            ['サウサンプトン港', 'cargo', 50.895, -1.405, [[50.805, -1.300], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.8883, -1.4005], bearing: 160 }], ['ポーツマス軍港', 'naval', 50.800, -1.110], ['プリマス軍港', 'naval', 50.375, -4.180],
             ['プール港', 'town', 50.705, -1.990], ['ポートランド港', 'town', 50.570, -2.440], ['ファルマス港', 'town', 50.155, -5.055],
             ['ニューリン漁港', 'fishing', 50.102, -5.548], ['ブリクサム漁港', 'fishing', 50.398, -3.510], ['ドーヴァー港', 'city', 51.120, 1.330],
             // テムズ・東海岸
@@ -385,10 +385,17 @@ function _wFindCoast(ua, ub, oct) {
 }
 // 現実世界の港：おおよその位置のまわり（数km）で、港を置ける海岸を探す。
 // 前（海の方）に泊地の広さの水面があり、後ろ（陸の方）に岸壁を作れる陸があって、深い方を向いている所
+// 6 番目（opt）：{ at: [緯度, 経度], bearing: 沖の方位 } を書いた港は、探さずにその位置・向きに置く
+// （自動で探すと、川の分かれ目などで違う向きになることがある。サウサンプトンは南東のサウサンプトン・ウォーターへ）
 function _rwPlacePort(def, idx) {
-    const [name, type, lat0, lon0, via] = def;
+    const [name, type, lat0, lon0, via, opt] = def;
     const T = PORT_TYPES[type], half = T.quay / 2, basin = T.basin;
     const RAD = Math.PI / 180, mLat = WORLD_R * RAD, mLon = mLat * Math.cos(lat0 * RAD);
+    const seedOf = () => { let seed = 7; for (const ch of name) seed = (seed * 31 + ch.charCodeAt(0)) % 1000000007; return seed; };
+    if (opt && opt.at && Number.isFinite(opt.bearing)) {
+        const [la, lo] = opt.at;
+        return { id: 'r' + idx, type, name, lat: la, lon: lo, u: worldLatLonToUnit(la, lo), real: true, via: via || null, seaBearing: opt.bearing, seed: seedOf(), fixed: true };
+    }
     const SR = 6000, STEP = 150;
     let best = null;
     for (let dy = -SR; dy <= SR; dy += STEP) for (let dx = -SR; dx <= SR; dx += STEP) {

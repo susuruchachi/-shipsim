@@ -6,7 +6,8 @@
 // 上の桁を上げたら、下の桁は 0 に戻す。Push するたびに上げる。
 //
 // 0.01.000.000  版の番号を付け始めた。座礁から自力／タグで抜け出す、現実世界の航路が陸をかすめないように
-var APP_VERSION = '0.01.000.000';
+// 0.01.000.001  サウサンプトン港の岸壁を南東（サウサンプトン・ウォーター）向きに。タイタニックが出港できる
+var APP_VERSION = '0.01.000.001';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
