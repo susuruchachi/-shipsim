@@ -3,9 +3,10 @@
 // ════════════════════════════════════════════════════════════════
 //  船のまわりを 32 の向きに見て、いちばん近い陸（崖・岸壁・島）までの距離を測り、
 //  よく返ってきそうな所（近くて高い所）を最大 4 つ選んで、こだまにする。
-//    ・遅れ   ＝ 行って帰る距離 ÷ 音の速さ（1km 先の崖なら約 6 秒後）
-//    ・大きさ ＝ 近いほど・高い崖ほど大きい
-//    ・音色   ＝ 遠いほど高い音が抜けてこもる
+//    ・遅れ   ＝ 汽笛 → 崖 → 聞く所 の道のり ÷ 音の速さ（1km 先の崖なら約 6 秒後）
+//    ・大きさ ＝ その道のりに反比例（汽笛そのものと同じ減衰：60m より先は距離に反比例）＋空気に吸われる分。
+//               高い崖ほどよく返る
+//    ・音色   ＝ 道のりが長いほど高い音が抜けてこもる
 //    ・左右   ＝ 返ってくる向き（視点の向きに合わせて振る）
 //  汽笛の音（audio.buses.horn）だけを分けて通すので、機関音やベルはこだましない。
 
@@ -26,12 +27,16 @@ window.setHornEcho = setHornEcho;
 function _echoBuild() {
     const c = audio.ctx;
     if (!c || !audio.buses || !audio.buses.horn) return false;
-    if (_echo.ctx === c) return true;
+    // 汽笛を初めて鳴らして減衰前の音（audio.hornDry）ができたら、そちらにつなぎ直す
+    if (_echo.ctx === c && !(audio.hornDry && _echo.src !== 'dry')) return true;
+    if (_echo.ctx === c) { try { audio.buses.horn.disconnect(_echo.input); } catch (e) { /* ignore */ } for (const T of _echo.taps) { try { T.g.disconnect(); if (T.pan) T.pan.disconnect(); } catch (e) { /* ignore */ } } }
     _echo.ctx = c;
     _echo.input = c.createGain();
-    audio.buses.horn.connect(_echo.input);
+    // 聞く所までの減衰の前の汽笛（36-horns.js の audio.hornDry）。無ければ、今まで通り汽笛の音の出口から
+    (audio.hornDry || audio.buses.horn).connect(_echo.input);
+    _echo.src = audio.hornDry ? 'dry' : 'bus';
     _echo.taps = [];
-    const maxDelay = ECHO_MAX_R * 2 / AUDIO_SPEED_OF_SOUND + 1;
+    const maxDelay = ECHO_MAX_R * 3 / AUDIO_SPEED_OF_SOUND + 1;
     for (let i = 0; i < ECHO_TAPS; i++) {
         const d = c.createDelay(maxDelay);
         const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2500; lp.Q.value = 0.5;
@@ -42,7 +47,9 @@ function _echoBuild() {
         const pan = c.createStereoPanner ? c.createStereoPanner() : null;
         _echo.input.connect(d); d.connect(lp);
         lp.connect(g); lp.connect(d2); d2.connect(g2); g2.connect(g);
-        if (pan) { g.connect(pan); pan.connect(audio.muffle); } else g.connect(audio.muffle);
+        // 出口は汽笛の音の出口（汽笛の音量の設定が効くように）。入口が 'bus' のときは、回り込まないよう今まで通り
+        const out = _echo.src === 'dry' ? audio.buses.horn : audio.muffle;
+        if (pan) { g.connect(pan); pan.connect(out); } else g.connect(out);
         _echo.taps.push({ d, lp, g, pan, delay: 0, dir: 0, active: false });
     }
     return true;
@@ -77,8 +84,9 @@ function _echoScan() {
         // 返す面の高さ：陸に入ってから 300m の間でいちばん高い所
         let top = 0;
         for (let q = 0; q <= 300; q += 50) top = Math.max(top, _echoHeight(G, sx + dx * (r + q), sz + dz * (r + q)));
-        const s = Math.min(1, (top + 8) / 50) * 350 / (350 + r);
-        hits.push({ ang, dx, dz, r, s });
+        const refl = Math.min(1, (top + 8) / 50) * 0.5;               // 崖・岸の返しやすさ（高いほど）
+        const s = refl * 2 * 350 / (350 + r);
+        hits.push({ ang, dx, dz, r, s, refl });
     }
     // 強いものから、向きが近すぎないように選ぶ
     hits.sort((a, b) => b.s - a.s);
@@ -110,8 +118,17 @@ function updateHornEcho(t) {
         _echo.taps.forEach((T, i) => {
             const h = pick[i];
             if (!h) { if (T.active) T.g.gain.setTargetAtTime(0, now, 0.3); T.active = false; return; }
-            const delay = 2 * h.r / AUDIO_SPEED_OF_SOUND;
-            const gain = Math.min(0.45, 2.2 * h.s);
+            // 道のり：汽笛 → 崖 → 聞く所（視点）
+            const wx = (physics.cgWorldX || 0) + h.dx * h.r, wz = (physics.cgWorldZ || 0) + h.dz * h.r;
+            const cam = (typeof camera !== 'undefined' && camera) ? camera.position : null;
+            const back = cam ? Math.hypot(cam.x - wx, cam.z - wz) : h.r;
+            const L = h.r + back;
+            const delay = L / AUDIO_SPEED_OF_SOUND;
+            // 汽笛そのものと同じ減衰（60m より先は距離に反比例）× 空気に吸われる分 × 崖の返しやすさ。
+            // こだまは聞き分けやすいので少し持ち上げる（×6）。汽笛の音は 'dry' では聞く所までの減衰の前なので、この値がそのまま効く
+            const spread = 60 / (60 + Math.max(0, L - 60)), air = Math.exp(-L / 9000);
+            const gain = _echo.src === 'dry' ? Math.min(0.5, 6 * h.refl * spread * air) : Math.min(0.45, 2.2 * h.s);
+            h.L = L;
             if (!T.active || Math.abs(delay - T.delay) > 0.25) {
                 // 別の所からの反射に替わる：いったん消して、遅れを合わせてから戻す（音程が滑らないように）
                 T.g.gain.setTargetAtTime(0, now, 0.05);
@@ -122,7 +139,7 @@ function updateHornEcho(t) {
                 T.d.delayTime.setTargetAtTime(delay, now, 0.5);
                 T.g.gain.setTargetAtTime(gain, now, 0.3);
             }
-            T.lp.frequency.setTargetAtTime(600 + 3400 * Math.exp(-h.r / 2500), now, 0.3);
+            T.lp.frequency.setTargetAtTime(600 + 3400 * Math.exp(-(h.L || 2 * h.r) / 5000), now, 0.3);
             T.delay = delay; T.dx = h.dx; T.dz = h.dz; T.active = true;
             _echoPan(T);
         });

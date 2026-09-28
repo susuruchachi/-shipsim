@@ -314,8 +314,12 @@ function _hornRt(i) {
     if (!audio.ctx) return null;
     let R = _hornRuntime[i];
     if (!R) {
-        R = { em: new AudioEmitter(audio.buses.horn, 60, 0.6), voices: [], presses: 0, strikeNext: 0 };
+        // 聞く所までの距離に比例して小さく（60m より先は 距離に反比例。遠いほど高い音も抜ける：AudioEmitter）
+        R = { em: new AudioEmitter(audio.buses.horn, 60, 1.0), voices: [], presses: 0, strikeNext: 0 };
         R.out = _mkGain(1, R.em.input);
+        // こだま（45-horn-echo.js）には、聞く所までの減衰の前の音を渡す（こだまはこだまの道のりで減衰させる）
+        if (!audio.hornDry) audio.hornDry = audio.ctx.createGain();
+        R.out.connect(audio.hornDry);
         _hornRuntime[i] = R;
     }
     return R;
