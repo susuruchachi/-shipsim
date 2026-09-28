@@ -483,6 +483,8 @@ function applyShipConfig(cfg) {
 
     // 設定パネルの入力欄（個別に保存していない項目も含めて）。上の個別の復元の
     // 後で、値が違うものだけ書き戻す。質量の自動補正（下）より前に行う。
+    // 喫水の手入力は船ごと：保存に無ければ「自動」に戻す
+    if (typeof setShipDraft === 'function') { const di = document.getElementById('draft-num'); if (di) di.value = 0; setShipDraft(0); }
     applyPanelInputs(cfg.panelInputs);
 
     // ── v30 実物理浮力（F=ρgV）対策: massの自動再計算 ──────────────────────

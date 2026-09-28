@@ -413,13 +413,46 @@ function worldSetMode(mode) {
 window.worldSetMode = worldSetMode;
 
 // 船の喫水[m]（喫水線からキールまで）
-function worldShipDraft() {
+// 模型の形から決めた喫水（いちばん深い所）[m]
+function worldShipDraftAuto() {
     const hp = window.hullProfile;
     const sy = (typeof shipGroup !== 'undefined' && shipGroup) ? Math.abs(shipGroup.scale.y) || 1 : 1;
-    if (hp && hp.ready && hp.designWaterlineY > hp.keelY) return (hp.designWaterlineY - hp.keelY) * sy;
+    if (hp && hp.ready) {
+        let d = 0;
+        for (const sl of hp.slices || []) d = Math.max(d, sl.draft || 0);
+        if (!(d > 0) && hp.designWaterlineY > hp.keelY) d = hp.designWaterlineY - hp.keelY;
+        if (d > 0) return d * sy;
+    }
     return 0.4 * (physics.scale || 1);
 }
-window.worldShipDraft = worldShipDraft;
+// 喫水[m]。船体設定で手入力（physics.draftOverride）していればそれ
+function worldShipDraft() {
+    return physics.draftOverride > 0 ? physics.draftOverride : worldShipDraftAuto();
+}
+// 船の中の前後位置 z（模型の座標）での 半幅[m]・喫水[m]（船体の輪切りから。手入力の喫水は比で掛ける）
+function worldHullAt(zLocal) {
+    const hp = window.hullProfile;
+    const sc = physics.scale || 1;
+    const sy = (typeof shipGroup !== 'undefined' && shipGroup) ? Math.abs(shipGroup.scale.y) || 1 : 1;
+    if (!hp || !hp.ready || !hp.slices || hp.slices.length < 2) return { hw: 1.5 * sc, d: worldShipDraft() };
+    const a = zLocal / hp.halfLen * (hp.bowSign || 1);
+    const sl = hp.slices;
+    let i = 0;
+    while (i < sl.length - 2 && sl[i + 1].alongNorm < a) i++;
+    const A = sl[i], B = sl[i + 1];
+    const u = Math.max(0, Math.min(1, (a - A.alongNorm) / ((B.alongNorm - A.alongNorm) || 1)));
+    const hw = (A.halfWidth + (B.halfWidth - A.halfWidth) * u) * sc;
+    let d = (A.draft + (B.draft - A.draft) * u) * sy;
+    if (physics.draftOverride > 0) d *= physics.draftOverride / Math.max(1e-3, worldShipDraftAuto());
+    return { hw, d };
+}
+function setShipDraft(v) {
+    physics.draftOverride = Math.max(0, parseFloat(v) || 0);
+    const el = document.getElementById('draft-auto');
+    if (el) el.textContent = `0 ＝ 模型から自動（${worldShipDraftAuto().toFixed(1)} m）`;
+}
+Object.assign(window, { worldShipDraft, worldShipDraftAuto, worldHullAt, setShipDraft });
+setInterval(() => { const el = document.getElementById('draft-auto'); const p = document.getElementById('settings-panel'); if (el && p && p.classList.contains('open')) el.textContent = `0 ＝ 模型から自動（${worldShipDraftAuto().toFixed(1)} m）`; }, 2000);
 
 // 港から出航する：港の前の泊地に、海の方を向けて置く。
 // 船が深すぎて港に入れないときは、足りる深さの所まで沖へ出して置く。

@@ -455,6 +455,7 @@ function _trClearAll() {
 
 // モードが変わった・港へ移動した（43-world.js から）
 function worldTerrainModeChanged(moved) {
+    terrain.good = null; _trHullCache = null;
     if (typeof minimapReset === 'function') minimapReset();
     _trClearAll();
     if (world.mode === 'world') { worldBuildPorts(); terrain._dirty = true; }
@@ -551,6 +552,16 @@ function _brkUpdate(t) {
 //  座礁
 // ════════════════════════════════════════════════════════════════
 // 物理の面の点の「底の高さ」：地形（港の手直し込み）と、岸壁・桟橋などの施設
+// 岸壁・桟橋・防波堤・停泊中の船の中か（地形は見ない。速い）
+function _trInCollider(x, z) {
+    for (const [, P] of terrain.ports) {
+        const S = P.shape;
+        const dx = x - S.x, dz = z - S.z;
+        const a = dx * S.sx + dz * S.sz, b = dx * S.sz - dz * S.sx;
+        for (const c of P.colliders) if (a >= c[0] && a <= c[1] && b >= c[2] && b <= c[3]) return true;
+    }
+    return false;
+}
 function worldSeabedAt(x, z) {
     let h = worldHeightAtLocal(x, z, 16);
     const shapes = [];
@@ -566,36 +577,112 @@ function worldSeabedAt(x, z) {
 }
 window.worldSeabedAt = worldSeabedAt;
 
+// 船体の当たりを見る点（船の中の座標[m]：a＝前後、s＝横（+x 側）、d＝その点の喫水）
+//  前後 9 か所 × （キール・左右の舷）＋ 船首・船尾の先。舷は喫水の 7 割（丸い船底の分）で見る。
+let _trHullCache = null;
+function _trHullPoints() {
+    const hp = window.hullProfile;
+    const key = hp && hp.ready ? [hp.halfLen, physics.scale, physics.draftOverride || 0, (typeof shipGroup !== 'undefined' && shipGroup) ? shipGroup.scale.y : 1].join(',') : 'none';
+    if (_trHullCache && _trHullCache.key === key) return _trHullCache.pts;
+    const sc = physics.scale || 1;
+    const hl = (hp && hp.ready) ? hp.halfLen : 6;
+    const pts = [];
+    for (const k of [-0.93, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 0.93]) {
+        const H = worldHullAt(k * hl);
+        pts.push({ a: k * hl * sc, s: 0, d: H.d, k });
+        // 舷は 0.4m 外（防舷材の分）で見る：船体そのものは岸壁の手前で止まる
+        pts.push({ a: k * hl * sc, s: H.hw + 0.4, d: H.d * 0.7, k });
+        pts.push({ a: k * hl * sc, s: -H.hw - 0.4, d: H.d * 0.7, k });
+    }
+    for (const k of [-1, 1]) pts.push({ a: k * (hl * sc + 0.4), s: 0, d: worldHullAt(k * hl * 0.98).d * 0.8, k, tip: true });
+    // 岸壁の角などが点の間に入り込まないように、舷の線を 6m おきに（施設だけ見る）
+    const dense = [];
+    const L = hl * sc, n = Math.max(4, Math.ceil(2 * L / 6));
+    for (let i = 0; i <= n; i++) {
+        const a = -L + 2 * L * i / n, H = worldHullAt(a / sc);
+        dense.push({ a, s: H.hw + 0.4 }, { a, s: -H.hw - 0.4 });
+    }
+    _trHullCache = { key, pts, dense };
+    return pts;
+}
+// その姿勢（重心の位置 x,z と向き h）で、船体がどれだけ底・岸壁に入っているか（0 なら当たっていない）
+function _trHullScore(x, z, h, off, out) {
+    const r = h * Math.PI / 180, fx = Math.sin(r), fz = Math.cos(r), sx = Math.cos(r), sz = -Math.sin(r);
+    const ox = x + fx * off.a + sx * off.s, oz = z + fz * off.a + sz * off.s;
+    let score = 0, hard = 0;
+    for (const p of _trHullPoints()) {
+        const px = ox + fx * p.a + sx * p.s, pz = oz + fz * p.a + sz * p.s;
+        const b = worldSeabedAt(px, pz);
+        const c = b + p.d;                               // 正：底（岸壁）が船底より上
+        if (c > 0) { score += Math.min(12, c); if (out) out.push(p); }
+        if (b > 0) hard++;                               // 岸壁・桟橋・陸（水面より上）の中
+    }
+    if (terrain.ports.size && _trHullCache) for (const p of _trHullCache.dense) {
+        if (_trInCollider(ox + fx * p.a + sx * p.s, oz + fz * p.a + sz * p.s)) { hard++; score += 12; if (out) out.push(p); }
+    }
+    _trHullScore.hard = hard;
+    return score;
+}
+// 前の姿勢より悪くなったか（固い所に入る点が増えた、または深く乗り上げた）
+function _trWorse(score, hard, good) { return hard > good.hard || score > good.score + 0.02; }
 function _trCheckGrounding(t, dt) {
     const hp = window.hullProfile;
-    const WS = physics.scale || 1;
-    const halfLen = ((hp && hp.ready) ? hp.halfLen : 6) * WS;
-    const draft = (hp && hp.ready && hp.designWaterlineY > hp.keelY) ? (hp.designWaterlineY - hp.keelY) * (shipGroup ? Math.abs(shipGroup.scale.y) : 1) : 0.4 * halfLen / 6;
+    if (typeof shipGroup === 'undefined' || !shipGroup) return;
+    const x = physics.cgWorldX || 0, z = physics.cgWorldZ || 0, h = physics.heading || 0;
+    // 重心と、模型の原点（船体の輪切りの基準）とのずれ（船の向きの座標で）
+    const r0 = h * Math.PI / 180;
+    const dx = shipGroup.position.x - x, dz = shipGroup.position.z - z;
+    const off = { a: dx * Math.sin(r0) + dz * Math.cos(r0), s: dx * Math.cos(r0) - dz * Math.sin(r0) };
+    // 深さの表示・浅い警告（ときどきでよい）
     if (t - terrain.lastCheck > 0.2) {
         terrain.lastCheck = t;
-        const hr = (physics.heading || 0) * Math.PI / 180, fx = Math.sin(hr), fz = Math.cos(hr);
-        const x = physics.cgWorldX || 0, z = physics.cgWorldZ || 0;
-        const bow = worldSeabedAt(x + fx * halfLen * 0.9, z + fz * halfLen * 0.9);
-        const mid = worldSeabedAt(x, z);
-        const stern = worldSeabedAt(x - fx * halfLen * 0.9, z - fz * halfLen * 0.9);
-        terrain.depth = -mid;
-        terrain._bowShallow = bow > -draft;
-        terrain._sternShallow = stern > -draft;
-        terrain._bowWarn = bow > -draft - 3;          // 船首・船尾の下があと3mで底
-        terrain._sternWarn = stern > -draft - 3;
-        const wasGrounded = terrain.grounded;
-        terrain.grounded = terrain._bowShallow || terrain._sternShallow || mid > -draft;
-        if (terrain.grounded && !wasGrounded && Math.abs(physics.speed || 0) > 0.6 && typeof audioWaveImpact === 'function') {
-            audioWaveImpact(shipGroup.position.clone(), Math.min(2, 0.5 + Math.abs(physics.speed) / 6), true);
-        }
+        terrain.depth = -worldSeabedAt(x, z);
+        const fx = Math.sin(r0), fz = Math.cos(r0), HL = ((hp && hp.ready) ? hp.halfLen : 6) * (physics.scale || 1);
+        const bowD = worldHullAt(((hp && hp.ready) ? hp.halfLen : 6) * 0.9).d, sternD = worldHullAt(-((hp && hp.ready) ? hp.halfLen : 6) * 0.9).d;
+        terrain._bowWarn = worldSeabedAt(x + fx * HL * 0.9, z + fz * HL * 0.9) > -bowD - 3;
+        terrain._sternWarn = worldSeabedAt(x - fx * HL * 0.9, z - fz * HL * 0.9) > -sternD - 3;
     }
-    if (terrain.grounded) {
-        // 浅い方へは進めない。ゆっくり止まる
-        const v = physics.speed || 0;
-        if ((v > 0 && (terrain._bowShallow || !terrain._sternShallow)) || (v < 0 && (terrain._sternShallow || !terrain._bowShallow))) {
-            physics.speed = v * Math.exp(-dt * 2.5);
-            if (Math.abs(physics.speed) < 0.05) physics.speed = 0;
+    // 外洋のまん中（近くに陸も港も無い）では調べない
+    if (!terrain.near && !terrain.ports.size && terrain.depth > worldShipDraft() + 80) { terrain.grounded = false; terrain.good = { x, z, h, score: 0, hard: 0 }; return; }
+    const hits = [];
+    const score = _trHullScore(x, z, h, off, hits), hard = _trHullScore.hard;
+    const good = terrain.good;
+    const wasGrounded = terrain.grounded;
+    if (good && _trWorse(score, hard, good)) {
+        // 前より深く入った：動いた分を取り消す（向きだけ・位置だけ戻して済むならそれで）
+        const cands = [{ x, z, h: good.h }, { x: good.x, z: good.z, h }, { x: good.x, z: good.z, h: good.h }];
+        let pick = cands[2], pickS = good.score, pickH = good.hard;
+        for (const c of cands) { const sc2 = _trHullScore(c.x, c.z, c.h, off), hd2 = _trHullScore.hard; if (!_trWorse(sc2, hd2, good)) { pick = c; pickS = sc2; pickH = hd2; break; } }
+        const v = Math.abs(physics.speed || 0);
+        if (pick.x !== x || pick.z !== z) {
+            // 前後に進んで当たった：止まる（少し跳ね返る）
+            if (v > 0.6 && typeof audioWaveImpact === 'function') audioWaveImpact(shipGroup.position.clone(), Math.min(2, 0.5 + v / 6), true);
+            physics.speed = -(physics.speed || 0) * 0.05;
+            if (typeof _tugShip !== 'undefined') _tugShip.vSway = 0;
         }
+        if (pick.h !== h) { physics.turnRate = 0; if (typeof _tugShip !== 'undefined') _tugShip.yawRate = 0; }
+        physics.cgWorldX = pick.x; physics.cgWorldZ = pick.z; physics.heading = pick.h;
+        // 描く船もこのフレームのうちに戻す（1フレームでも岸壁に食い込んで見えないように）
+        const dH = (pick.h - h) * Math.PI / 180;
+        if (dH) {
+            const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dH);
+            const rel = shipGroup.position.clone().sub(new THREE.Vector3(x, shipGroup.position.y, z)).applyQuaternion(q);
+            shipGroup.position.set(x + rel.x, shipGroup.position.y, z + rel.z);
+            shipGroup.quaternion.premultiply(q);
+        }
+        shipGroup.position.x += pick.x - x; shipGroup.position.z += pick.z - z;
+        shipGroup.updateMatrixWorld();
+        terrain.grounded = true;
+        terrain.good = { x: pick.x, z: pick.z, h: pick.h, score: pickS, hard: pickH };
+    } else {
+        terrain.grounded = score > 0.02;
+        terrain.good = { x, z, h, score, hard };
+        // 乗り上げている間は船底がこすれて、ゆっくりにしか動けない
+        if (terrain.grounded) physics.speed *= Math.exp(-dt * 0.8);
+    }
+    terrain.hullHits = hits.length;
+    if (terrain.grounded && !wasGrounded && Math.abs(physics.speed || 0) > 0.6 && typeof audioWaveImpact === 'function') {
+        audioWaveImpact(shipGroup.position.clone(), Math.min(2, 0.5 + Math.abs(physics.speed) / 6), true);
     }
 }
 
