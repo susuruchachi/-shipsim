@@ -190,6 +190,20 @@ function _mmDraw() {
             g.stroke(); g.setLineDash([]);
         }
     }
+    // 自動航行で向かっている海域（旗）
+    if (typeof autopilot !== 'undefined' && autopilot.dest && autopilot.dest.point && autopilot.active) {
+        const loc = worldUnitToLocal(worldLatLonToUnit(autopilot.dest.lat, autopilot.dest.lon));
+        if (Number.isFinite(loc.x)) {
+            let q = toS(loc.x, loc.z);
+            const d = Math.hypot(q.x, q.y);
+            if (d > c - 10) q = { x: q.x / d * (c - 10), y: q.y / d * (c - 10) };      // 遠いときは縁に
+            g.save(); g.translate(q.x, q.y); g.rotate(-rot);
+            g.strokeStyle = g.fillStyle = _wm.chart ? '#c0208a' : '#ff5ad0'; g.lineWidth = 1.6;
+            g.beginPath(); g.moveTo(0, 0); g.lineTo(0, -12); g.stroke();
+            g.beginPath(); g.moveTo(0, -12); g.lineTo(8, -9); g.lineTo(0, -6); g.closePath(); g.fill();
+            g.restore();
+        }
+    }
     // タグボート
     if (window.tugs) for (const t of tugs) {
         const q = toS(t.pos.x, t.pos.z);

@@ -757,6 +757,14 @@ function _wmTap(p) {
         if (d < bd) { bd = d; best = q; }
     }
     _wm.sel = best;
+    // 港でない所：その海域を選ぶ（自動航行の行き先にできる）
+    _wm.selPt = null;
+    if (!best) {
+        const dpd = _wmDegPerPx();
+        const lat = _wm.cy - (p.y - cv.clientHeight / 2) * dpd;
+        const lon = ((_wm.cx + (p.x - cv.clientWidth / 2) * dpd) + 540) % 360 - 180;
+        if (Math.abs(lat) < 80) _wm.selPt = { lat, lon };
+    }
     _wmShowInfo();
     worldMapRedraw(true);
 }
@@ -764,6 +772,7 @@ function _wmShowInfo() {
     const el = document.getElementById('wp-info');
     if (!el) return;
     const p = _wm.sel;
+    if (!p && _wm.selPt) { _wmShowPointInfo(el, _wm.selPt); return; }
     if (!p) { el.style.display = 'none'; return; }
     const T = PORT_TYPES[p.type];
     let dist = '';
@@ -784,6 +793,26 @@ function _wmShowInfo() {
         <button onclick="_wm.sel=null;_wmShowInfo();worldMapRedraw(true)">閉じる</button></div>`;
 }
 window._wmShowInfo = _wmShowInfo;
+// 選んだ海域の説明（水深・距離・針路）と「ここへ自動航行」
+function _wmShowPointInfo(el, q) {
+    const u = worldLatLonToUnit(q.lat, q.lon);
+    const h = worldHeightAt(u.x, u.y, u.z, 16);
+    const land = h >= 0;
+    let dist = '', apBtn = '';
+    if (world.mode === 'world') {
+        const ll = worldShipLatLon();
+        if (typeof rhumbCourse === 'function') {
+            const rc = rhumbCourse(ll.lat, ll.lon, q.lat, q.lon);
+            dist = `<br>今の場所から ${(rc.dist / 1852).toFixed(rc.dist < 18520 ? 1 : 0)} 海里（航程線の針路 ${Math.round(rc.course).toString().padStart(3, '0')}°）`;
+        }
+        if (typeof autopilotStartPoint === 'function') apBtn = `<button onclick="autopilotStartPoint(${q.lat}, ${q.lon})">🧭 ここへ自動航行</button>`;
+    }
+    const shoal = !land && !worldShoalFree(u.x, u.y, u.z) ? '・浅瀬の多い海域' : '';
+    el.style.display = 'block';
+    el.innerHTML = `<div class="wp-pname">📍 ${land ? '陸地' : '海域'}</div>
+        <div class="wp-pmeta">${worldFmtLatLon(q.lat, q.lon)}・${land ? `標高 約 ${Math.round(h)}m（近くの海で止まります）` : `水深 約 ${Math.round(-h)}m${shoal}`}${dist}</div>
+        <div class="wp-pbtns">${apBtn}<button onclick="_wm.selPt=null;_wmShowInfo();worldMapRedraw(true)">閉じる</button></div>`;
+}
 window._wm = _wm;
 
 // 描き直す（quick：細かい絵を作り直さない＝ドラッグ中）
@@ -947,6 +976,17 @@ function worldMapRedraw(quick) {
         for (const q of rp) if (q.wp) { const s = _wmToScreen(q.lat, q.lon, cv); g.beginPath(); g.arc(s.x, s.y, 3, 0, Math.PI * 2); g.fill(); }
         g.restore();
     }
+    // 選んだ海域（＋）と、自動航行で向かっている海域（旗）
+    const mark = (q, flag) => {
+        const s = _wmToScreen(q.lat, q.lon, cv);
+        g.save(); g.translate(s.x, s.y);
+        g.strokeStyle = _wm.chart ? '#c0208a' : '#ff5ad0'; g.fillStyle = g.strokeStyle; g.lineWidth = 2;
+        if (flag) { g.beginPath(); g.moveTo(0, 0); g.lineTo(0, -16); g.stroke(); g.beginPath(); g.moveTo(0, -16); g.lineTo(10, -12); g.lineTo(0, -8); g.closePath(); g.fill(); }
+        else { g.beginPath(); g.arc(0, 0, 7, 0, Math.PI * 2); g.moveTo(-11, 0); g.lineTo(11, 0); g.moveTo(0, -11); g.lineTo(0, 11); g.stroke(); }
+        g.restore();
+    };
+    if (_wm.selPt) mark(_wm.selPt, false);
+    if (typeof autopilot !== 'undefined' && autopilot.dest && autopilot.dest.point && (autopilot.active || autopilot.planning)) mark(autopilot.dest, true);
     // 船
     if (world.mode === 'world') {
         const ll = worldShipLatLon();

@@ -507,6 +507,41 @@ function apDepthAt(lat, lon) {
 }
 window.apDepthAt = apDepthAt;
 
+// 地図で指定した海域の、止まる所：その点が浅い・陸・浅瀬の海域なら、まわり（AP_SEA_SNAP 以内）の
+// いちばん近い「深さが足りて、浅瀬の出ない所」。無ければ null
+const AP_SEA_SNAP = 5000;
+function apSeaTarget(lat, lon, need) {
+    const hp = window.hullProfile, L = ((hp && hp.ready) ? hp.halfLen * 2 : 12) * (physics.scale || 1);
+    const ok = (la, lo) => {
+        // 船が止まって向きが変わっても大丈夫なよう、船の長さほどの円の中も見る
+        for (let k = -1; k < 8; k++) {
+            const a = k * Math.PI / 4, r = k < 0 ? 0 : L * 0.6 + 30;
+            const qa = la + Math.cos(a) * r / WORLD_R / _apRad, qo = lo + Math.sin(a) * r / WORLD_R / _apRad / Math.max(0.05, Math.cos(la * _apRad));
+            const u = worldLatLonToUnit(qa, qo);
+            if (apDepthAt(qa, qo) < need + 1 || !worldShoalFree(u.x, u.y, u.z)) return false;
+        }
+        return true;
+    };
+    if (ok(lat, lon)) return { lat, lon, moved: 0 };
+    const cl = Math.max(0.05, Math.cos(lat * _apRad));
+    for (let r = 100; r <= AP_SEA_SNAP; r += 100) {
+        const n = Math.max(8, Math.round(2 * Math.PI * r / 150));
+        for (let k = 0; k < n; k++) {
+            const a = k / n * Math.PI * 2;
+            const la = lat + Math.cos(a) * r / WORLD_R / _apRad, lo = lon + Math.sin(a) * r / WORLD_R / _apRad / cl;
+            if (ok(la, lo)) return { lat: la, lon: lo, moved: r };
+        }
+    }
+    return null;
+}
+window.apSeaTarget = apSeaTarget;
+// 地図で指定した海域へ（行き先は港のような形のもの：point が付いている）
+function autopilotStartPoint(lat, lon) {
+    if (window._wm) { _wm.selPt = null; if (typeof _wmShowInfo === 'function') _wmShowInfo(); }
+    return autopilotStart({ point: true, lat, lon, name: `指定海域（${worldFmtLatLon(lat, lon)}）` });
+}
+window.autopilotStartPoint = autopilotStartPoint;
+
 // ── 始める・やめる ──
 function _apMsg(s) { autopilot.msg = s; renderAutopilotPanel(); }
 async function autopilotStart(port) {
@@ -519,13 +554,14 @@ async function autopilotStart(port) {
     autopilot.resume = null;
     autopilot.planning = true; autopilot.dest = port;
     _apMsg(`${port.name} への航路を計算しています…`);
-    const T = PORT_TYPES[port.type];
+    const isPt = !!port.point;                     // 地図で指定した海域
+    const T = isPt ? null : PORT_TYPES[port.type];
     const hp = window.hullProfile;
     const halfLen = ((hp && hp.ready) ? hp.halfLen : 6) * (physics.scale || 1);
     const here = worldShipLatLon();
     const M = apMargins();
     const draft = worldShipDraft();
-    const chLen = worldPortChannelLen(port);
+    const chLen = isPt ? 0 : worldPortChannelLen(port);
     // ふつうの余裕で通れないときは、タグの補助で狭い所も通る（サウサンプトンのように）
     let lastErr = null;
     for (const mode of ['normal', 'tug']) {
@@ -546,6 +582,28 @@ async function autopilotStart(port) {
                     route.push(Object.assign(portChannelPoint(P, aOn), { label: `${P.name} 航路`, channel: true, narrow: chNarrow }));
                 }
                 route.push(Object.assign(portChannelPoint(P, exitA), { label: `${P.name} 航路の出口`, channel: true, narrow: chNarrow }));
+            }
+        }
+        // 地図で指定した海域：そこ（浅ければ近くの深い所）まで行って止まる
+        if (isPt) {
+            const tgt = apSeaTarget(port.lat, port.lon, need);
+            if (!tgt) { lastErr = new Error('point shallow'); continue; }
+            const from = route.length ? route[route.length - 1] : here;
+            if (mode === 'tug') _apMsg(`${port.name} へは狭い所があるので、タグの補助を前提に航路を探しています…`);
+            try {
+                const pts = await worldPlanRoute(from, tgt, { tug: mode === 'tug' });
+                if (autopilot.dest !== port || !autopilot.planning) return;      // 途中でやめた
+                for (const p of pts.slice(1)) route.push({ lat: p.lat, lon: p.lon, label: '', narrow: !!p.narrow });
+                Object.assign(route[route.length - 1], { label: port.name, final: true });
+                autopilot.berthPlan = null; autopilot.berthWhy = null; autopilot.deepShip = false;
+                autopilot.pointMoved = tgt.moved;
+                autopilot._newRoute = route;
+                lastErr = null;
+                break;
+            } catch (e) {
+                lastErr = e;
+                if (/ocean/.test(e.message)) break;
+                continue;
             }
         }
         // 目的の港の航路の沖：航路の外で、この船に十分な深さがあり、浅瀬の出ない所
@@ -625,7 +683,9 @@ async function autopilotStart(port) {
     if (lastErr) {
         const e = lastErr;
         autopilot.planning = false; autopilot.dest = null; autopilot.lastErr = e.message;
-        const why = /trapped goal/.test(e.message) ? `${port.name} のまわりは浅瀬が多く、この船（喫水 ${worldShipDraft().toFixed(1)}m）ではタグの補助があっても安全に近づけません`
+        const why = /point shallow/.test(e.message) ? `指定した所のまわり ${AP_SEA_SNAP / 1000}km 以内に、この船（喫水 ${worldShipDraft().toFixed(1)}m）が止まれる深さの海がありません`
+            : /trapped goal/.test(e.message) && isPt ? '指定した所のまわりは浅瀬が多く、安全に近づけません'
+            : /trapped goal/.test(e.message) ? `${port.name} のまわりは浅瀬が多く、この船（喫水 ${worldShipDraft().toFixed(1)}m）ではタグの補助があっても安全に近づけません`
             : /trapped start/.test(e.message) ? '今いる所のまわりが浅く、安全に出られる道がありません（タグや手で深い所へ出てください）'
             : /shallow/.test(e.message) ? '座礁しない深さの航路が見つかりませんでした（浅瀬が多すぎます）' : /ocean|blocked|trapped/.test(e.message) ? '海とつながった航路がありません。湖の港か、とても狭い水路の奥の港かもしれません' : e.message;
         _apMsg(`${port.name} への航路が見つかりませんでした（${why}）`);
@@ -635,6 +695,7 @@ async function autopilotStart(port) {
     route.forEach((w, i) => { if (!w.label) w.label = `変針点 ${i + 1}`; });
     autopilot.route = route; autopilot.leg = 0; autopilot.planning = false; autopilot.active = true;
     autopilot.legFrom = worldShipLatLon(); autopilot.lastOrder = null; autopilot.overshoot = false;
+    autopilot.note = (port.point && autopilot.pointMoved > 0) ? `指定した所は浅い（または陸）ので、${autopilot.pointMoved >= 1000 ? (autopilot.pointMoved / 1000).toFixed(1) + 'km' : autopilot.pointMoved + 'm'} 離れた深い所で止まります` : '';
     _apMsg('');
     if (typeof worldMapRedraw === 'function') worldMapRedraw(true);
 }
@@ -751,9 +812,12 @@ function updateAutopilot(t, dt) {
         // 後進はスクリューが止まるまで効き続けるので、遅くなったら早めにやめる（後ろへ走り出さないように）
         if ((rc.dist < dStop * 0.6 || autopilot.overshoot) && v > 1.2) finalOrder = v > 4 ? -2 : -1;
         if ((physics.speed || 0) < -0.3) finalOrder = 0;             // 後進で後ろへ動き出したら止める
+        autopilot.finalSlow = rc.dist < Math.max(2000, dStop * 3);   // 近づいたら微速に落としておく（強い後進が要らないよう）
         if (rc.dist < reach) autopilot.overshoot = true;            // 行き過ぎても、止まるまで後進
         // 止まったら到着（止まる前に港口を過ぎたら、後進で止まってから）。後ろへ動いていても「止まった」ではない
-        if (Math.abs(physics.speed || 0) < 0.5 && (near || autopilot.overshoot)) rc.dist = 0;
+        // （スクリューもほぼ止まってから。後進のまま止めると、あとで後ろへ走り出す）
+        const engStopped = Math.abs(physics.propRpm || 0) < 0.15 && !(Number.isFinite(physics.telegraphAnswer) && physics.telegraphAnswer !== 0);
+        if (Math.abs(physics.speed || 0) < 0.5 && engStopped && (near || autopilot.overshoot)) rc.dist = 0;
         else if (rc.dist < reach) rc.dist = reach + 1;
     }
     if (rc.dist < reach || passed) {
@@ -768,6 +832,7 @@ function updateAutopilot(t, dt) {
                 harborAutoStart('berth', harborBerthPlan(dest));
                 return;
             }
+            if (autopilot.dest && autopilot.dest.point) { autopilotStop(`指定した海域に着きました（水深 ${Math.round(terrain.depth || 0)}m）。機関停止`); autopilot.route = null; autopilot.resume = null; return; }
             autopilotStop(autopilot.deepShip ? `${nm} は船に対して浅いので、沖（水深 ${Math.round(terrain.depth || 0)}m）で止まりました。機関停止` : `${nm} の港口に着きました。機関停止`);
             autopilot.route = null; autopilot.resume = null; return;
         }
@@ -806,6 +871,7 @@ function updateAutopilot(t, dt) {
     let order = AP_SPEEDS[autopilot.cruise];
     if (wp.channel || R.slice(autopilot.leg).every(w => w.channel)) order = Math.min(order, 1);
     else if (remain < 5 * 1852) order = Math.min(order, 2);
+    if (wp.final && autopilot.finalSlow) order = Math.min(order, 1);
     if (finalOrder !== null) order = Math.min(order, finalOrder);
     // 狭い水路・浅い水道（航路の点の narrow）：手前でタグを呼び、持ち場に着くまで待って、
     // 付き添ってもらいながら微速（タグが力を出せる 4 くらいまで）で通る。抜けたら帰す
@@ -940,10 +1006,11 @@ function renderAutopilotPanel() {
         <div class="ap-row">針路 <b>${Math.round(autopilot.course || 0).toString().padStart(3, '0')}°</b>（航程線）</div>
         <div class="ap-row">次：${wp.label} ${_apFmtDist(autopilot.wpDist || 0)}</div>
         <div class="ap-row">残り ${_apFmtDist(autopilot.remain || 0)}・${R.length - autopilot.leg} 区間・着くまで ${etaS}</div>
+        ${autopilot.note ? `<div class="ap-row ap-msg">${autopilot.note}</div>` : ''}
         ${autopilot.escort ? `<div class="ap-row ap-escort">🚢 ${{ wait: 'タグを待っています（狭い水路の手前）', ahead: 'この先は狭い水路：タグが付き添います', on: 'タグの付き添いで狭い水路を微速で通っています' }[autopilot.escort]}</div>` : ''}
         <div class="ap-row">${Object.entries({ full: '全速', half: '半速', slow: '微速' }).map(([k, l]) => `<button class="${autopilot.cruise === k ? 'on' : ''}" onclick="autopilotSetCruise('${k}')">${l}</button>`).join('')}
             <button class="ap-off" onclick="autopilotStop('自動航行を切りました')">解除</button></div>
-        <div class="ap-row"><label><input type="checkbox" ${autopilot.berth ? 'checked' : ''} onchange="autopilotSetBerth(this.checked)"> 着いたらタグで岸壁に着岸</label>${autopilot.berthPlan ? '' : (autopilot.berth && autopilot.berthWhy ? `<div class="ap-msg">${autopilot.berthWhy}</div>` : '')}</div>
+        ${autopilot.dest && autopilot.dest.point ? '' : `<div class="ap-row"><label><input type="checkbox" ${autopilot.berth ? 'checked' : ''} onchange="autopilotSetBerth(this.checked)"> 着いたらタグで岸壁に着岸</label>${autopilot.berthPlan ? '' : (autopilot.berth && autopilot.berthWhy ? `<div class="ap-msg">${autopilot.berthWhy}</div>` : '')}</div>`}
         ${autopilot.msg ? `<div class="ap-msg">${autopilot.msg}</div>` : ''}`;
 }
 window.renderAutopilotPanel = renderAutopilotPanel;
