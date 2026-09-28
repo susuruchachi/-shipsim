@@ -50,14 +50,14 @@ function harborBerthPlan(port, prefHeading) {
     const aB = 6 + D.hw + 1.5;
     // 回す所：船首が岸壁（a＝6）に、船尾が沖の防波堤（44-world-terrain.js：岸から basin×0.95×0.8 の所）に
     // 届かない所。回っている間は船の端が半径 HL の円を描く
-    const outerWall = port.type !== 'cargo' ? S.basin * 0.95 * 0.8 - 8 : S.basin - 40;
+    const outerWall = port.type !== 'cargo' && !port.real ? S.basin * 0.95 * 0.8 - 8 : S.basin - 40;
     const lo = 6 + 12 + D.HL, hi = outerWall - 15 - D.HL;
     if (lo > hi) return { ok: false, why: `${port.name}の泊地（防波堤まで ${Math.round(outerWall)}m）は、この船（${Math.round(D.L)}m）を回すには狭すぎます` };
     const aE = Math.max(lo, Math.min(hi, aB + 3 * D.B + 60));
     // 岸沿いの位置：空いている区間の真ん中。回るときの円（半径 HL）が桟橋の軍艦や防波堤に掛からないように
     let bLo = PL.free[0] + D.HL + 10, bHi = PL.free[1] - D.HL - 10;
     if (PL.keepOut) bLo = Math.max(bLo, PL.keepOut[1] + D.HL + 15);
-    bHi = Math.min(bHi, S.quayLen / 2 + 40 - 8 - D.HL - 15);
+    if (!port.real && port.type !== 'cargo') bHi = Math.min(bHi, S.quayLen / 2 + 40 - 8 - D.HL - 15);   // 防波堤の腕
     if (bLo > bHi) return { ok: false, why: `${port.name}には、この船（${Math.round(D.L)}m）を回して横付けできる広さがありません` };
     const bC = Math.max(bLo, Math.min(bHi, (PL.free[0] + PL.free[1]) / 2));
     // 岸壁と平行な 2 つの向きのうち、今の向きに近い方
@@ -67,12 +67,19 @@ function harborBerthPlan(port, prefHeading) {
     const hB = useH1 ? h1 : h2;
     const open = useH1 ? -1 : 1;              // 沖側の舷（船の中の +x ＝ 左舷 なら +1）。h1 では左舷が岸壁側
     const pB = Q.toW(aB, bC), pE = Q.toW(aE, bC);
+    // 港口の方の向き：現実世界の港は、掘った航路の最初の区間の向き（岸壁からまっすぐ沖とは限らない）
+    let hOut = Math.atan2(S.sx, S.sz) / _haRad;
+    const fw = port.real && port.fairway ? port.fairway.pts : null;
+    if (fw && fw.length >= 3) {
+        const A = worldUnitToLocal(worldLatLonToUnit(fw[1].lat, fw[1].lon)), B = worldUnitToLocal(worldLatLonToUnit(fw[2].lat, fw[2].lon));
+        if (Number.isFinite(A.x) && Number.isFinite(B.x) && Math.hypot(B.x - A.x, B.z - A.z) > 1) hOut = Math.atan2(B.x - A.x, B.z - A.z) / _haRad;
+    }
     return {
         ok: true, port, S, aB, aE, bC, open,
         berth: { x: pB.x, z: pB.z, h: hB },
         turn: { x: pE.x, z: pE.z },
         hIn: Math.atan2(-S.sx, -S.sz) / _haRad,     // 岸壁の方を向く
-        hOut: Math.atan2(S.sx, S.sz) / _haRad,      // 港口の方を向く
+        hOut,                                        // 港口の方を向く
     };
 }
 window.harborBerthPlan = harborBerthPlan;

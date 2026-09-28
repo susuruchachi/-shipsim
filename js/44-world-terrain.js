@@ -45,7 +45,7 @@ function _portShape(p) {
     const br = p.seaBearing * Math.PI / 180;
     // s：海の方、l：岸沿い（s を右に90°）
     // 海の方の向き（物理の面では東が −x）
-    return { id: p.id, type: p.type, x: loc.x, z: loc.z, sx: -Math.sin(br), sz: Math.cos(br),
+    return { id: p.id, type: p.type, real: !!p.real, x: loc.x, z: loc.z, sx: -Math.sin(br), sz: Math.cos(br),
              quayLen, apron, basin, depth: T.depth, seed: p.seed, name: p.name, chLen: worldPortChannelLen(p) };
 }
 // 桟橋の並び（港の座標：b＝岸沿い）。軍港は桟橋を岸壁の片側に寄せ、残りを大きな船が横付けできる岸壁にする
@@ -111,7 +111,7 @@ function _trWorker() {
         const _wPermMod12 = new Uint8Array(${JSON.stringify(Array.from(_wPermMod12))});
         const _wGrad3 = new Float32Array(${JSON.stringify(Array.from(_wGrad3))});
         const world = { seaLevel: ${world.seaLevel} };
-        const WORLD_R = ${WORLD_R};
+        ${worldWorkerSource()}
         ${_wNoise3.toString()}
         ${worldNoiseE.toString()}
         ${worldHeightFromE.toString()}
@@ -119,6 +119,7 @@ function _trWorker() {
         ${worldHeightAt.toString()}
         ${_portAdjust.toString()}
         onmessage = (ev) => {
+            if (_rwHook(ev)) return;
             const q = ev.data;
             const { C, E, N } = q.frame;
             const n = q.n, half = q.half, step = half * 2 / (n - 1);
@@ -138,6 +139,7 @@ function _trWorker() {
             postMessage({ id: q.id, which: q.which, H }, [H.buffer]);
         };`;
     terrain.worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+    worldWorkerSync(terrain.worker);
     terrain.worker.onmessage = (ev) => _trOnHeights(ev.data);
     return terrain.worker;
 }
@@ -159,7 +161,7 @@ function _trMaterial() {
 // 高さ・傾き → 色
 function _trColor(h, slope, x, z, out, o) {
     let r, g, b;
-    if (h < 1.2) { r = 0.78; g = 0.72; b = 0.54; }                       // 砂浜
+    if (h < 1.2) { if (_RW) { r = 0.52; g = 0.55; b = 0.40; } else { r = 0.78; g = 0.72; b = 0.54; } }   // 砂浜（現実世界は干潟・湿地の色）
     else if (slope > 0.75) { r = 0.42; g = 0.40; b = 0.37; }             // 岩肌
     else if (h > 1800) { r = 0.93; g = 0.94; b = 0.96; }                 // 雪
     else if (h > 1100) { r = 0.50; g = 0.48; b = 0.42; }                  // 高地
@@ -327,8 +329,8 @@ function _buildPort(S) {
         const q = P(4.5, b);
         bollards.push({ x: q.x, y: 3.35, z: q.z, w: 0.7, h: 0.7, d: 0.7, rot });
     }
-    // 防波堤（港の前を囲む。真ん中に出入り口）
-    if (S.type !== 'cargo') {
+    // 防波堤（港の前を囲む。真ん中に出入り口）。現実世界の港は、実際の航路（曲がっている）から入るので作らない
+    if (S.type !== 'cargo' && !S.real) {
         const R = S.basin * 0.95, gap = S.type === 'fishing' ? 70 : 140;
         for (const side of [-1, 1]) {
             // 岸から沖へ伸び、先を港の出入り口の方へ曲げる

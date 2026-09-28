@@ -76,7 +76,7 @@ function _apWorker() {
         const _wPermMod12 = new Uint8Array(${JSON.stringify(Array.from(_wPermMod12))});
         const _wGrad3 = new Float32Array(${JSON.stringify(Array.from(_wGrad3))});
         const world = { seaLevel: ${world.seaLevel} };
-        const WORLD_R = ${WORLD_R};
+        ${worldWorkerSource()}
         ${_wNoise3.toString()}
         ${worldNoiseE.toString()}
         ${worldHeightFromE.toString()}
@@ -85,6 +85,7 @@ function _apWorker() {
         ${worldShoalFree.toString()}
         // 升目の中（半径 rM[m]）で、浅瀬の岩がいちばん高くなりうる高さ（見落とさないよう控えめに）
         function heightConservative(ux, uy, uz, rM) {
+            if (_RW) return worldHeightAt(ux, uy, uz, 16);       // 現実世界：地形そのもの
             const h = worldHeightFromE(worldNoiseE(ux, uy, uz, 16));
             if (h >= 0 || h < -135) return h;
             const field = _wNoise3(ux * 140 + 11.3, uy * 140 - 4.1, uz * 140 + 7.7);
@@ -115,11 +116,11 @@ function _apWorker() {
                         const d = depthAt(lat, lon0 + (i + 0.5) * cellDeg, u, conservative ? cellDeg * RAD * WORLD_R * 0.75 : 0);
                         c = d < NEED ? 0 : d < NEED + 10 ? 4 : d < 60 ? 1.6 : 1;
                         // 浅瀬の多い海域（岩の尾根が網の目のように続き、深い船には抜け道がないことが多い）は、なるべく避ける
-                        if (c && d < 135 && _wNoise3(u[0] * 140 + 11.3, u[1] * 140 - 4.1, u[2] * 140 + 7.7) > 0.16 && !(CH.length && dredged(lat, lon0 + (i + 0.5) * cellDeg) > 0)) c *= 8;
+                        if (c && !_RW && d < 135 && _wNoise3(u[0] * 140 + 11.3, u[1] * 140 - 4.1, u[2] * 140 + 7.7) > 0.16 && !(CH.length && dredged(lat, lon0 + (i + 0.5) * cellDeg) > 0)) c *= 8;
                     } else {
                         const h = worldHeightFromE(worldNoiseE(u[0], u[1], u[2], 10));
                         // 大陸棚の「浅瀬の多い海域」は大洋の道すじでは通らない（まわり道する）
-                        const shoaly = h > -160 && _wNoise3(u[0] * 140 + 11.3, u[1] * 140 - 4.1, u[2] * 140 + 7.7) > 0.18;
+                        const shoaly = !_RW && h > -160 && _wNoise3(u[0] * 140 + 11.3, u[1] * 140 - 4.1, u[2] * 140 + 7.7) > 0.18;
                         // 船の喫水より浅い広い浅海（大陸棚の平ら）は、大洋の道すじでも通れない（少しゆるめに）
                         c = h > -Math.max(8, NEED - 1) ? 0 : shoaly ? 60 : h > -60 ? 8 : h > -200 ? 3 : 1;
                     }
@@ -361,6 +362,7 @@ function _apWorker() {
         }
         let NEED = 10, BAND = 100, CH = [];
         onmessage = (ev) => {
+            if (_rwHook(ev)) return;
             const q = ev.data;
             NEED = q.need || (q.draft + 5); BAND = q.band || 100; CH = q.ports || [];
             // タグの補助がある航路（狭い所も通る）：どの区間がふつうの余裕では狭いかも返す
@@ -447,6 +449,7 @@ function _apWorker() {
             }
         };`;
     _apWorkerObj = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+    worldWorkerSync(_apWorkerObj);
     return _apWorkerObj;
 }
 let _apReq = 0;
@@ -569,7 +572,27 @@ async function autopilotStart(port) {
         const route = [];
         // 今いる港の航路の上なら、まず航路を沖へ出る（航路がふつうには浅くても、タグがあれば通る）
         const np = worldNearestPort(here.lat, here.lon);
-        if (np && np.port !== port) {
+        // 現実世界の港：掘った航路（港の fairway）に沿って外洋へ
+        const fwOut = np && np.port !== port && np.port.real && np.port.fairway && np.port.fairway.depth >= M.needTug ? np.port.fairway : null;
+        // 船を航路の線に落とし、いちばん近い区間の次の点から（後ろの点へ戻らない）
+        let onFw = -1;
+        if (fwOut) {
+            let bd = 1500;
+            const cl = Math.cos(here.lat * _apRad), m = WORLD_R * _apRad;
+            const X = (q) => (q.lon - here.lon) * cl * m, Y = (q) => (q.lat - here.lat) * m;
+            for (let k = 0; k < fwOut.pts.length - 1; k++) {
+                const ax = X(fwOut.pts[k]), ay = Y(fwOut.pts[k]), bx = X(fwOut.pts[k + 1]), by = Y(fwOut.pts[k + 1]);
+                const L2 = (bx - ax) ** 2 + (by - ay) ** 2 || 1, t = Math.max(0, Math.min(1, -(ax * (bx - ax) + ay * (by - ay)) / L2));
+                const d = Math.hypot(ax + t * (bx - ax), ay + t * (by - ay));
+                // 近い区間がいくつかあれば、いちばん先（沖側）の区間を（泊地の中では、港口向きの区間が後ろにも近い）
+                if (d < 400 || d < bd) { if (d < 400 || onFw < 0 || d < bd) onFw = k; bd = Math.min(bd, d); }
+            }
+        }
+        if (onFw >= 0) {
+            for (let k = Math.max(1, onFw + 1); k < fwOut.pts.length; k++)
+                route.push(Object.assign({ lat: fwOut.pts[k].lat, lon: fwOut.pts[k].lon }, { label: k === fwOut.pts.length - 1 ? `${np.port.name} 航路の出口` : `${np.port.name} 航路`, channel: true,
+                    narrow: fwOut.depth < M.need || rhumbCourse(fwOut.pts[k].lat, fwOut.pts[k].lon, np.port.lat, np.port.lon).dist < 4000 }));
+        } else if (np && np.port !== port && !np.port.real) {
             const P = np.port, TP = PORT_TYPES[P.type], chL = worldPortChannelLen(P);
             if (np.dist < TP.basin + chL + 1500 && TP.depth + 2 >= M.needTug) {
                 const chNarrow = TP.depth + 2 < M.need;
@@ -597,6 +620,62 @@ async function autopilotStart(port) {
                 Object.assign(route[route.length - 1], { label: port.name, final: true });
                 autopilot.berthPlan = null; autopilot.berthWhy = null; autopilot.deepShip = false;
                 autopilot.pointMoved = tgt.moved;
+                autopilot._newRoute = route;
+                lastErr = null;
+                break;
+            } catch (e) {
+                lastErr = e;
+                if (/ocean/.test(e.message)) break;
+                continue;
+            }
+        }
+        // 現実世界の港：掘った航路の沖の端まで航路を探し、そこから航路をたどって泊地へ
+        if (port.real && port.fairway) {
+            const fw = port.fairway.pts, chDepth = port.fairway.depth;
+            const channelNarrow = chDepth < M.need && chDepth >= M.needTug;
+            const deepShip = chDepth < M.needTug;
+            const end = fw[fw.length - 1];
+            // 航路の延長線の沖（最後の区間の向きに、旋回半径の 2.5 倍ほど。深さが続く所まで）
+            let far = null;
+            if (fw.length >= 2) {
+                const prevP = fw[fw.length - 2], c = rhumbCourse(prevP.lat, prevP.lon, end.lat, end.lon).course * _apRad;
+                const want = Math.max(1500, Math.min(8000, _apTurnRadius() * 2.5));
+                for (let d = 200; d <= want; d += 200) {
+                    const la = end.lat + Math.cos(c) * d / WORLD_R / _apRad, lo = end.lon + Math.sin(c) * d / WORLD_R / _apRad / Math.cos(end.lat * _apRad);
+                    const u = worldLatLonToUnit(la, lo);
+                    if (apDepthAt(la, lo) < need + 2 || !worldShoalFree(u.x, u.y, u.z)) break;
+                    far = { lat: la, lon: lo };
+                }
+            }
+            let berthPlan = null, berthWhy = null, stopA = T.basin * 0.6;
+            if (autopilot.berth && !deepShip && typeof harborBerthPlan === 'function') {
+                const bp = harborBerthPlan(port);
+                if (bp.ok) { berthPlan = bp; stopA = bp.aE; } else berthWhy = bp.why;
+            }
+            const from = route.length ? route[route.length - 1] : here;
+            if (mode === 'tug') _apMsg(`${port.name} へは狭い所があるので、タグの補助を前提に航路を探しています…`);
+            try {
+                let pts = null, viaFar = !!far, err = null;
+                for (const tgt of far ? [far, end] : [end]) {
+                    try { pts = await worldPlanRoute(from, tgt, { tug: mode === 'tug' }); viaFar = tgt === far; break; }
+                    catch (e) { err = e; if (/ocean/.test(e.message) || autopilot.dest !== port || !autopilot.planning) break; }
+                }
+                if (!pts) throw err;
+                if (autopilot.dest !== port || !autopilot.planning) return;
+                for (const q of pts.slice(1)) route.push({ lat: q.lat, lon: q.lon, label: '', narrow: !!q.narrow });
+                if (viaFar) { route[route.length - 1].label = `${port.name} 航路の延長線`; route.push({ lat: end.lat, lon: end.lon, label: `${port.name} 航路の入口`, channel: true, narrow: channelNarrow }); }
+                else Object.assign(route[route.length - 1], { label: deepShip ? `${port.name} 沖の錨地` : `${port.name} 航路の入口` });
+                if (deepShip) Object.assign(route[route.length - 1], { final: true });
+                else {
+                    // 港の近く（4km 以内）は、実際の港と同じように、タグが付き添って微速で入る
+                    const nearPort = (q) => rhumbCourse(q.lat, q.lon, port.lat, port.lon).dist < 4000;
+                    // 航路の最後の点（泊地の中）で止まる。着岸はそこから（タグで横へ運んでから回す：50-harbor-auto.js）
+                    //（港のまっすぐの軸の上の点へ行こうとすると、実際の航路の入り方によっては後ろ向きになる）
+                    for (let k = fw.length - 2; k >= 2; k--) route.push({ lat: fw[k].lat, lon: fw[k].lon, label: `${port.name} 航路`, channel: true, narrow: channelNarrow || nearPort(fw[k]) });
+                    const fin = fw.length >= 2 ? fw[1] : portChannelPoint(port, stopA);
+                    route.push({ lat: fin.lat, lon: fin.lon, label: berthPlan ? `${port.name} 泊地` : `${port.name} 港口`, channel: true, final: true, narrow: true });
+                }
+                autopilot.berthPlan = berthPlan; autopilot.berthWhy = berthWhy; autopilot.deepShip = deepShip;
                 autopilot._newRoute = route;
                 lastErr = null;
                 break;
@@ -793,6 +872,9 @@ function updateAutopilot(t, dt) {
         const dC = Math.min(80, Math.abs(((c2 - c1 + 540) % 360) - 180));
         const Rt = _apTurnRadius();
         reach = Math.max(wp.channel ? Math.max(150, L) : 150, Math.min(2500, Rt * Math.tan(dC / 2 * _apRad)));
+        // 短い区間が続く所（港の口のくねった航路など）では、前後の区間の半分より手前から曲がらない（点を飛ばさない）
+        const lPrev = rhumbCourse(prev.lat, prev.lon, wp.lat, wp.lon).dist, lNext = rhumbCourse(wp.lat, wp.lon, nxt.lat, nxt.lon).dist;
+        reach = Math.min(reach, Math.max(60, 0.5 * Math.min(lPrev, lNext)));
     }
     let passed = false;
     if (prev && !wp.final) {
@@ -872,6 +954,12 @@ function updateAutopilot(t, dt) {
     if (wp.channel || R.slice(autopilot.leg).every(w => w.channel)) order = Math.min(order, 1);
     else if (remain < 5 * 1852) order = Math.min(order, 2);
     if (wp.final && autopilot.finalSlow) order = Math.min(order, 1);
+    // 最後の点の手前が短い区間の連なり（港の口など）のときは、最後の区間に入る前から、残りの道のりで止め始める
+    if (!wp.final && R[R.length - 1].final) {
+        const vv = Math.max(0, physics.speed || 0), dAll = vv * Math.max(0.05, physics.mass || 1) / 0.3;
+        if (remain < Math.max(2000, dAll * 3)) order = Math.min(order, 1);
+        if (remain < dAll * 1.2) order = Math.min(order, 0);
+    }
     if (finalOrder !== null) order = Math.min(order, finalOrder);
     // 狭い水路・浅い水道（航路の点の narrow）：手前でタグを呼び、持ち場に着くまで待って、
     // 付き添ってもらいながら微速（タグが力を出せる 4 くらいまで）で通る。抜けたら帰す
