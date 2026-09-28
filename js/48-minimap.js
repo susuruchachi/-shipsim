@@ -17,7 +17,8 @@ try {
     const s = JSON.parse(localStorage.getItem('susuru_minimap') || 'null');
     if (s) { _mm.show = s.show !== false; _mm.zoom = Math.max(0, Math.min(MM_RANGES.length - 1, s.zoom | 0)); _mm.headUp = !!s.headUp; _mm.depth = s.depth !== false; }
 } catch (e) { /* ignore */ }
-function _mmSave() { try { localStorage.setItem('susuru_minimap', JSON.stringify({ show: _mm.show, zoom: _mm.zoom, headUp: _mm.headUp, depth: _mm.depth })); } catch (e) { /* ignore */ } }
+// （危ない海域で自動で拡大している間は、元の範囲を覚えておく）
+function _mmSave() { try { localStorage.setItem('susuru_minimap', JSON.stringify({ show: _mm.show, zoom: _mm.auto ? _mm.auto.prev : _mm.zoom, headUp: _mm.headUp, depth: _mm.depth })); } catch (e) { /* ignore */ } }
 
 function minimapShow(on) {
     _mm.show = !!on; _mmSave();
@@ -25,6 +26,7 @@ function minimapShow(on) {
     const b = document.getElementById('wp-minimap'); if (b) b.classList.toggle('on', _mm.show);
 }
 function minimapZoom(d) {
+    _mm.auto = null;                       // 手で変えたら、自動の拡大はやめる（元へも戻さない）
     _mm.zoom = Math.max(0, Math.min(MM_RANGES.length - 1, _mm.zoom + d)); _mmSave();
     _mm.build = null;                      // 新しい範囲で作り直す（できるまでは前の絵を引き伸ばして使う）
     _mm.lastDraw = 0;
@@ -220,7 +222,8 @@ function _mmDraw() {
     g.fillStyle = '#ff5a4a'; g.font = 'bold 10px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillText('N', nx, ny); g.textAlign = 'start';
     // 縁
-    g.strokeStyle = 'rgba(0,255,204,0.6)'; g.lineWidth = 1.5; g.beginPath(); g.arc(c, c, c - 1, 0, Math.PI * 2); g.stroke();
+    // 縁（危ない海域では赤く）
+    g.strokeStyle = _mm.danger ? 'rgba(255,80,60,0.95)' : 'rgba(0,255,204,0.6)'; g.lineWidth = _mm.danger ? 2.5 : 1.5; g.beginPath(); g.arc(c, c, c - 1, 0, Math.PI * 2); g.stroke();
     const sc = el.querySelector('.mm-scale');
     if (sc) sc.textContent = `半径 ${viewR >= 1000 ? viewR / 1000 + 'km' : viewR + 'm'}`;
     const nb = el.querySelector('.mm-n'); if (nb) nb.classList.toggle('on', _mm.headUp);
@@ -232,18 +235,56 @@ function _mmDraw() {
         const draft = (typeof worldShipDraft === 'function') ? worldShipDraft() : 0;
         if (dep === null) dl.textContent = '';
         else {
-            dl.textContent = dep > 999 ? `水深 ${(dep / 1000).toFixed(1)}km` : `水深 ${Math.round(dep)}m（余裕 ${Math.round(dep - draft)}m）`;
-            dl.classList.toggle('warn', dep - draft < 3);
+            dl.textContent = (_mm.danger ? '⚠ 浅い海域　' : '') + (dep > 999 ? `水深 ${(dep / 1000).toFixed(1)}km` : `水深 ${Math.round(dep)}m（余裕 ${Math.round(dep - draft)}m）`);
+            dl.classList.toggle('warn', dep - draft < 3 || !!_mm.danger);
         }
     }
 }
 
+// ── 危ない海域（浅くて、船の下の余裕が少ない）では、自動で半径 2km に拡大する ──
+//   ・今いる所の余裕が 4m 未満、船首・船尾の下が浅い、または前（速さに応じて 300m〜1.5km 先まで）に
+//     喫水＋2m より浅い所がある
+//   ・抜けて 20 秒たったら、元の範囲に戻す（その間に手で変えたら、そのまま）
+const MM_DANGER_CLEAR_S = 20;
+function _mmDanger() {
+    if (!window.terrain || !Number.isFinite(terrain.depth) || typeof worldSeabedAt !== 'function') return false;
+    const draft = (typeof worldShipDraft === 'function') ? worldShipDraft() : 5;
+    if (terrain.depth - draft < 4) return true;
+    // 止まっている（岸壁に着けている・錨地）ときは、船の真下だけ見る（前の岸壁を「浅い」としない）
+    const v = physics.speed || 0;
+    if (Math.abs(v) < 0.3) return false;
+    if (terrain._bowWarn || terrain._sternWarn) return true;
+    const look = Math.min(1500, Math.max(300, Math.abs(v) * 120)), sg = v < -0.3 ? -1 : 1;
+    const h = (physics.heading || 0) * Math.PI / 180, fx = Math.sin(h) * sg, fz = Math.cos(h) * sg, sx = Math.cos(h), sz = -Math.sin(h);
+    const x0 = physics.cgWorldX || 0, z0 = physics.cgWorldZ || 0;
+    for (const f of [0.33, 0.66, 1]) for (const side of [-1, 0, 1]) {
+        const x = x0 + fx * look * f + sx * side * 60, z = z0 + fz * look * f + sz * side * 60;
+        if (worldSeabedAt(x, z) > -(draft + 2)) return true;
+    }
+    return false;
+}
+function _mmAutoZoom() {
+    const now = performance.now();
+    if (now - (_mm.azT || 0) < 500) return;
+    const dt = Math.min(2, (now - (_mm.azT || now)) / 1000);
+    _mm.azT = now;
+    const danger = _mmDanger();
+    _mm.danger = danger;
+    if (danger) {
+        _mm.azClear = 0;
+        if (!_mm.auto && _mm.zoom > 0) { _mm.auto = { prev: _mm.zoom }; _mm.zoom = 0; _mm.build = null; _mm.lastDraw = 0; }
+    } else if (_mm.auto) {
+        _mm.azClear = (_mm.azClear || 0) + dt;
+        if (_mm.azClear > MM_DANGER_CLEAR_S) { _mm.zoom = _mm.auto.prev; _mm.auto = null; _mm.build = null; _mm.lastDraw = 0; }
+    }
+}
 function updateMinimap(t) {
     const on = _mm.show && window.world && world.mode === 'world' && typeof worldHeightAtLocal === 'function';
     const el = document.getElementById('minimap');
     if (!on) { if (el) el.classList.add('hidden'); return; }
     _mmEnsureDom();
     document.getElementById('minimap').classList.remove('hidden');
+    _mmAutoZoom();
     const sx = physics.cgWorldX || 0, sz = physics.cgWorldZ || 0;
     const viewR = MM_RANGES[_mm.zoom];
     const T = _mm.tile, B = _mm.build;
