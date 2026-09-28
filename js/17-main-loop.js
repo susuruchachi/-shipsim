@@ -650,7 +650,7 @@ function animate() {
     // 更新するので、ここより前で呼ぶと影が1フレーム分船に置いていかれる。
     // 船の照明の焼き込み（40-light-bake.js）：焼き込みを少しずつ進め、昼夜などの倍率を渡す
     if (typeof updateAutopilot === 'function') updateAutopilot(t, physicsDt);  // 自動航行（49-autopilot.js）
-    if (typeof updateTugs === 'function') updateTugs(t, dt);                 // タグボート（47-tugboats.js）
+    if (typeof updateTugs === 'function') updateTugs(t, physicsDt);          // タグボート（47-tugboats.js。物理の早送りに合わせる）
     if (typeof updateMinimap === 'function') updateMinimap(t);               // 小さな地図（48-minimap.js）
     if (typeof updateWorldTerrain === 'function') updateWorldTerrain(t, dt);
     if (typeof updateLightBake === 'function') updateLightBake(t);

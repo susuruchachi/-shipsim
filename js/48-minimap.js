@@ -92,7 +92,9 @@ function _mmDraw() {
     const g = cv.getContext('2d');
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     const c = W / 2, viewR = MM_RANGES[_mm.zoom], k = c / viewR;     // 1m あたりの点
-    const sx = physics.cgWorldX || 0, sz = physics.cgWorldZ || 0;
+    // 真ん中は、画面に描いている船の位置
+    const shipP = (typeof shipGroup !== 'undefined' && shipGroup) ? shipGroup.position : null;
+    const sx = shipP ? shipP.x : (physics.cgWorldX || 0), sz = shipP ? shipP.z : (physics.cgWorldZ || 0);
     const compass = (typeof worldCompass === 'function') ? worldCompass(physics.heading) : 0;
     const rot = _mm.headUp ? -compass * Math.PI / 180 : 0;
     g.clearRect(0, 0, W, W);
@@ -168,7 +170,7 @@ function updateMinimap(t) {
         _mm.chart = !!_wm.chart;
         for (const X of [T, B]) if (X && X.cv.rows) _wmPaint(X.cv, 0, X.cv.rows);
     }
-    const need = !T || T.zoom !== _mm.zoom || Math.hypot(sx - T.cx, sz - T.cz) > viewR * 0.5;
+    const need = !T || T.zoom !== _mm.zoom || Math.hypot(sx - T.cx, sz - T.cz) > viewR * 0.3;
     const building = B && B.row < MM_TILE && B.zoom === _mm.zoom;
     if (need && !building) _mmStartBuild(Math.round(sx), Math.round(sz));
     _mmStepBuild();

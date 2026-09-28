@@ -148,9 +148,18 @@ function tugCall() {
     const pick = st.find(s => s.fitting && !used.has(s.key)) || st.find(s => !used.has(s.key)) || st[0];
     const F = _shipFrame();
     const side = pick.side || (tugs.length % 2 ? -1 : 1);
-    const from = shipGroup.position.clone();
-    from.x += (F.sx * side * 450 + F.fx * (pick.z > 0 ? 300 : -300));
-    from.z += (F.sz * side * 450 + F.fz * (pick.z > 0 ? 300 : -300));
+    // 沖（水の上で、まわりも水の所）から来る
+    const base = Math.atan2(F.sx * side * 450 + F.fx * (pick.z > 0 ? 300 : -300), F.sz * side * 450 + F.fz * (pick.z > 0 ? 300 : -300));
+    let from = null;
+    for (const r of [550, 400, 280, 180]) {
+        for (let k = 0; k < 16 && !from; k++) {
+            const ang = base + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * Math.PI / 8;
+            const x = shipGroup.position.x + Math.sin(ang) * r, z = shipGroup.position.z + Math.cos(ang) * r;
+            if (!_tugPts(x, z, ang + Math.PI).some(q => _tugStaticBlocked(q.x, q.z))) from = new THREE.Vector3(x, 0, z);
+        }
+        if (from) break;
+    }
+    if (!from) { const x = shipGroup.position.x + F.sx * side * 120, z = shipGroup.position.z + F.sz * side * 120; from = new THREE.Vector3(x, 0, z); }
     const g = _tugBuild();
     g.position.set(from.x, 0, from.z);
     scene.add(g);
@@ -199,24 +208,187 @@ function _tugToot(t, n) {
     setTimeout(() => em.disconnect(), 2500 + n * 600);
 }
 
-// ── 毎フレーム ──
-const _tv = new THREE.Vector3();
+// ── ぶつからないように ──
+//  ・陸・防波堤・岸壁・桟橋・停泊中の船：worldSeabedAt（44-world-terrain.js）で底がタグの喫水より浅い所
+//  ・自分の船：船の中の座標で、船体の長さ・その場所の幅（＋余裕）の中
+//  タグは 船首・真ん中・船尾 の3点で見る。押すときの船首だけは船体に触れてよい。
+const TUG_DRAFT = 4.5;
+function _tugStaticBlocked(x, z) {
+    if (!window.world || world.mode !== 'world' || typeof worldSeabedAt !== 'function') return false;
+    return worldSeabedAt(x, z) > -TUG_DRAFT;
+}
+function _tugShipCtx() {
+    const hp = window.hullProfile;
+    const sc = physics.scale || 1;
+    const HL = ((hp && hp.ready) ? hp.halfLen : 6) * sc;
+    let hwMax = 0;
+    for (let k = -10; k <= 10; k++) hwMax = Math.max(hwMax, _tugHalfWidth(k / 10 * HL / sc) * sc);
+    return { F: _shipFrame(), sp: shipGroup.position.clone(), HL, hwMax, sc };
+}
+function _tugToShip(C, x, z) { const dx = x - C.sp.x, dz = z - C.sp.z; return { a: dx * C.F.fx + dz * C.F.fz, s: dx * C.F.sx + dz * C.F.sz }; }
+function _tugFromShip(C, a, sd) { return { x: C.sp.x + C.F.fx * a + C.F.sx * sd, z: C.sp.z + C.F.fz * a + C.F.sz * sd }; }
+// 船体の中へどれだけ入っているか（入っていなければ 0 以下）
+function _tugShipPen(C, x, z, margin) {
+    const L = _tugToShip(C, x, z);
+    if (Math.abs(L.a) > C.HL + margin) return { pen: -1, L };
+    const hw = _tugHalfWidth(L.a / C.sc) * C.sc;
+    // 船首・船尾の先は丸く細くなるので、端の余裕は少しずつ減らす
+    const endK = Math.max(0, 1 - Math.max(0, Math.abs(L.a) - C.HL) / Math.max(1, margin));
+    return { pen: hw + margin * endK - Math.abs(L.s), L };
+}
+function _tugPts(x, z, yaw) {
+    const fx = Math.sin(yaw), fz = Math.cos(yaw), h = TUG_LEN / 2 - 2;
+    return [{ x: x + fx * h, z: z + fz * h, bow: true }, { x, z }, { x: x - fx * h, z: z - fz * h }];
+}
+function _tugPathClear(C, x0, z0, x1, z1) {
+    const d = Math.hypot(x1 - x0, z1 - z0), n = Math.max(1, Math.ceil(d / 12));
+    for (let k = 1; k <= n; k++) {
+        const u = k / n, x = x0 + (x1 - x0) * u, z = z0 + (z1 - z0) * u;
+        if (_tugStaticBlocked(x, z)) return false;
+        if (_tugShipPen(C, x, z, TUG_BEAM / 2 + 4).pen > 0) return false;
+    }
+    return true;
+}
+// 次に向かう点：船の反対側へ行くときは、近い方の端（船首・船尾）を回る
+function _tugNextGoal(C, tg, tx, tz) {
+    const P = _tugToShip(C, tg.pos.x, tg.pos.z), T = _tugToShip(C, tx, tz);
+    const w = C.hwMax + TUG_BEAM + 12, end = C.HL + TUG_LEN / 2 + 25;
+    const sideP = Math.abs(P.s) < 1 ? 1 : Math.sign(P.s), sideT = Math.abs(T.s) < C.hwMax * 0.3 ? 0 : Math.sign(T.s);
+    const alongside = Math.abs(P.a) < end - 5;
+    const endA = (Math.abs(P.a - end) + Math.abs(T.a - end) <= Math.abs(P.a + end) + Math.abs(T.a + end)) ? end : -end;
+    if (sideT !== 0 && sideT !== sideP) {
+        if (alongside) return _tugFromShip(C, endA, sideP * w);             // まず自分の側を端まで
+        return _tugFromShip(C, endA, sideT * w);                            // 端を回って向こう側へ
+    }
+    if (sideT === 0 && alongside && Math.abs(T.a) > C.HL) return _tugFromShip(C, endA, sideP * w);   // 船首・船尾の先へは、端を回って
+    return { x: tx, z: tz };
+}
+// 向かう向き（障害物があれば、左右に振って通れる向きを探す）
+function _tugSteer(C, tg, gx, gz, look) {
+    const base = Math.atan2(gx - tg.pos.x, gz - tg.pos.z);
+    const dist = Math.hypot(gx - tg.pos.x, gz - tg.pos.z);
+    const L = Math.min(look, dist);
+    const ok = (ang) => {
+        const x1 = tg.pos.x + Math.sin(ang) * L, z1 = tg.pos.z + Math.cos(ang) * L;
+        return _tugPathClear(C, tg.pos.x, tg.pos.z, x1, z1);
+    };
+    if (L < 3 || ok(base)) { tg.avoid = 0; return base; }
+    const pref = tg.avoid || 1;
+    for (let k = 1; k <= 10; k++) for (const sgn of [pref, -pref]) {
+        const ang = base + sgn * k * 0.26;
+        if (ok(ang)) { tg.avoid = sgn; return ang; }
+    }
+    return null;                                    // どこにも行けない：その場で待つ
+}
+
+// ── 港の中の道すじ（防波堤の口を通って入る）──
+//  船のまわり 1.6km 四方を 16m の升目に分け、陸・防波堤・岸壁・桟橋を「通れない」にして
+//  （タグの幅の分だけ太らせて）、A* で道を探す。升目は船が 400m 動くまで使い回す。
+const TUG_GRID_N = 100, TUG_GRID_CELL = 16;
+let _tugGrid = null;
+function _tugGridGet() {
+    if (!window.world || world.mode !== 'world' || typeof worldSeabedAt !== 'function') return null;
+    const sp = shipGroup.position;
+    if (_tugGrid && Math.hypot(sp.x - _tugGrid.cx, sp.z - _tugGrid.cz) < 400 && _tugGrid.ports === terrain.ports.size) return _tugGrid;
+    const n = TUG_GRID_N, c = TUG_GRID_CELL, cx = Math.round(sp.x), cz = Math.round(sp.z);
+    const x0 = cx - n * c / 2, z0 = cz - n * c / 2;
+    const raw = new Uint8Array(n * n);
+    let any = false;
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+        const b = worldSeabedAt(x0 + (i + 0.5) * c, z0 + (j + 0.5) * c) > -TUG_DRAFT ? 1 : 0;
+        raw[j * n + i] = b; if (b) any = true;
+    }
+    const blocked = new Uint8Array(n * n);
+    if (any) for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+        let b = 0;
+        for (let dj = -1; dj <= 1 && !b; dj++) for (let di = -1; di <= 1 && !b; di++) {
+            const a = i + di, q = j + dj;
+            if (a >= 0 && q >= 0 && a < n && q < n && raw[q * n + a]) b = 1;
+        }
+        blocked[j * n + i] = b;
+    }
+    _tugGrid = { cx, cz, x0, z0, n, c, blocked, any, ports: terrain.ports.size };
+    return _tugGrid;
+}
+function _tugGridPath(G, x, z, gx, gz) {
+    const n = G.n, c = G.c;
+    const cell = (px, pz) => [Math.floor((px - G.x0) / c), Math.floor((pz - G.z0) / c)];
+    const inG = (i, j) => i >= 0 && j >= 0 && i < n && j < n;
+    const free = (i, j) => inG(i, j) && !G.blocked[j * n + i];
+    const near = (i, j) => {
+        if (free(i, j)) return [i, j];
+        for (let r = 1; r < 8; r++) for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) if (Math.max(Math.abs(di), Math.abs(dj)) === r && free(i + di, j + dj)) return [i + di, j + dj];
+        return null;
+    };
+    let [si, sj] = cell(x, z), [ei, ej] = cell(gx, gz);
+    if (!inG(si, sj) || !inG(ei, ej)) return null;                 // 升目の外：そのまま向かう
+    const s = near(si, sj), e = near(ei, ej);
+    if (!s || !e) return null;
+    const N = n * n, g = new Float32Array(N).fill(Infinity), from = new Int32Array(N).fill(-1), closed = new Uint8Array(N);
+    const heap = [];
+    const push = (k, f) => { heap.push([f, k]); let q = heap.length - 1; while (q > 0) { const pp = (q - 1) >> 1; if (heap[pp][0] <= heap[q][0]) break; [heap[pp], heap[q]] = [heap[q], heap[pp]]; q = pp; } };
+    const pop = () => { const top = heap[0], lst = heap.pop(); if (heap.length) { heap[0] = lst; let q = 0; for (;;) { const l = 2 * q + 1, r = l + 1; let m = q; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === q) break; [heap[m], heap[q]] = [heap[q], heap[m]]; q = m; } } return top; };
+    const sk = s[1] * n + s[0], ek = e[1] * n + e[0];
+    g[sk] = 0; push(sk, 0);
+    while (heap.length) {
+        const [, k] = pop();
+        if (closed[k]) continue; closed[k] = 1;
+        if (k === ek) break;
+        const i = k % n, j = (k - i) / n;
+        for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+            if (!di && !dj) continue;
+            const a = i + di, b = j + dj;
+            if (!free(a, b)) continue;
+            if (di && dj && (!free(i + di, j) || !free(i, j + dj))) continue;   // 角をすり抜けない
+            const kk = b * n + a, ng = g[k] + (di && dj ? 1.414 : 1);
+            if (ng < g[kk]) { g[kk] = ng; from[kk] = k; push(kk, ng + Math.hypot(a - e[0], b - e[1])); }
+        }
+    }
+    if (from[ek] < 0 && ek !== sk) return null;
+    const pts = [];
+    for (let k = ek; k >= 0; k = from[k]) pts.push({ x: G.x0 + (k % n + 0.5) * c, z: G.z0 + (Math.floor(k / n) + 0.5) * c });
+    pts.reverse();
+    // 見通せる所はまっすぐに
+    const clear = (A, B) => {
+        const d = Math.hypot(B.x - A.x, B.z - A.z), m = Math.max(1, Math.ceil(d / (c * 0.5)));
+        for (let q = 1; q < m; q++) { const [a, b] = cell(A.x + (B.x - A.x) * q / m, A.z + (B.z - A.z) * q / m); if (!free(a, b)) return false; }
+        return true;
+    };
+    const out = [];
+    let cur = { x, z };
+    let i = 0;
+    while (i < pts.length) {
+        let j = i;
+        while (j + 1 < pts.length && clear(cur, pts[j + 1])) j++;
+        out.push(pts[j]); cur = pts[j]; i = j + 1;
+    }
+    out.push({ x: gx, z: gz });
+    return out;
+}
+
+// ── 毎フレーム（物理の早送りに合わせて、細かく刻んで進める）──
 function updateTugs(t, dt) {
     if (!tugs.length || typeof shipGroup === 'undefined' || !shipGroup) { _tugShip.vSway *= 0.95; _tugShip.yawRate *= 0.95; return; }
-    dt = Math.min(0.1, Math.max(0, dt || 0));
+    dt = Math.min(2, Math.max(0, dt || 0));
+    if (dt <= 0) return;
     shipGroup.updateMatrixWorld();
-    const F = _shipFrame();
     const sp = shipGroup.position;
-    // 船の速さ（ワールド）
-    if (_tugShip.lastX !== null && dt > 0) {
+    // 船の速さ（ワールド、物理の時間で）
+    if (_tugShip.lastX !== null) {
         _tugShip.vx += ((sp.x - _tugShip.lastX) / dt - _tugShip.vx) * Math.min(1, dt * 4);
         _tugShip.vz += ((sp.z - _tugShip.lastZ) / dt - _tugShip.vz) * Math.min(1, dt * 4);
     }
     _tugShip.lastX = sp.x; _tugShip.lastZ = sp.z;
+    const n = Math.max(1, Math.ceil(dt / 0.1)), h = dt / n;
+    for (let k = 0; k < n; k++) _tugStep(t, h, k === n - 1);
+}
+function _tugStep(t, dt, last) {
+    const C = _tugShipCtx();
+    const F = C.F, sp = C.sp;
     const stations = tugStations();
     const hp = window.hullProfile;
-    const sc = physics.scale || 1;
-    const L = Math.max(10, ((hp && hp.ready) ? hp.halfLen * 2 : 12) * sc);
+    const sc = C.sc;
+    const L = Math.max(10, C.HL * 2);
     const T = (typeof worldShipDraft === 'function') ? worldShipDraft() : 0.4 * sc;
     const massKg = Math.max(1e5, (physics.mass || 1) * 1e6);
     const speedKn = Math.abs(physics.speed || 0);
@@ -230,21 +402,26 @@ function updateTugs(t, dt) {
         let tx, tz, tyaw, hook = null;
         if (tg.state === 'leaving') {
             const away = tg.pos.clone().sub(sp).setY(0).normalize();
-            tx = tg.pos.x + away.x * 50; tz = tg.pos.z + away.z * 50; tyaw = Math.atan2(away.x, away.z);
+            tx = tg.pos.x + away.x * 200; tz = tg.pos.z + away.z * 200; tyaw = Math.atan2(away.x, away.z);
             if (tg.pos.distanceTo(sp) > 900) { scene.remove(tg.g); scene.remove(tg.line); tg.line.geometry.dispose(); tugs.splice(i, 1); renderTugPanel(); continue; }
         } else {
-            const side = st.side || 1;
+            let side = st.side || 1;
             const hw = _tugHalfWidth(st.z) * sc;
-            // 舷側の点（船の中の座標）→ ワールド
-            const edge = _localToWorldFlat(st.side ? Math.sign(st.x) * _tugHalfWidth(st.z) : 0, (hp && hp.designWaterlineY) || 0, st.z);
+            // 待機：その舷が岸壁・陸で塞がっていたら反対舷に付く
+            if (tg.action === 'standby' && st.side) {
+                const e0 = _tugFromShip(C, st.z * sc, side * (hw + TUG_BEAM / 2 + 3));
+                if (_tugStaticBlocked(e0.x, e0.z)) side = -side;
+            }
             const out = { x: F.sx * side, z: F.sz * side };           // 舷の外向き
+            const edge = _tugFromShip(C, st.z * sc, st.side ? side * hw : 0);
             if (tg.action === 'pull') {
                 hook = _localToWorldFlat(st.x, st.y, st.z);
-                let d = tg.dir === 'fwd' ? { x: F.fx, z: F.fz } : tg.dir === 'aft' ? { x: -F.fx, z: -F.fz } : (st.side ? out : { x: F.fx * Math.sign(st.z || 1), z: F.fz * Math.sign(st.z || 1) });
+                const d = tg.dir === 'fwd' ? { x: F.fx, z: F.fz } : tg.dir === 'aft' ? { x: -F.fx, z: -F.fz } : (st.side ? out : { x: F.fx * Math.sign(st.z || 1), z: F.fz * Math.sign(st.z || 1) });
                 // 横へ：金物から 45m 先。前へ・後ろへ：船首（船尾）の先 40m まで出る
-                const hlw = ((hp && hp.ready) ? hp.halfLen : 6) * sc;
-                const r = (tg.dir === 'fwd' ? Math.max(0, hlw - st.z * sc) + 40 : tg.dir === 'aft' ? Math.max(0, hlw + st.z * sc) + 40 : 45) + TUG_LEN / 2;
+                const r = (tg.dir === 'fwd' ? Math.max(0, C.HL - st.z * sc) + 40 : tg.dir === 'aft' ? Math.max(0, C.HL + st.z * sc) + 40 : 45) + TUG_LEN / 2;
                 tx = hook.x + d.x * r; tz = hook.z + d.z * r; tyaw = Math.atan2(d.x, d.z);
+                // 前へ・後ろへ引くときは、船首尾の中心線の先から
+                if (tg.dir !== 'side' && st.side) { const q = _tugFromShip(C, (tg.dir === 'fwd' ? 1 : -1) * (C.HL + 40 + TUG_LEN / 2), 0); tx = q.x; tz = q.z; }
                 tg.pullDir = d;
             } else if (tg.action === 'push') {
                 if (st.side) {
@@ -252,11 +429,11 @@ function updateTugs(t, dt) {
                     tyaw = Math.atan2(-out.x, -out.z);
                     tg.pushDir = { x: -out.x, z: -out.z };
                 } else {
-                    const s = Math.sign(st.z || 1);                         // 船首なら前から後ろへ押す
-                    const tip = _localToWorldFlat(0, 0, (hp && hp.ready ? hp.halfLen : 6) * s);
-                    tx = tip.x + F.fx * s * (TUG_LEN / 2 + 1.5); tz = tip.z + F.fz * s * (TUG_LEN / 2 + 1.5);
-                    tyaw = Math.atan2(-F.fx * s, -F.fz * s);
-                    tg.pushDir = { x: -F.fx * s, z: -F.fz * s };
+                    const s2 = Math.sign(st.z || 1);                         // 船首なら前から後ろへ押す
+                    const tip = _tugFromShip(C, s2 * C.HL, 0);
+                    tx = tip.x + F.fx * s2 * (TUG_LEN / 2 + 1.5); tz = tip.z + F.fz * s2 * (TUG_LEN / 2 + 1.5);
+                    tyaw = Math.atan2(-F.fx * s2, -F.fz * s2);
+                    tg.pushDir = { x: -F.fx * s2, z: -F.fz * s2 };
                 }
             } else {
                 // 待機：舷側に並んで同じ向き
@@ -264,35 +441,85 @@ function updateTugs(t, dt) {
                 tyaw = Math.atan2(F.fx, F.fz);
             }
         }
+        tg.blockedTarget = _tugStaticBlocked(tx, tz);
+        // 押す位置へは、いったん少し外（15m）まで来てから、まっすぐ船体へ
+        let ax = tx, az = tz;
+        const pushing = tg.action === 'push' && tg.pushDir && tg.state !== 'leaving';
+        if (pushing) {
+            const dFin = Math.hypot(tx - tg.pos.x, tz - tg.pos.z);
+            const faced = Math.abs(Math.atan2(Math.sin(tyaw - tg.yaw), Math.cos(tyaw - tg.yaw))) < 0.35;
+            if (!(dFin < 22 && faced)) { ax = tx - tg.pushDir.x * 15; az = tz - tg.pushDir.z * 15; }
+        }
+        // 船の向こう側へは端を回って。港の中は升目の道すじに沿って。細かい障害物は左右に振ってよける
+        let goal = tg.state === 'leaving' ? { x: tx, z: tz } : _tugNextGoal(C, tg, ax, az);
+        const G = _tugGridGet();
+        if (G && G.any) {
+            tg.planT = (tg.planT || 0) - dt;
+            const moved = !tg.planGoal || Math.hypot(goal.x - tg.planGoal.x, goal.z - tg.planGoal.z) > 30;
+            if (tg.planT <= 0 || moved) {
+                tg.planT = 3; tg.planGoal = { x: goal.x, z: goal.z };
+                tg.path = _tugGridPath(G, tg.pos.x, tg.pos.z, goal.x, goal.z);
+            }
+            if (tg.path && tg.path.length) {
+                while (tg.path.length > 1 && Math.hypot(tg.path[0].x - tg.pos.x, tg.path[0].z - tg.pos.z) < 20) tg.path.shift();
+                goal = tg.path[0];
+            }
+        }
+        const gd = Math.hypot(goal.x - tg.pos.x, goal.z - tg.pos.z);
+        tg.steerT = (tg.steerT || 0) - dt;
+        if (tg.steerT <= 0 || tg.steerAng === undefined) {
+            tg.steerT = 0.25;
+            const finalApproach = pushing && goal.x === ax && ax === tx;          // 船体に当てる最後の15mは船をよけない
+            tg.steerAng = finalApproach ? Math.atan2(goal.x - tg.pos.x, goal.z - tg.pos.z) : _tugSteer(C, tg, goal.x, goal.z, 60);
+        }
         // 動き：船と一緒に動きながら目標へ（最大 7m/s ＋ 船の速さ）
-        const dx = tx - tg.pos.x, dz = tz - tg.pos.z, dist = Math.hypot(dx, dz);
-        const maxV = 7;
-        const k = Math.min(maxV, dist * 0.35) / Math.max(1e-6, dist);
-        const wantVx = _tugShip.vx * (tg.state === 'leaving' ? 0 : 1) + dx * k, wantVz = _tugShip.vz * (tg.state === 'leaving' ? 0 : 1) + dz * k;
+        const withShip = tg.state === 'leaving' ? 0 : 1;
+        let wantVx = _tugShip.vx * withShip, wantVz = _tugShip.vz * withShip;
+        if (tg.steerAng !== null && gd > 0.5) {
+            const sp2 = Math.min(7, gd * 0.35);
+            wantVx += Math.sin(tg.steerAng) * sp2; wantVz += Math.cos(tg.steerAng) * sp2;
+        }
         tg.vel.x += (wantVx - tg.vel.x) * Math.min(1, dt * 1.5);
         tg.vel.z += (wantVz - tg.vel.z) * Math.min(1, dt * 1.5);
-        tg.pos.x += tg.vel.x * dt; tg.pos.z += tg.vel.z * dt;
-        // 遠いうちは進む向きへ、近づいたら持ち場の向きへ
-        const moveYaw = Math.atan2(tg.vel.x - _tugShip.vx, tg.vel.z - _tugShip.vz);
-        const relSpeed = Math.hypot(tg.vel.x - _tugShip.vx, tg.vel.z - _tugShip.vz);
-        const wantYaw = (dist > 60 && relSpeed > 1) ? moveYaw : tyaw;
-        let dy = Math.atan2(Math.sin(wantYaw - tg.yaw), Math.cos(wantYaw - tg.yaw));
-        tg.yaw += Math.max(-0.5 * dt, Math.min(0.5 * dt, dy));
+        // 向き：遠いうちは進む向きへ、近づいたら持ち場の向きへ
+        const relVx = tg.vel.x - _tugShip.vx * withShip, relVz = tg.vel.z - _tugShip.vz * withShip;
+        const relSpeed = Math.hypot(relVx, relVz);
+        const dist = Math.hypot(tx - tg.pos.x, tz - tg.pos.z);
+        const wantYaw = (dist > 40 && relSpeed > 1) ? Math.atan2(relVx, relVz) : tyaw;
+        const dy = Math.atan2(Math.sin(wantYaw - tg.yaw), Math.cos(wantYaw - tg.yaw));
+        const newYaw = tg.yaw + Math.max(-0.5 * dt, Math.min(0.5 * dt, dy));
+        // 進めてみて、ぶつかるなら進まない（船に押されたときは外へ押し出す）
+        let nx = tg.pos.x + tg.vel.x * dt, nz = tg.pos.z + tg.vel.z * dt;
+        const hitStatic = (x, z, yaw) => _tugPts(x, z, yaw).some(q => _tugStaticBlocked(q.x, q.z));
+        if (hitStatic(nx, nz, newYaw)) {
+            // 横すべりで行けるなら（壁に沿って）
+            if (!hitStatic(nx, tg.pos.z, newYaw)) nz = tg.pos.z;
+            else if (!hitStatic(tg.pos.x, nz, newYaw)) nx = tg.pos.x;
+            else { nx = tg.pos.x; nz = tg.pos.z; }
+            tg.vel.multiplyScalar(0.3);
+        }
+        tg.yaw = hitStatic(nx, nz, newYaw) ? tg.yaw : newYaw;
+        // 自分の船と重ならないように（押しているときの船首は触れてよい）
+        for (let it = 0; it < 2; it++) {
+            let worst = 0, push = null;
+            for (const q of _tugPts(nx, nz, tg.yaw)) {
+                const m = (pushing && q.bow) ? 0.3 : TUG_BEAM / 2 + 0.5;
+                const r = _tugShipPen(C, q.x, q.z, m);
+                if (r.pen > worst) { worst = r.pen; push = r.L; }
+            }
+            if (worst <= 0) break;
+            const sgn = Math.abs(push.s) < 0.01 ? 1 : Math.sign(push.s);
+            nx += F.sx * sgn * worst; nz += F.sz * sgn * worst;
+        }
+        tg.pos.x = nx; tg.pos.z = nz;
         if (tg.state === 'coming' && dist < 4 && Math.abs(dy) < 0.15) { tg.state = 'on'; tg.arrivedAt = t; renderTugPanel(); }
         if (tg.state === 'on' && dist > 25) tg.state = 'coming';
-        // 波に乗る
-        const oh = (typeof getOceanHeight === 'function') ? getOceanHeight(tg.pos.x, tg.pos.z, t) : 0;
-        const fwdX = Math.sin(tg.yaw), fwdZ = Math.cos(tg.yaw);
-        const pitch = (typeof getOceanHeight === 'function') ? Math.atan2(getOceanHeight(tg.pos.x + fwdX * 10, tg.pos.z + fwdZ * 10, t) - getOceanHeight(tg.pos.x - fwdX * 10, tg.pos.z - fwdZ * 10, t), 20) : 0;
-        const roll = (typeof getOceanHeight === 'function') ? Math.atan2(getOceanHeight(tg.pos.x + fwdZ * 4, tg.pos.z - fwdX * 4, t) - getOceanHeight(tg.pos.x - fwdZ * 4, tg.pos.z + fwdX * 4, t), 8) : 0;
-        tg.g.position.set(tg.pos.x, oh, tg.pos.z);
-        tg.g.rotation.set(-pitch * 0.8, tg.yaw, roll * 0.8, 'YXZ');
         // 力：持ち場に付いてから、じわっと出す
         const want = (tg.state === 'on' && tg.action !== 'standby') ? TUG_POWERS[tg.power] * escort : 0;
         tg.force += (want - tg.force) * Math.min(1, dt / 4);
         let dirF = null, P = null;
         if (tg.action === 'pull' && hook) { dirF = tg.pullDir; P = hook; }
-        else if (tg.action === 'push' && tg.pushDir) { dirF = tg.pushDir; P = new THREE.Vector3(tx - tg.pushDir.x * (TUG_LEN / 2), 0, tz - tg.pushDir.z * (TUG_LEN / 2)); }
+        else if (pushing) { dirF = tg.pushDir; P = new THREE.Vector3(tx - tg.pushDir.x * (TUG_LEN / 2), 0, tz - tg.pushDir.z * (TUG_LEN / 2)); }
         if (dirF && P && tg.force > 0.001 && !(typeof isDesignMode !== 'undefined' && isDesignMode)) {
             const f = tg.force * _tugPullN();
             const fxW = dirF.x * f, fzW = dirF.z * f;
@@ -300,22 +527,7 @@ function updateTugs(t, dt) {
             const lever = (P.x - sp.x) * F.fx + (P.z - sp.z) * F.fz;
             Fs += fs; Ff += ff; Mz += fs * lever;
         }
-        // 引き索：金物からタグの船尾のフックへ（張っているほどまっすぐ）
-        if (tg.action === 'pull' && hook && tg.state !== 'leaving') {
-            const hz = tg.g.userData.hookZ;
-            const ex = tg.pos.x + Math.sin(tg.yaw) * hz, ez = tg.pos.z + Math.cos(tg.yaw) * hz, ey = oh + 2.6;
-            const A = tg.line.geometry.attributes.position.array, n = 16;
-            const span = Math.hypot(ex - hook.x, ez - hook.z);
-            const sag = span * (0.12 - 0.1 * Math.min(1, tg.force / 0.3));
-            for (let q = 0; q < n; q++) {
-                const u = q / (n - 1);
-                A[q * 3] = hook.x + (ex - hook.x) * u;
-                A[q * 3 + 1] = hook.y + (ey - hook.y) * u - sag * 4 * u * (1 - u);
-                A[q * 3 + 2] = hook.z + (ez - hook.z) * u;
-            }
-            tg.line.geometry.attributes.position.needsUpdate = true;
-            tg.line.visible = dist < 30;
-        } else tg.line.visible = false;
+        if (last) _tugVisual(tg, t, hook, dist);
     }
     // ── 船への効き目 ──
     if (typeof isDesignMode !== 'undefined' && isDesignMode) return;
@@ -330,12 +542,57 @@ function updateTugs(t, dt) {
     // 何もしていないときは、ゆっくり止まる
     if (!Fs) _tugShip.vSway *= Math.exp(-dt * 0.05);
     if (!Mz) _tugShip.yawRate *= Math.exp(-dt * 0.05);
+    // 岸壁・陸に船腹が当たっていたら、そちらへは動かない（防舷材に当たって止まる）
+    if (window.world && world.mode === 'world' && typeof worldSeabedAt === 'function') {
+        const dr = (typeof worldShipDraft === 'function') ? worldShipDraft() : 5;
+        const hit = (along, sideSign, move) => {
+            const hw = _tugHalfWidth(along / sc) * sc;
+            const q = _tugFromShip(C, along, sideSign * (hw + 1 + Math.abs(move)));
+            return worldSeabedAt(q.x, q.z) > -dr;
+        };
+        const vS2 = _tugShip.vSway;
+        if (Math.abs(vS2) > 1e-4) {
+            const sg = Math.sign(vS2);
+            for (const k of [-0.85, -0.45, 0, 0.45, 0.85]) if (hit(k * C.HL, sg, vS2 * dt)) { _tugShip.vSway = 0; break; }
+        }
+        const r2 = _tugShip.yawRate;
+        if (Math.abs(r2) > 1e-6) {
+            // 回頭で船首は +x（左舷）側へ r>0 のとき動く、船尾は逆
+            for (const [k, sg] of [[0.85, Math.sign(r2)], [-0.85, -Math.sign(r2)]]) if (hit(k * C.HL, sg, r2 * 0.85 * C.HL * dt)) { _tugShip.yawRate = 0; break; }
+        }
+    }
     // 横流れ（ワールドで動かす）と回頭（heading を足す）
     physics.cgWorldX += F.sx * _tugShip.vSway * dt;
     physics.cgWorldZ += F.sz * _tugShip.vSway * dt;
     physics.heading += _tugShip.yawRate * 180 / Math.PI * dt;
     // 前後の力：ノットの速さへ
     physics.speed += (Ff / massKg) / 0.514 * dt;
+}
+// 見た目（波に乗る・引き索）
+function _tugVisual(tg, t, hook, dist) {
+    const oh = (typeof getOceanHeight === 'function') ? getOceanHeight(tg.pos.x, tg.pos.z, t) : 0;
+    const fwdX = Math.sin(tg.yaw), fwdZ = Math.cos(tg.yaw);
+    const H = (x, z) => (typeof getOceanHeight === 'function') ? getOceanHeight(x, z, t) : 0;
+    const pitch = Math.atan2(H(tg.pos.x + fwdX * 10, tg.pos.z + fwdZ * 10) - H(tg.pos.x - fwdX * 10, tg.pos.z - fwdZ * 10), 20);
+    const roll = Math.atan2(H(tg.pos.x + fwdZ * 4, tg.pos.z - fwdX * 4) - H(tg.pos.x - fwdZ * 4, tg.pos.z + fwdX * 4), 8);
+    tg.g.position.set(tg.pos.x, oh, tg.pos.z);
+    tg.g.rotation.set(-pitch * 0.8, tg.yaw, roll * 0.8, 'YXZ');
+    // 引き索：金物からタグの船尾のフックへ（張っているほどまっすぐ）
+    if (tg.action === 'pull' && hook && tg.state !== 'leaving') {
+        const hz = tg.g.userData.hookZ;
+        const ex = tg.pos.x + fwdX * hz, ez = tg.pos.z + fwdZ * hz, ey = oh + 2.6;
+        const A = tg.line.geometry.attributes.position.array, n = 16;
+        const span = Math.hypot(ex - hook.x, ez - hook.z);
+        const sag = span * (0.12 - 0.1 * Math.min(1, tg.force / 0.3));
+        for (let q = 0; q < n; q++) {
+            const u = q / (n - 1);
+            A[q * 3] = hook.x + (ex - hook.x) * u;
+            A[q * 3 + 1] = hook.y + (ey - hook.y) * u - sag * 4 * u * (1 - u);
+            A[q * 3 + 2] = hook.z + (ez - hook.z) * u;
+        }
+        tg.line.geometry.attributes.position.needsUpdate = true;
+        tg.line.visible = dist < 30;
+    } else tg.line.visible = false;
 }
 window.updateTugs = updateTugs;
 
@@ -369,7 +626,7 @@ function renderTugPanel() {
     const panel = document.getElementById('tug-panel');
     if (!panel) return;
     const st = (typeof shipGroup !== 'undefined' && shipGroup) ? tugStations() : [];
-    const stateLabel = (t) => t.state === 'coming' ? '向かっています' : t.state === 'leaving' ? '帰ります' : (t.action === 'standby' ? '待機中' : t.action === 'push' ? '押しています' : '引いています');
+    const stateLabel = (t) => t.state === 'coming' ? (t.blockedTarget ? '近づけません（岸・浅瀬）' : '向かっています') : t.state === 'leaving' ? '帰ります' : (t.action === 'standby' ? '待機中' : t.action === 'push' ? '押しています' : '引いています');
     const active = tugs.filter(t => t.state !== 'leaving');
     panel.innerHTML = `<div class="tg-head"><span class="tg-title">タグボート</span>
         <button class="tg-call" onclick="tugCall()" ${active.length >= TUG_MAX ? 'disabled' : ''}>＋ 呼ぶ</button>
