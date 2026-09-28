@@ -723,7 +723,7 @@ window.worldSeabedAt = worldSeabedAt;
 let _trHullCache = null;
 function _trHullPoints() {
     const hp = window.hullProfile;
-    const key = hp && hp.ready ? [hp.halfLen, physics.scale, physics.draftOverride || 0, (typeof shipGroup !== 'undefined' && shipGroup) ? shipGroup.scale.y : 1].join(',') : 'none';
+    const key = hp && hp.ready ? [hp.halfLen, physics.scale, physics.draftOverride || 0, Math.round(worldShipDraftLever() * 20), (typeof shipGroup !== 'undefined' && shipGroup) ? shipGroup.scale.y : 1].join(',') : 'none';
     if (_trHullCache && _trHullCache.key === key) return _trHullCache.pts;
     const sc = physics.scale || 1;
     const hl = (hp && hp.ready) ? hp.halfLen : 6;
@@ -751,17 +751,18 @@ function _trHullScore(x, z, h, off, out) {
     const r = h * Math.PI / 180, fx = Math.sin(r), fz = Math.cos(r), sx = Math.cos(r), sz = -Math.sin(r);
     const ox = x + fx * off.a + sx * off.s, oz = z + fz * off.a + sz * off.s;
     let score = 0, hard = 0;
-    // 船底の高さは、今の船の姿勢（波で上下・縦揺れ・横揺れしている）から求める。
+    // 船底の深さは喫水（船体設定の喫水＋操作パネルのレバーの分：worldHullAt）で決め、
+    // 波の動きだけを足す：船の下の海面の高さ（波で上下）と、縦揺れ・横揺れで前後・両舷が上下する分。
     // 波の山で船が持ち上がれば船底も上がり、座礁していても外れる
-    const hp = window.hullProfile, scl = physics.scale || 1;
+    const scl = physics.scale || 1;
     const M = shipGroup.matrixWorld.elements;
-    const wl = (hp && hp.ready) ? (hp.designWaterlineY || 0) : 0;
+    const sea = Number.isFinite(window._physicsWaveY) ? Math.max(-6, Math.min(6, window._physicsWaveY)) : 0;
     for (const p of _trHullPoints()) {
         const px = ox + fx * p.a + sx * p.s, pz = oz + fz * p.a + sz * p.s;
         const b = worldSeabedAt(px, pz);
-        // 船の中の点（模型の座標）→ ワールドの高さ（行列の y 行だけ使う）
-        const lx = p.s / scl, ly = wl - p.d / scl, lz = p.a / scl;
-        const keelY = M[1] * lx + M[5] * ly + M[9] * lz + M[13];
+        // 縦揺れ・横揺れでこの点が上下する分（行列の y 行の、横・前後の成分）
+        const lx = p.s / scl, lz = p.a / scl;
+        const keelY = sea + M[1] * lx + M[9] * lz - p.d;
         const c = b - keelY;                             // 正：底（岸壁）が船底より上
         if (c > 0) { score += Math.min(12, c); if (out) out.push(p); }
         if (b > 0) hard++;                               // 岸壁・桟橋・陸（水面より上）の中

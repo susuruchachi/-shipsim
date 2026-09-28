@@ -773,6 +773,7 @@ async function autopilotStart(port) {
     const route = autopilot._newRoute; autopilot._newRoute = null;
     route.forEach((w, i) => { if (!w.label) w.label = `変針点 ${i + 1}`; });
     autopilot.route = route; autopilot.leg = 0; autopilot.planning = false; autopilot.active = true;
+    autopilot.planDraft = draft; autopilot.draftT = 0;           // この喫水で引いた航路（深くなったら引き直す）
     autopilot.legFrom = worldShipLatLon(); autopilot.lastOrder = null; autopilot.overshoot = false;
     autopilot.note = (port.point && autopilot.pointMoved > 0) ? `指定した所は浅い（または陸）ので、${autopilot.pointMoved >= 1000 ? (autopilot.pointMoved / 1000).toFixed(1) + 'km' : autopilot.pointMoved + 'm'} 離れた深い所で止まります` : '';
     _apMsg('');
@@ -783,7 +784,7 @@ function autopilotStop(msg, silent) {
     // 途中で止まったときは、あとで「再開」できるように覚えておく
     if (was && !silent && autopilot.route && autopilot.dest) {
         autopilot.resume = { dest: autopilot.dest, route: autopilot.route, leg: autopilot.leg, legFrom: autopilot.legFrom,
-                             berthPlan: autopilot.berthPlan, deepShip: autopilot.deepShip };
+                             berthPlan: autopilot.berthPlan, deepShip: autopilot.deepShip, planDraft: autopilot.planDraft };
     }
     autopilot.active = false; autopilot.planning = false;
     if (!silent) { autopilot.route = null; autopilot.dest = null; }
@@ -808,9 +809,10 @@ function autopilotResume() {
         const sX = _apDLon(from.lon, here.lon) * _apRad, sY = _apMercY(here.lat) - psiA, dl = Math.hypot(dX, dY);
         off = dl > 1e-9 ? Math.abs(dX * sY - dY * sX) / dl * WORLD_R * Math.cos(here.lat * _apRad) : rhumbCourse(here.lat, here.lon, to.lat, to.lon).dist;
     }
-    if (off > 1000 || (window.terrain && terrain.grounded)) { autopilotStart(r.dest); return; }
+    // 離れた・座礁した・止めている間にレバーで喫水を深くした：今の場所と喫水で探し直す
+    if (off > 1000 || (window.terrain && terrain.grounded) || !(worldShipDraft() <= (r.planDraft || 0) + 0.5)) { autopilotStart(r.dest); return; }
     Object.assign(autopilot, { route: r.route, leg: r.leg, legFrom: r.legFrom, dest: r.dest, berthPlan: r.berthPlan, deepShip: r.deepShip,
-                               active: true, planning: false, lastOrder: null, overshoot: false, msg: '' });
+                               planDraft: r.planDraft, draftT: 0, active: true, planning: false, lastOrder: null, overshoot: false, msg: '' });
     renderAutopilotPanel();
     if (typeof worldMapRedraw === 'function') worldMapRedraw(true);
 }
@@ -856,6 +858,20 @@ function updateAutopilot(t, dt) {
     // 手で舵を取ったら切る
     if ((typeof keys !== 'undefined' && (keys.a || keys.d)) || (typeof _br !== 'undefined' && _br.wheelDrag)) { autopilotStop('手で舵を取ったので、自動航行を切りました'); return; }
     if (window.terrain && terrain.grounded) { _apOrder(0); autopilotStop('座礁したので、自動航行を止めました'); return; }
+    // レバーで喫水を深くした（0.5m より多く）：レバーを動かし終えて 2 秒たったら、今の喫水で航路を引き直す
+    if (autopilot.planDraft > 0 && autopilot.dest) {
+        const dNow = worldShipDraft();
+        if (dNow > autopilot.planDraft + 0.5) {
+            if (Math.abs(dNow - (autopilot.draftSeen || 0)) > 0.02) { autopilot.draftSeen = dNow; autopilot.draftT = 0; }
+            autopilot.draftT = (autopilot.draftT || 0) + dt;
+            if (autopilot.draftT > 2) {
+                const note = `喫水が ${autopilot.planDraft.toFixed(1)}m から ${dNow.toFixed(1)}m に深くなったので、航路を引き直しました`;
+                autopilot.planDraft = 0;
+                autopilotStart(autopilot.dest).then(() => { if (autopilot.active && !autopilot.note) { autopilot.note = note; renderAutopilotPanel(); } });
+                return;
+            }
+        } else autopilot.draftT = 0;
+    }
     const R = autopilot.route;
     const here = worldShipLatLon();
     let wp = R[autopilot.leg];

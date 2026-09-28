@@ -799,9 +799,18 @@ function worldShipDraftAuto() {
     }
     return 0.4 * (physics.scale || 1);
 }
-// 喫水[m]。船体設定で手入力（physics.draftOverride）していればそれ
-function worldShipDraft() {
+// 操作パネルの「Draft (吃水深)」レバーで沈めた（＋）・浮かせた（－）分[m]
+function worldShipDraftLever() {
+    const v = +physics.draftOffset;
+    return Number.isFinite(v) ? v : 0;
+}
+// レバーを 0 にしたときの喫水[m]。船体設定で手入力（physics.draftOverride）していればそれ
+function worldShipDraftBase() {
     return physics.draftOverride > 0 ? physics.draftOverride : worldShipDraftAuto();
+}
+// 今の喫水[m]（レバーの分を足す）。座礁・水深の余裕・自動航行・離着岸はこれを基準にする
+function worldShipDraft() {
+    return Math.max(0.1, worldShipDraftBase() + worldShipDraftLever());
 }
 // 船の中の前後位置 z（模型の座標）での 半幅[m]・喫水[m]（船体の輪切りから。手入力の喫水は比で掛ける）
 function worldHullAt(zLocal) {
@@ -809,6 +818,7 @@ function worldHullAt(zLocal) {
     const sc = physics.scale || 1;
     const sy = (typeof shipGroup !== 'undefined' && shipGroup) ? Math.abs(shipGroup.scale.y) || 1 : 1;
     if (!hp || !hp.ready || !hp.slices || hp.slices.length < 2) return { hw: 1.5 * sc, d: worldShipDraft() };
+    const lever = worldShipDraftLever();
     const a = zLocal / hp.halfLen * (hp.bowSign || 1);
     const sl = hp.slices;
     let i = 0;
@@ -818,15 +828,23 @@ function worldHullAt(zLocal) {
     const hw = (A.halfWidth + (B.halfWidth - A.halfWidth) * u) * sc;
     let d = (A.draft + (B.draft - A.draft) * u) * sy;
     if (physics.draftOverride > 0) d *= physics.draftOverride / Math.max(1e-3, worldShipDraftAuto());
+    // レバーで沈めた・浮かせた分は船の全長で同じだけ（水面より上の所は 0 のまま）
+    if (lever && d > 0) d = Math.max(0, d + lever);
     return { hw, d };
 }
 function setShipDraft(v) {
     physics.draftOverride = Math.max(0, parseFloat(v) || 0);
-    const el = document.getElementById('draft-auto');
-    if (el) el.textContent = `0 ＝ 模型から自動（${worldShipDraftAuto().toFixed(1)} m）`;
+    _draftAutoLabel();
 }
-Object.assign(window, { worldShipDraft, worldShipDraftAuto, worldHullAt, setShipDraft });
-setInterval(() => { const el = document.getElementById('draft-auto'); const p = document.getElementById('settings-panel'); if (el && p && p.classList.contains('open')) el.textContent = `0 ＝ 模型から自動（${worldShipDraftAuto().toFixed(1)} m）`; }, 2000);
+// 「0 ＝ 模型から自動（x m）」の横に、レバーを足した今の喫水も出す
+function _draftAutoLabel() {
+    const el = document.getElementById('draft-auto'); if (!el) return;
+    const lv = worldShipDraftLever();
+    el.textContent = `0 ＝ 模型から自動（${worldShipDraftAuto().toFixed(1)} m）` +
+        (Math.abs(lv) >= 0.05 ? `／レバー ${lv > 0 ? '+' : ''}${lv.toFixed(2)} m で今の喫水 ${worldShipDraft().toFixed(1)} m` : '');
+}
+Object.assign(window, { worldShipDraft, worldShipDraftBase, worldShipDraftLever, worldShipDraftAuto, worldHullAt, setShipDraft });
+setInterval(() => { const p = document.getElementById('settings-panel'); if (p && p.classList.contains('open')) _draftAutoLabel(); }, 2000);
 
 // 港から出航する：港の前の泊地に、海の方を向けて置く。
 // 船が深すぎて港に入れないときは、足りる深さの所まで沖へ出して置く。

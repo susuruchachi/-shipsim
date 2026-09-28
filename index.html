@@ -362,10 +362,10 @@
             <input type="range" id="sternfull-slider" class="sp-slider" style="accent-color:#ff99cc;" min="0.3" max="2.0" step="0.05" value="1.00">
         </div>
         <div class="sp-row"><span class="sp-label accent" style="color:#7fe0a0;">喫水 (Draft) m</span>
-            <input type="number" id="draft-num" class="sp-num-input" style="color:#7fe0a0;" min="0" max="40" step="0.1" value="0" oninput="setShipDraft(this.value)">
+            <input type="number" id="shipdraft-num" class="sp-num-input" style="color:#7fe0a0;" min="0" max="40" step="0.1" value="0" oninput="setShipDraft(this.value)">
             <span id="draft-auto" style="font-size:10px;color:#888;margin-left:6px;">0 ＝ 模型から自動</span>
         </div>
-        <div style="font-size:10px;color:#888;margin:2px 0 0;">座礁の判定に使う、いちばん深い所（キール）の喫水です。船首・船尾は船体の形に合わせて浅くなります。0 のときは模型の形から自動で決めます。船ごとに保存されます。</div>
+        <div style="font-size:10px;color:#888;margin:2px 0 0;">座礁の判定に使う、いちばん深い所（キール）の喫水です。船首・船尾は船体の形に合わせて浅くなります。0 のときは模型の形から自動で決めます。船ごとに保存されます。操作パネルの「Draft (吃水深)」レバーで船を沈めた・浮かせた分は、この値に足して座礁・水深の余裕・自動航行・離着岸の判定に使います。</div>
       </div>
 
       <div class="sp-section">
