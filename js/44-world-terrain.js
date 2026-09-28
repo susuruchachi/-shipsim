@@ -18,6 +18,7 @@
 
 const TR_NEAR = { half: 7000, n: 321 };       // 細かい格子（半径[m]・1辺の点の数）
 const TR_FAR = { half: 30000, n: 257 };       // 粗い格子
+const TR_FINE = { half: 2500, n: 501 };       // 作り込んだ港の中だけ：10m おき（ドック・岸壁の形が出る）
 const TR_RECENTER = 1800;                      // 中心からこれだけ離れたら作り直す[m]
 const PORT_BUILD_DIST = 12000;                 // これより近い港に施設を建てる[m]
 
@@ -45,7 +46,9 @@ function _portShape(p) {
     const br = p.seaBearing * Math.PI / 180;
     // s：海の方、l：岸沿い（s を右に90°）
     // 海の方の向き（物理の面では東が −x）
-    return { id: p.id, type: p.type, real: !!p.real, x: loc.x, z: loc.z, sx: -Math.sin(br), sz: Math.cos(br),
+    // detail：作り込んだ港の地形の中（本物の岸壁・ドックがあるので、地形はほとんど手直ししない）
+    const detail = !!(p.real && typeof _rwDetailOf === 'function' && _RW && _RW.hd && _rwDetailOf(p.lat, p.lon));
+    return { id: p.id, type: p.type, real: !!p.real, detail, x: loc.x, z: loc.z, sx: -Math.sin(br), sz: Math.cos(br),
              quayLen, apron, basin, depth: T.depth, seed: p.seed, name: p.name, chLen: worldPortChannelLen(p) };
 }
 // 桟橋の並び（港の座標：b＝岸沿い）。軍港は桟橋を岸壁の片側に寄せ、残りを大きな船が横付けできる岸壁にする
@@ -75,6 +78,17 @@ function _portAdjust(h, x, z, shapes) {
         const a = dx * S.sx + dz * S.sz;            // 海の方への距離（岸＝0）
         const b = dx * S.sz - dz * S.sx;            // 岸沿いの距離
         const half = S.quayLen / 2;
+        // 作り込んだ港：岸壁の後ろの陸を平らにし、前の水面を掘るだけ（陸は削らない・沖への航路は掘らない）
+        if (S.detail) {
+            // 岸壁のすぐ前（12m）は必ず水（本物の岸の線と、置いた岸壁の線の数 m のずれで船腹が陸に当たらないよう）
+            if (a > 0 && a < 12 && Math.abs(b) < half) { h = Math.min(h, -S.depth - 2); continue; }
+            if (a <= 0 && a > -S.apron && Math.abs(b) < half && h > -1) h = 3;
+            else if (a > 0 && a < Math.min(S.basin, 450) && Math.abs(b) < half + 40 && h < -0.5) {
+                const want = -S.depth - 2, k = Math.min(1, (half + 40 - Math.abs(b)) / 40) * Math.min(1, (Math.min(S.basin, 450) - a) / 150);
+                if (h > want) h = h + (want - h) * k;
+            }
+            continue;
+        }
         // 岸壁の後ろ（エプロン）：平らに 3m
         if (a <= 0 && a > -S.apron && Math.abs(b) < half + 30) {
             const k = Math.min(1, Math.max(0, (half + 30 - Math.abs(b)) / 30)) * Math.min(1, Math.max(0, (a + S.apron) / 25 + 0.001));
@@ -233,6 +247,13 @@ function _trNearbyShapes(cx, cz, radius) {
     return out;
 }
 
+// 船のまわり（細かい網の広さ＋少し）が、作り込んだ港にかかるか
+function _trNearDetail(cx, cz) {
+    if (!_RW || !_RW.hd) return false;
+    const u = worldLocalToUnit(cx, cz), ll = worldUnitToLatLon(u);
+    const m = TR_FINE.half + 1500, dLat = m / WORLD_R * 57.29577951308232, dLon = dLat / Math.max(0.1, Math.cos(ll.lat / 57.29577951308232));
+    return _RW.hd.some(d => ll.lat > d.lat0 - dLat && ll.lat < d.lat1 + dLat && ll.lon > d.lon0 - dLon && ll.lon < d.lon1 + dLon);
+}
 // 作り直しを頼む
 function _trRequest(cx, cz) {
     // 近くに陸がありそうか、粗く調べる（外洋では何も作らない）
@@ -243,8 +264,8 @@ function _trRequest(cx, cz) {
     }
     terrain.center = { x: cx, z: cz };
     if (maxH < -140 && !_trNearbyShapes(cx, cz, TR_FAR.half).length) {   // 大陸棚（浅瀬があり得る所）も無い外洋
-        _trDispose(terrain.near); _trDispose(terrain.far);
-        terrain.near = terrain.far = null;
+        _trDispose(terrain.near); _trDispose(terrain.far); _trDispose(terrain.fine);
+        terrain.near = terrain.far = terrain.fine = null;
         return;
     }
     const F = worldFrame();
@@ -253,6 +274,10 @@ function _trRequest(cx, cz) {
     const id = ++terrain.reqId;
     terrain.pending = true;
     const w = _trWorker();
+    // 作り込んだ港のそばなら、船のまわりをもっと細かく
+    terrain.fineOn = _trNearDetail(cx, cz);
+    if (terrain.fineOn) w.postMessage({ id, which: 'fine', frame, n: TR_FINE.n, half: TR_FINE.half, cx, cz, oct: WORLD_OCT_FULL, shapes });
+    else { _trDispose(terrain.fine); terrain.fine = null; }
     w.postMessage({ id, which: 'near', frame, n: TR_NEAR.n, half: TR_NEAR.half, cx, cz, oct: WORLD_OCT_FULL, shapes });
     w.postMessage({ id, which: 'far', frame, n: TR_FAR.n, half: TR_FAR.half, cx, cz, oct: 15, shapes: [] });
 }
@@ -264,8 +289,12 @@ function _trOnHeights(msg) {
         _brkBuild(terrain.nearH);
         _trSeabedTex(terrain.nearH);
         _trDispose(terrain.near);
-        terrain.near = _trBuildMesh(msg.H, TR_NEAR.n, TR_NEAR.half, cx, cz, null);
+        terrain.near = _trBuildMesh(msg.H, TR_NEAR.n, TR_NEAR.half, cx, cz, terrain.fineOn ? { cx, cz, half: TR_FINE.half } : null);
         if (terrain.near) scene.add(terrain.near);
+    } else if (msg.which === 'fine') {
+        _trDispose(terrain.fine);
+        terrain.fine = _trBuildMesh(msg.H, TR_FINE.n, TR_FINE.half, cx, cz, null);
+        if (terrain.fine) scene.add(terrain.fine);
     } else {
         _trDispose(terrain.far);
         terrain.far = _trBuildMesh(msg.H, TR_FAR.n, TR_FAR.half, cx, cz, { cx, cz, half: TR_NEAR.half });
@@ -462,8 +491,8 @@ function _trUpdatePorts() {
 }
 
 function _trClearAll() {
-    _trDispose(terrain.near); _trDispose(terrain.far);
-    terrain.near = terrain.far = null;
+    _trDispose(terrain.near); _trDispose(terrain.far); _trDispose(terrain.fine);
+    terrain.near = terrain.far = terrain.fine = null;
     terrain.center = null;
     terrain.reqId++;
     for (const [, P] of terrain.ports) { scene.remove(P.group); P.group.traverse(o => { if (o.geometry) o.geometry.dispose(); }); }
@@ -816,6 +845,8 @@ function _trCheckGrounding(t, dt) {
         good = { x: good.x, z: good.z, h: good.h, score: so, hard: ho };
     }
     if (good && _trWorse(score, hard, good)) {
+        // 調べるとき用：どの点が何に当たったか（船の中の前後 a・横 s・その点の喫水 d）
+        terrain._lastHits = hits.slice(0, 12).map(p => ({ a: Math.round(p.a), s: Math.round(p.s), d: +(p.d || 0).toFixed(1), tip: !!p.tip }));
         // 前より深く入った：動いた分を取り消す（向きだけ・位置だけ戻して済むならそれで）
         const cands = [{ x, z, h: good.h }, { x: good.x, z: good.z, h }, { x: good.x, z: good.z, h: good.h }];
         let pick = cands[2], pickS = good.score, pickH = good.hard;

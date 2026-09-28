@@ -121,11 +121,13 @@ function _wNoise3(xin, yin, zin) {
 const REAL_WORLDS = {
     britain: {
         name: 'ブリテン諸島・アイルランド', url: 'data/britain', center: { lat: 54.3, lon: -4.5 }, start: 'サウサンプトン港',
+        // 作り込んだ港（data/harbors/<key>：10m おきの地形。OpenStreetMap の海岸線・ドック＋EMODnet の水深）
+        harbors: ['southampton'],
         // 実在の港（おおよその位置。実際の海岸に合わせて数km以内で置き直す）
         ports: [
             // イングランド南岸
             // （5番目：航路が通る所。サウサンプトンは東の口：カルショット沖 → カウズ沖 → スピットヘッド → ナブ）
-            ['サウサンプトン港', 'cargo', 50.895, -1.405, [[50.805, -1.300], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.8883, -1.4005], bearing: 160 }], ['ポーツマス軍港', 'naval', 50.800, -1.110], ['プリマス軍港', 'naval', 50.375, -4.180],
+            ['サウサンプトン港', 'cargo', 50.895, -1.405, [[50.805, -1.300], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.9034, -1.4252], bearing: 207 }], ['ポーツマス軍港', 'naval', 50.800, -1.110], ['プリマス軍港', 'naval', 50.375, -4.180],
             ['プール港', 'town', 50.705, -1.990], ['ポートランド港', 'town', 50.570, -2.440], ['ファルマス港', 'town', 50.155, -5.055],
             ['ニューリン漁港', 'fishing', 50.102, -5.548], ['ブリクサム漁港', 'fishing', 50.398, -3.510], ['ドーヴァー港', 'city', 51.120, 1.330],
             // テムズ・東海岸
@@ -153,8 +155,39 @@ const REAL_WORLDS = {
     },
 };
 let _RW = null;
-// その緯度・経度の高さ[m]（格子の 4 点から直線で補う）。範囲の外は低い陸（行き止まり）
+// 作り込んだ港の細かい地形（10m おき）：その緯度・経度の高さ[m]。範囲の外は NaN
+function _rwDetailAt(d, lat, lon) {
+    const fy = (d.lat1 - lat) / d.dLat, fx = (lon - d.lon0) / d.dLon;
+    if (!(fx >= 0 && fy >= 0 && fx <= d.cols - 1 && fy <= d.rows - 1)) return NaN;
+    const x0 = Math.min(d.cols - 2, Math.floor(fx)), y0 = Math.min(d.rows - 2, Math.floor(fy));
+    const tx = fx - x0, ty = fy - y0, H = d.h, k = y0 * d.cols + x0;
+    return ((H[k] * (1 - tx) + H[k + 1] * tx) * (1 - ty) + (H[k + d.cols] * (1 - tx) + H[k + d.cols + 1] * tx) * ty) * 0.1;
+}
+// その所が作り込んだ港の中なら、その港（と、縁からの升目の数）
+function _rwDetailOf(lat, lon) {
+    const D = _RW && _RW.hd;
+    if (!D) return null;
+    for (let i = 0; i < D.length; i++) {
+        const d = D[i];
+        if (lat > d.lat0 && lat < d.lat1 && lon > d.lon0 && lon < d.lon1) return d;
+    }
+    return null;
+}
+// その緯度・経度の高さ[m]（格子の 4 点から直線で補う）。範囲の外は低い陸（行き止まり）。
+// 作り込んだ港の中はその細かい地形（縁の 250m で、粗い地形となめらかにつなぐ）
 function _rwSample(lat, lon) {
+    const R = _RW;
+    const d = R.hd ? _rwDetailOf(lat, lon) : null;
+    if (d) {
+        const hd = _rwDetailAt(d, lat, lon);
+        const e = Math.min((lat - d.lat0) / d.dLat, (d.lat1 - lat) / d.dLat, (lon - d.lon0) / d.dLon, (d.lon1 - lon) / d.dLon) * d.cell;
+        if (e >= 250) return hd;
+        const t = Math.max(0, e / 250);
+        return hd * t + _rwCoarse(lat, lon) * (1 - t);
+    }
+    return _rwCoarse(lat, lon);
+}
+function _rwCoarse(lat, lon) {
     const R = _RW;
     const fy = (R.lat1 - lat) / R.cell, fx = (lon - R.lon0) / R.cell;
     if (!(fx >= 0 && fy >= 0 && fx <= R.cols - 1 && fy <= R.rows - 1)) return 60;
@@ -171,7 +204,7 @@ function _rwInside(lat, lon) {
 function _rwHeight(ux, uy, uz, oct) {
     const lat = Math.asin(Math.max(-1, Math.min(1, uy))) * 57.29577951308232, lon = Math.atan2(uz, ux) * 57.29577951308232;
     let h = _rwSample(lat, lon);
-    if (oct >= 12 && h > -20 && h < 20) {
+    if (oct >= 12 && h > -20 && h < 20 && !(_RW.hd && _rwDetailOf(lat, lon))) {
         const n = 0.65 * _wNoise3(ux * 9000 + 1.7, uy * 9000 - 2.9, uz * 9000 + 4.1) + 0.35 * _wNoise3(ux * 30000 - 5.3, uy * 30000 + 0.7, uz * 30000 - 2.2);
         h += n * 3 * (1 - Math.abs(h) / 20);
     }
@@ -198,7 +231,10 @@ function worldWorkerSource() {
         let WORLD_R = ${WORLD_R};
         let _RW = null;
         const _rwHook = (ev) => { if (ev.data && ev.data.__rw) { _RW = ev.data.rw; WORLD_R = ev.data.R; return true; } return false; };
+        ${_rwDetailAt.toString()}
+        ${_rwDetailOf.toString()}
         ${_rwSample.toString()}
+        ${_rwCoarse.toString()}
         ${_rwHeight.toString()}
         ${_rwEFromH.toString()}
         ${_rwShoalFree.toString()}
@@ -496,9 +532,20 @@ function _rwFairway(p) {
         for (let k = goal; k >= 0; k = from[k]) cells.push([k % W + i0, ((k / W) | 0) + j0]);
         return cells.reverse();
     };
+    // 作り込んだ港の中は、細かい地形（40m にまとめる）の上で深い所をたどる（粗い格子では、本物の浅瀬を横切ってしまう）
+    let pre = [], vias = (p.via || []).slice(), cur = s0;
+    const Dt = _rwDetailOf(p.lat, p.lon);
+    if (Dt) {
+        const inBox = (v) => v[0] > Dt.lat0 && v[0] < Dt.lat1 && v[1] > Dt.lon0 && v[1] < Dt.lon1;
+        let tgt = null;
+        while (vias.length && inBox(vias[0])) tgt = vias.shift();
+        const st = { lat: p.lat + Math.cos(br) * 150 / mLat, lon: p.lon + Math.sin(br) * 150 / mLon };
+        const r = _rwDetailRoute(Dt, st, tgt ? { lat: tgt[0], lon: tgt[1] } : null);
+        if (r) { pre = r.pts; cur = cellOf(r.end.lat, r.end.lon); }
+    }
     // 通る所（実際の航路の目印。港ごとの via）を順に通ってから、外洋の深い所へ
-    let cells = [], cur = s0;
-    for (const [vl, vo] of (p.via || [])) {
+    let cells = [];
+    for (const [vl, vo] of vias) {
         const v = cellOf(vl, vo);
         const seg = search(cur, (i, j) => Math.abs(i - v.i) <= 1 && Math.abs(j - v.j) <= 1);
         if (!seg) break;
@@ -507,7 +554,7 @@ function _rwFairway(p) {
     }
     const last = search(cur, (i, j) => Math.hypot((i - s0.i) * dx, (j - s0.j) * dy) > 2500 && hAt(i, j) <= -(D + 4) && openDeep(i, j));
     if (last) cells = cells.concat(cells.length ? last.slice(1) : last);
-    if (cells.length < 2) return null;
+    if (cells.length < 2) return pre.length ? { depth: D, pts: [{ lat: p.lat, lon: p.lon }, ...pre] } : null;
     // まっすぐにできる所はまっすぐに（途中がずっと水の上の範囲で。低い陸を横切ると、掘ったときに
     // ありもしない運河ができてしまう。道すじそのものが通る低い陸（狭い口）は、そのまま残る）
     // （線の両側 200m に高い陸がある所も、まっすぐにしない：掘った航路の端に陸が残る）
@@ -529,7 +576,83 @@ function _rwFairway(p) {
         for (let c = cells.length - 1; c > a + 1; c--) if (clear(cells[a], cells[c])) { b = c; break; }
         simp.push(cells[b]); a = b;
     }
-    return { depth: D, pts: [{ lat: p.lat, lon: p.lon }, ...simp.map(([i, j]) => llOf(i, j))] };
+    return { depth: D, pts: [{ lat: p.lat, lon: p.lon }, ...pre, ...simp.map(([i, j]) => llOf(i, j))] };
+}
+// 作り込んだ港の中の航路：40m の升目（中と四隅の浅い方の深さ）で、深いほど通りやすく、6m より浅い所は通らない。
+// 始まり st から、目当て tgt（無ければ港の枠の縁）まで。まっすぐ行ける所（途中がずっと 8m より深い）はまっすぐに
+function _rwDetailRoute(d, st, tgt) {
+    const f = 4, nx = Math.floor((d.cols - 1) / f), ny = Math.floor((d.rows - 1) / f), N = nx * ny;
+    const dep = new Float32Array(N);
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+        let hm = -Infinity;
+        for (const [a, b] of [[2, 2], [0, 0], [f, 0], [0, f], [f, f]]) hm = Math.max(hm, d.h[(j * f + b) * d.cols + i * f + a] * 0.1);
+        dep[j * nx + i] = -hm;
+    }
+    const ll = (i, j) => ({ lat: d.lat1 - (j * f + 2) * d.dLat, lon: d.lon0 + (i * f + 2) * d.dLon });
+    const cellOf = (q) => ({ i: Math.max(0, Math.min(nx - 1, Math.round((q.lon - d.lon0) / d.dLon / f - 0.5))), j: Math.max(0, Math.min(ny - 1, Math.round((d.lat1 - q.lat) / d.dLat / f - 0.5))) });
+    const s = cellOf(st);
+    // 始まりが浅ければ、近くの深い升目から
+    let sk = -1, bd = Infinity;
+    for (let b = -8; b <= 8; b++) for (let a = -8; a <= 8; a++) {
+        const i = s.i + a, j = s.j + b;
+        if (i < 0 || j < 0 || i >= nx || j >= ny || dep[j * nx + i] < 8) continue;
+        const e = a * a + b * b; if (e < bd) { bd = e; sk = j * nx + i; }
+    }
+    if (sk < 0) return null;
+    const t = tgt ? cellOf(tgt) : null;
+    const goal = (i, j) => t ? Math.abs(i - t.i) <= 2 && Math.abs(j - t.j) <= 2 : (i < 3 || j < 3 || i >= nx - 3 || j >= ny - 3) && dep[j * nx + i] >= 10;
+    // 浅い所（8m 未満）から 80m 以内の升目は通りにくく（水路の真ん中を通る）
+    const nearShoal = new Uint8Array(N);
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+        if (dep[j * nx + i] >= 8) continue;
+        for (let b = -2; b <= 2; b++) for (let a = -2; a <= 2; a++) { const ii = i + a, jj = j + b; if (ii >= 0 && jj >= 0 && ii < nx && jj < ny) nearShoal[jj * nx + ii] = 1; }
+    }
+    const g = new Float64Array(N).fill(Infinity), from = new Int32Array(N).fill(-1), heap = [];
+    const push = (k, v) => { heap.push([v, k]); let c = heap.length - 1; while (c > 0) { const q = (c - 1) >> 1; if (heap[q][0] <= heap[c][0]) break; [heap[q], heap[c]] = [heap[c], heap[q]]; c = q; } };
+    const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let c = 0; for (;;) { const l = 2 * c + 1, r = l + 1; let m = c; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === c) break; [heap[m], heap[c]] = [heap[c], heap[m]]; c = m; } } return top; };
+    g[sk] = 0; push(sk, 0);
+    let end = -1, best = sk, bestE = Infinity;
+    while (heap.length) {
+        const [v, k] = pop();
+        if (v > g[k]) continue;
+        const i = k % nx, j = (k / nx) | 0;
+        if (goal(i, j)) { end = k; break; }
+        if (t) { const e = Math.hypot(i - t.i, j - t.j); if (e < bestE) { bestE = e; best = k; } }
+        for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+            const ii = i + a, jj = j + b;
+            if (ii < 0 || jj < 0 || ii >= nx || jj >= ny) continue;
+            const kk = jj * nx + ii, dd = dep[kk];
+            if (dd < 6) continue;
+            const ng = v + Math.hypot(a, b) * (1 + 200 / (dd * dd)) * (nearShoal[kk] ? 4 : 1);
+            if (ng < g[kk]) { g[kk] = ng; from[kk] = k; push(kk, ng); }
+        }
+    }
+    if (end < 0) end = t ? best : -1;
+    if (end < 0) return null;
+    const path = [];
+    for (let k = end; k >= 0; k = from[k]) path.push(k);
+    path.reverse();
+    // まっすぐにできる所はまっすぐに（線の上と左右 40m を 20m おきに、8m より深いか：大きな船の幅と横ずれの分）
+    const clear = (k0, k1) => {
+        const A = ll(k0 % nx, (k0 / nx) | 0), B = ll(k1 % nx, (k1 / nx) | 0);
+        const ey = (B.lat - A.lat) / d.dLat, ex = (B.lon - A.lon) / d.dLon, el = Math.hypot(ex, ey) || 1;
+        const L = el * d.cell, n = Math.max(2, Math.ceil(L / 20));
+        const oLat = ex / el * 40 / d.cell * d.dLat, oLon = -ey / el * 40 / d.cell * d.dLon;   // 横 40m
+        for (let q = 1; q < n; q++) {
+            const u = q / n, la = A.lat + (B.lat - A.lat) * u, lo = A.lon + (B.lon - A.lon) * u;
+            for (const k of [0, -1, 1]) if (!(_rwDetailAt(d, la + oLat * k, lo + oLon * k) < -8)) return false;
+        }
+        return true;
+    };
+    const simp = [path[0]];
+    let a = 0;
+    while (a < path.length - 1) {
+        let b = a + 1;
+        for (let c = Math.min(path.length - 1, a + 400); c > a + 1; c--) if (clear(path[a], path[c])) { b = c; break; }
+        simp.push(path[b]); a = b;
+    }
+    const pts = simp.map(k => ll(k % nx, (k / nx) | 0));
+    return { pts, end: pts[pts.length - 1] };
 }
 // 航路を格子に掘る：線から 400m は航路の深さ、900m まではなだらかに（3m 以上の陸は削らない）。
 // （格子は 460m おきなので、全部の深さで掘る幅が升目より狭いと、ならした地形で航路の端が浅くなる）
@@ -721,8 +844,32 @@ async function worldLoadReal(key) {
     cv.width = cv.height = 1;
     if (bmp.close) bmp.close();
     const rw = { key, lat0: meta.lat0, lat1: meta.lat1, lon0: meta.lon0, lon1: meta.lon1, rows: meta.rows, cols: meta.cols, cell: meta.cell, h };
+    // 作り込んだ港（読めなかった港は、ふつうの地形のまま）
+    rw.hd = [];
+    for (const hk of W.harbors || []) {
+        try { rw.hd.push(await _rwLoadHarbor(hk)); }
+        catch (e) { console.warn('作り込んだ港の地形を読めませんでした：' + hk, e); }
+    }
+    if (!rw.hd.length) rw.hd = null;
     _rwCache[key] = rw;
     return rw;
+}
+// 作り込んだ港の地形（PNG：R×256＋G − 32768 ＝ 高さ[0.1m]、B ＝ 種類 0 海・1 陸・2 ドックの水・3 桟橋・4 港の敷地）
+async function _rwLoadHarbor(hk) {
+    const meta = await (await fetch('data/harbors/' + hk + '.json')).json();
+    const blob = await (await fetch('data/harbors/' + hk + '.png')).blob();
+    let bmp;
+    try { bmp = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' }); }
+    catch (e) { bmp = await createImageBitmap(blob); }
+    const cv = document.createElement('canvas'); cv.width = meta.cols; cv.height = meta.rows;
+    const g = cv.getContext('2d', { willReadFrequently: true });
+    g.drawImage(bmp, 0, 0);
+    const px = g.getImageData(0, 0, meta.cols, meta.rows).data;
+    const n = meta.cols * meta.rows, h = new Int16Array(n), k = new Uint8Array(n);
+    for (let i = 0, j = 0; i < n; i++, j += 4) { h[i] = px[j] * 256 + px[j + 1] - 32768; k[i] = px[j + 2]; }
+    cv.width = cv.height = 1;
+    if (bmp.close) bmp.close();
+    return { key: hk, name: meta.name, lat0: meta.lat0, lat1: meta.lat1, lon0: meta.lon0, lon1: meta.lon1, rows: meta.rows, cols: meta.cols, dLat: meta.dLat, dLon: meta.dLon, cell: meta.cell, h, k };
 }
 window.worldLoadReal = worldLoadReal;
 // 世界を切り替えたとき：覚えている物（港・地図・地形・ワーカー・タグ・自動の操船）をやり直す
