@@ -10,7 +10,8 @@
 // 0.02.000.000  作り込んだ港の仕組み（10m の地形：OpenStreetMap＋EMODnet、港のそばは 10m の3D地形、港の中の航路は
 //               細かい地形の深い所をたどる）。サウサンプトンの地形。港は西ドックの岸壁
 // 0.02.000.001  港のそばの細かい地形の網を、水から 100m 以内だけに（三角形 41 万 → 5 万。内陸は粗い網）
-var APP_VERSION = '0.02.000.001';
+// 0.02.001.000  作り込んだ港に建物（OpenStreetMap の輪郭・高さ）・航路の標識（ブイ・立標・灯火。夜は点滅）・クレーン
+var APP_VERSION = '0.02.001.000';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

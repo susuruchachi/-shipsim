@@ -518,6 +518,7 @@ function _trUpdatePorts() {
 }
 
 function _trClearAll() {
+    if (typeof _hdClear === 'function') _hdClear();
     _trDispose(terrain.near); _trDispose(terrain.far); _trDispose(terrain.fine);
     terrain.near = terrain.far = terrain.fine = null;
     terrain.center = null;
@@ -937,6 +938,7 @@ function updateWorldTerrain(t, dt) {
     const nf = (typeof lightingNightFactor !== 'undefined') ? lightingNightFactor : 0;
     if (_pMats.lamp) _pMats.lamp.emissiveIntensity = 0.3 + 3 * nf;     // 灯台はどれも同じ材質
     _brkUpdate(t);
+    if (typeof updateHarborDetail === 'function') updateHarborDetail(t, dt);   // 作り込んだ港の建物・標識（51-harbor-detail.js）
     _trCheckGrounding(t, dt);
 }
 window.updateWorldTerrain = updateWorldTerrain;

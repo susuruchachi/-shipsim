@@ -73,7 +73,7 @@ def fetch_tile(a, b, c, d, cache, depth=0):
 
 def fetch_osm(H, cache):
     os.makedirs(cache, exist_ok=True)
-    nodes, ways, rels = {}, {}, {}
+    nodes, ways, rels, ntags = {}, {}, {}, {}
     dlat, dlon = 0.02, 0.025
     files = []
     lat = H['lat0']
@@ -83,15 +83,21 @@ def fetch_osm(H, cache):
             files += fetch_tile(lat, min(H['lat1'], lat + dlat), lon, min(H['lon1'], lon + dlon), cache)
             lon += dlon
         lat += dlat
-    pk = os.path.join(cache, 'parsed.pickle')
+    pk = os.path.join(cache, 'parsed2.pickle')
     if os.path.exists(pk) and os.path.getmtime(pk) > max(os.path.getmtime(f) for f in files):
         import pickle
-        return pickle.load(open(pk, 'rb'))
+        nodes, ways, rels, ntags = pickle.load(open(pk, 'rb'))
+        fetch_osm.ntags = ntags
+        return nodes, ways, rels
     for fn in files:
         root = ET.parse(fn).getroot()
         for el in root:
             if el.tag == 'node':
-                nodes[int(el.get('id'))] = (float(el.get('lat')), float(el.get('lon')))
+                nid = int(el.get('id'))
+                nodes[nid] = (float(el.get('lat')), float(el.get('lon')))
+                for t in el:
+                    if t.tag == 'tag' and (t.get('k').startswith('seamark') or t.get('k') in ('man_made', 'name', 'height', 'ref')):
+                        ntags.setdefault(nid, {})[t.get('k')] = t.get('v')
             elif el.tag == 'way':
                 wid = int(el.get('id'))
                 if wid in ways:
@@ -105,7 +111,8 @@ def fetch_osm(H, cache):
                 tags = {t.get('k'): t.get('v') for t in el if t.tag == 'tag'}
                 rels[rid] = (mem, tags)
     import pickle
-    pickle.dump((nodes, ways, rels), open(pk, 'wb'), protocol=4)
+    fetch_osm.ntags = ntags
+    pickle.dump((nodes, ways, rels, ntags), open(pk, 'wb'), protocol=4)
     return nodes, ways, rels
 
 
@@ -367,8 +374,112 @@ def build(key, cache):
                 rows=rows, cols=cols, dLat=dLat, dLon=dLon, cell=cell, scale=0.1,
                 kinds={'0': 'sea', '1': 'land', '2': 'dock water', '3': 'pier', '4': 'port land'})
     json.dump(meta, open(os.path.join(HERE, f'{key}.json'), 'w'), ensure_ascii=False, indent=1)
+    export_features(key, cache, nodes, ways, water, lat1, lon0, dLat, dLon, cell)
     print('water cells', int(water.sum()), 'dock cells', int((kind == 2).sum()), 'pier cells', int((kind == 3).sum()),
           'depth max', float(np.nanmax(depth)), flush=True)
+
+
+def simplify(P, tol):
+    """ダグラス・ピューカー（点の数を減らす）"""
+    if len(P) < 4:
+        return P
+    def rec(a, b):
+        (x0, y0), (x1, y1) = P[a], P[b]
+        L = math.hypot(x1 - x0, y1 - y0) or 1e-9
+        best, bi = -1, -1
+        for i in range(a + 1, b):
+            d = abs((x1 - x0) * (y0 - P[i][1]) - (x0 - P[i][0]) * (y1 - y0)) / L
+            if d > best: best, bi = d, i
+        if best > tol:
+            return rec(a, bi)[:-1] + rec(bi, b)
+        return [P[a], P[b]]
+    return rec(0, len(P) - 1)
+
+
+def export_features(key, cache, nodes, ways, water, lat1, lon0, dLat, dLon, cell):
+    """建物（水の近く）・航路の標識・クレーンを <key>_feat.json に。座標は範囲の南西の角からの m（x 東・y 北）"""
+    H = HARBORS[key]
+    rows, cols = water.shape
+    mLat = cell / dLat; mLon = cell / dLon
+    lat0 = lat1 - (rows - 1) * dLat
+    # 水から 250m 以内
+    near = water.copy()
+    for it in range(int(250 / cell)):
+        near = near | np.roll(near, 1, 0) | np.roll(near, -1, 0) | np.roll(near, 1, 1) | np.roll(near, -1, 1)
+    def xy(lat, lon):
+        return ((lon - lon0) * mLon, (lat - lat0) * mLat)
+    def inside_near(lat, lon):
+        r = int(round((lat1 - lat) / dLat)); c = int(round((lon - lon0) / dLon))
+        return 0 <= r < rows and 0 <= c < cols and near[r, c]
+    KIND = {'house': 0, 'residential': 0, 'semidetached_house': 0, 'detached': 0, 'bungalow': 0, 'terrace': 0, 'apartments': 0,
+            'garage': 0, 'garages': 0, 'industrial': 1, 'warehouse': 1, 'hangar': 1, 'storage_tank': 3, 'silo': 3,
+            'commercial': 2, 'retail': 2, 'office': 2, 'church': 4, 'cathedral': 4}
+    DEFH = {0: 7.5, 1: 12.0, 2: 12.0, 3: 12.0, 4: 18.0}
+    out_b = []
+    for wid, (nds, t) in ways.items():
+        if 'building' not in t or len(nds) < 4 or nds[0] != nds[-1]:
+            continue
+        pts = [nodes[n] for n in nds if n in nodes]
+        if len(pts) < 4:
+            continue
+        clat = sum(p[0] for p in pts) / len(pts); clon = sum(p[1] for p in pts) / len(pts)
+        if not inside_near(clat, clon):
+            continue
+        P = [xy(*p) for p in pts]
+        area = 0.5 * abs(sum(P[i][0] * P[i + 1][1] - P[i + 1][0] * P[i][1] for i in range(len(P) - 1)))
+        if area < 40:
+            continue
+        k = KIND.get(t.get('building'), 2 if area > 400 else 0)
+        if t.get('man_made') in ('storage_tank', 'silo'): k = 3
+        h = None
+        for tag in ('height', 'building:height'):
+            try: h = float(str(t.get(tag, '')).replace('m', '').strip()); break
+            except ValueError: pass
+        if h is None and t.get('building:levels'):
+            try: h = float(t['building:levels']) * 3.2 + 1.5
+            except ValueError: pass
+        if h is None:
+            h = DEFH[k] if area < 3000 else max(DEFH[k], 14.0)
+        # 輪は、始まりから一番遠い点で 2 つに分けて減らす（始まりと終わりが同じ点だと、線が引けない）
+        R = P[:-1]
+        far = max(range(len(R)), key=lambda i: (R[i][0] - R[0][0]) ** 2 + (R[i][1] - R[0][1]) ** 2)
+        P = simplify(R[:far + 1], 0.8)[:-1] + simplify(R[far:] + [R[0]], 0.8)[:-1]
+        if len(P) < 3:
+            continue
+        flat = [k, round(h, 1)]
+        for x, y in P: flat += [round(x, 1), round(y, 1)]
+        out_b.append(flat)
+    # 航路の標識（ブイ・立標・灯火）
+    out_s = []
+    ntags = getattr(fetch_osm, 'ntags', {})
+    for nid, t in ntags.items():
+        st = t.get('seamark:type')
+        if not st or nid not in nodes:
+            continue
+        lat, lon = nodes[nid]
+        if not (lat0 <= lat <= lat1 and lon0 <= lon <= lon0 + (cols - 1) * dLon):
+            continue
+        if st not in ('buoy_lateral', 'beacon_lateral', 'buoy_cardinal', 'beacon_cardinal', 'buoy_special_purpose', 'beacon_special_purpose',
+                      'buoy_safe_water', 'buoy_isolated_danger', 'light_minor', 'light_major', 'landmark', 'berth'):
+            continue
+        base = st.split('_')[0] if st.startswith(('buoy', 'beacon')) else st
+        colour = t.get(f'seamark:{st}:colour', t.get('seamark:light:colour', ''))
+        cat = t.get(f'seamark:{st}:category', '')
+        shape = t.get(f'seamark:{st}:shape', '')
+        lc = t.get('seamark:light:colour', t.get('seamark:light:1:colour', ''))
+        x, y = xy(lat, lon)
+        out_s.append([round(x, 1), round(y, 1), st, colour, cat, shape, lc, t.get('seamark:name', t.get('name', ''))])
+    out_c = []
+    for nid, t in ntags.items():
+        if t.get('man_made') == 'crane' and nid in nodes:
+            x, y = xy(*nodes[nid]); out_c.append([round(x, 1), round(y, 1)])
+    for wid, (nds, t) in ways.items():
+        if t.get('man_made') == 'crane':
+            pts = [nodes[n] for n in nds if n in nodes]
+            if pts:
+                x, y = xy(sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)); out_c.append([round(x, 1), round(y, 1)])
+    json.dump({'b': out_b, 's': out_s, 'c': out_c}, open(os.path.join(HERE, f'{key}_feat.json'), 'w'), ensure_ascii=False, separators=(',', ':'))
+    print('features: buildings', len(out_b), 'seamarks', len(out_s), 'cranes', len(out_c), 'bytes', os.path.getsize(os.path.join(HERE, f'{key}_feat.json')), flush=True)
 
 
 def connect_berths(depth, water, band, deep, cell, width_m, want):
