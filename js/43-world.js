@@ -496,6 +496,14 @@ function worldStartAtPort(port) {
     physics.heading = worldHeadingFromCompass(port.seaBearing);
     physics.speed = 0; physics.targetSpeed = 0; physics.turnRate = 0;
     physics.telegraphState = 0;
+    // 岸壁に横付けできる港なら、岸壁に着岸した状態から始める（もやい綱も取る。出港はタグで離岸）
+    if (typeof harborBerthPlan === 'function') {
+        const plan = harborBerthPlan(port, physics.heading);
+        if (plan.ok) {
+            physics.cgWorldX = plan.berth.x; physics.cgWorldZ = plan.berth.z; physics.heading = plan.berth.h;
+            if (typeof harborAuto !== 'undefined') { harborAuto.pendingLines = plan; harborAuto.pendingT = 0; }
+        }
+    }
     if (typeof shipHistory !== 'undefined') shipHistory.length = 0;
     window.lastShipPos = null;
     _worldSave();

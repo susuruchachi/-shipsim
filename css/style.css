@@ -863,3 +863,10 @@ body.hud-hidden #ap-panel { display: none !important; }
 #tug-panel .tg-auto { border-bottom: 1px solid rgba(0, 255, 204, 0.2); padding-bottom: 6px; }
 #tug-panel .tg-automsg { width: 100%; color: #ffe38a; margin-top: 2px; }
 #ap-panel label { cursor: pointer; }
+
+/* 自動航行パネルをたたむ */
+#ap-panel .ap-fold { float: right; margin: -2px 0 0 6px !important; padding: 0 7px !important; font-weight: bold; }
+#ap-panel.folded { width: auto; max-width: 260px; padding: 4px 8px; }
+#ap-panel .ap-line { display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; }
+#ap-panel .ap-line .ap-fold { float: none; margin: 0 !important; order: 2; }
+#ap-panel .ap-line span { overflow: hidden; text-overflow: ellipsis; }

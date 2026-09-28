@@ -430,6 +430,7 @@ async function autopilotStart(port) {
         if (harborAutoDepartNow(port)) { _apMsg(`タグで離岸してから ${port.name} へ向かいます`); return; }
     }
     autopilotStop('', true);
+    autopilot.resume = null;
     autopilot.planning = true; autopilot.dest = port;
     _apMsg(`${port.name} への航路を計算しています…`);
     const T = PORT_TYPES[port.type];
@@ -508,12 +509,42 @@ async function autopilotStart(port) {
 }
 function autopilotStop(msg, silent) {
     const was = autopilot.active;
+    // 途中で止まったときは、あとで「再開」できるように覚えておく
+    if (was && !silent && autopilot.route && autopilot.dest) {
+        autopilot.resume = { dest: autopilot.dest, route: autopilot.route, leg: autopilot.leg, legFrom: autopilot.legFrom,
+                             berthPlan: autopilot.berthPlan, deepShip: autopilot.deepShip };
+    }
     autopilot.active = false; autopilot.planning = false;
     if (!silent) { autopilot.route = null; autopilot.dest = null; }
     if (typeof _br !== 'undefined') _br.autoHelm = false;
     if (msg !== undefined) _apMsg(msg || '');
     if (was && typeof worldMapRedraw === 'function') worldMapRedraw(true);
 }
+// 止まった自動航行を続ける。航路の線の近く（1km 以内）なら同じ航路で、離れていたら今の場所から航路を探し直す
+function autopilotResume() {
+    const r = autopilot.resume;
+    if (!r) return;
+    autopilot.resume = null;
+    if (typeof harborBerthedAt === 'function' && harborBerthedAt()) { autopilotStart(r.dest); return; }
+    const here = worldShipLatLon();
+    const from = r.leg > 0 ? r.route[r.leg - 1] : r.legFrom;
+    const to = r.route[r.leg];
+    let off = Infinity;
+    if (from && to) {
+        const psiA = _apMercY(from.lat), dX = _apDLon(from.lon, to.lon) * _apRad, dY = _apMercY(to.lat) - psiA;
+        const sX = _apDLon(from.lon, here.lon) * _apRad, sY = _apMercY(here.lat) - psiA, dl = Math.hypot(dX, dY);
+        off = dl > 1e-9 ? Math.abs(dX * sY - dY * sX) / dl * WORLD_R * Math.cos(here.lat * _apRad) : rhumbCourse(here.lat, here.lon, to.lat, to.lon).dist;
+    }
+    if (off > 1000 || (window.terrain && terrain.grounded)) { autopilotStart(r.dest); return; }
+    Object.assign(autopilot, { route: r.route, leg: r.leg, legFrom: r.legFrom, dest: r.dest, berthPlan: r.berthPlan, deepShip: r.deepShip,
+                               active: true, planning: false, lastOrder: null, overshoot: false, msg: '' });
+    renderAutopilotPanel();
+    if (typeof worldMapRedraw === 'function') worldMapRedraw(true);
+}
+function autopilotDismiss() { autopilot.resume = null; autopilot.msg = ''; if (typeof harborAuto !== 'undefined') { harborAuto.msg = ''; harborAuto.resume = null; } renderAutopilotPanel(); }
+function autopilotFold(on) { autopilot.folded = !!on; try { localStorage.setItem('susuru_ap_fold', on ? '1' : '0'); } catch (e) { /* ignore */ } renderAutopilotPanel(); }
+try { autopilot.folded = localStorage.getItem('susuru_ap_fold') === '1'; } catch (e) { /* ignore */ }
+Object.assign(window, { autopilotResume, autopilotDismiss, autopilotFold });
 function autopilotSetCruise(k) { if (AP_SPEEDS[k]) { autopilot.cruise = k; autopilot.lastOrder = null; renderAutopilotPanel(); } }
 Object.assign(window, { autopilotStart, autopilotStop, autopilotSetCruise });
 
@@ -589,12 +620,12 @@ function updateAutopilot(t, dt) {
             // タグで着岸（50-harbor-auto.js）
             if (autopilot.berthPlan && autopilot.dest && typeof harborAutoStart === 'function') {
                 const dest = autopilot.dest;
-                autopilotStop('', false); autopilot.route = null;
+                autopilotStop('', false); autopilot.route = null; autopilot.resume = null;
                 harborAutoStart('berth', harborBerthPlan(dest));
                 return;
             }
             autopilotStop(autopilot.deepShip ? `${nm} は船に対して浅いので、沖（水深 ${Math.round(terrain.depth || 0)}m）で止まりました。機関停止` : `${nm} の港口に着きました。機関停止`);
-            autopilot.route = null; return;
+            autopilot.route = null; autopilot.resume = null; return;
         }
         autopilot.leg++;
         wp = R[autopilot.leg];
@@ -679,19 +710,39 @@ function renderAutopilotPanel() {
     _apEnsureDom();
     const el = document.getElementById('ap-panel');
     const ha = typeof harborAuto !== 'undefined' ? harborAuto : null;
-    const show = world.mode === 'world' && (autopilot.active || autopilot.planning || autopilot.msg || (ha && (ha.mode || ha.msg)));
+    const show = world.mode === 'world' && (autopilot.active || autopilot.planning || autopilot.msg || autopilot.resume || (ha && (ha.mode || ha.msg || ha.resume)));
     el.classList.toggle('open', !!show);
+    el.classList.toggle('folded', !!autopilot.folded);
     if (!show) return;
+    const fold = `<button class="ap-fold" title="${autopilot.folded ? 'ひらく' : '小さくたたむ'}" onclick="autopilotFold(${!autopilot.folded})">${autopilot.folded ? '＋' : '－'}</button>`;
+    // 小さくたたんだとき：1行だけ
+    if (autopilot.folded) {
+        let line;
+        if (ha && ha.mode) line = `⚓ ${ha.mode === 'berth' ? '自動着岸' : '自動離岸'}中`;
+        else if (autopilot.active) line = `🧭 ${autopilot.dest ? autopilot.dest.name : ''}　${Math.round(autopilot.course || 0).toString().padStart(3, '0')}°・残り ${_apFmtDist(autopilot.remain || 0)}`;
+        else if (autopilot.planning) line = '🧭 航路を計算しています…';
+        else if (autopilot.resume || (ha && ha.resume)) line = '⏸ 止まっています';
+        else line = autopilot.msg || (ha && ha.msg) || '';
+        el.innerHTML = `<div class="ap-line">${fold}<span>${line}</span></div>`;
+        return;
+    }
     if (ha && ha.mode) {
         const ph = { tugs: 'タグを待っています', turn: '回しています', side: '岸壁へ寄せています', off: '岸壁から離しています' }[ha.phase] || '';
-        el.innerHTML = `<div class="ap-title">⚓ ${ha.mode === 'berth' ? '自動着岸' : '自動離岸'}：${ha.plan.port.name}</div>
+        el.innerHTML = `<div class="ap-title">${fold}⚓ ${ha.mode === 'berth' ? '自動着岸' : '自動離岸'}：${ha.plan.port.name}</div>
             <div class="ap-row">${ph}${ha.phase === 'side' && ha.remain !== undefined ? `（あと ${ha.remain.toFixed(1)} m）` : ''}</div>
             <div class="ap-row"><button class="ap-off" onclick="harborAutoStop('自動の離着岸を止めました')">止める</button></div>`;
         return;
     }
     if (!autopilot.active) {
-        if (!autopilot.planning && !autopilot.msg && ha && ha.msg) { el.innerHTML = `<div class="ap-msg">${ha.msg}</div><button onclick="harborAuto.msg='';renderAutopilotPanel()">閉じる</button>`; return; }
-        el.innerHTML = `<div class="ap-msg">${autopilot.msg || ''}</div>` + (autopilot.planning ? '<button onclick="autopilotStop(\'\')">やめる</button>' : '<button onclick="autopilotStop(\'\')">閉じる</button>');
+        const msg = autopilot.msg || (ha && ha.msg) || '';
+        const btns = [];
+        if (autopilot.planning) btns.push('<button onclick="autopilotStop(\'\')">やめる</button>');
+        else {
+            if (autopilot.resume) btns.push(`<button class="on" onclick="autopilotResume()">▶ 再開（${autopilot.resume.dest.name}へ）</button>`);
+            if (ha && ha.resume) btns.push(`<button class="on" onclick="harborAutoResume()">▶ ${ha.resume.mode === 'berth' ? '着岸' : '離岸'}を再開</button>`);
+            btns.push('<button onclick="autopilotDismiss()">閉じる</button>');
+        }
+        el.innerHTML = `<div class="ap-title">${fold}🧭 自動航行</div><div class="ap-msg">${msg}</div><div class="ap-row">${btns.join('')}</div>`;
         return;
     }
     const R = autopilot.route, wp = R[autopilot.leg];
@@ -700,7 +751,7 @@ function renderAutopilotPanel() {
     const eta = v > 0.3 ? autopilot.remain / v / 3600 : null;
     const etaS = eta === null ? '—' : eta < 1 ? Math.round(eta * 60) + '分' : Math.floor(eta) + '時間' + Math.round((eta % 1) * 60) + '分';
     el.innerHTML = `
-        <div class="ap-title">🧭 自動航行 → ${autopilot.dest ? autopilot.dest.name : ''}</div>
+        <div class="ap-title">${fold}🧭 自動航行 → ${autopilot.dest ? autopilot.dest.name : ''}</div>
         <div class="ap-row">針路 <b>${Math.round(autopilot.course || 0).toString().padStart(3, '0')}°</b>（航程線）</div>
         <div class="ap-row">次：${wp.label} ${_apFmtDist(autopilot.wpDist || 0)}</div>
         <div class="ap-row">残り ${_apFmtDist(autopilot.remain || 0)}・${R.length - autopilot.leg} 区間・着くまで ${etaS}</div>

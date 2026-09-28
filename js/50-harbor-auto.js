@@ -95,7 +95,7 @@ function _haMsg(s) { harborAuto.msg = s; if (typeof renderTugPanel === 'function
 function harborAutoStart(mode, plan, then) {
     if (!plan || !plan.ok) { _haMsg(plan ? plan.why : '港の近くではありません'); return false; }
     if (typeof autopilot !== 'undefined' && autopilot.active) autopilotStop('', true);
-    Object.assign(harborAuto, { mode, plan, then: then || null, phase: 'tugs', t: 0, phaseT: 0, lastOrderT: -99, bow: null, stern: null });
+    Object.assign(harborAuto, { mode, plan, then: then || null, phase: 'tugs', t: 0, phaseT: 0, lastOrderT: -99, bow: null, stern: null, resume: null });
     _haClearLines();
     // タグを呼ぶ（もう付いているタグは帰して、呼び直す）
     if (typeof tugReleaseAll === 'function') tugReleaseAll();
@@ -107,6 +107,8 @@ function harborAutoStart(mode, plan, then) {
     return true;
 }
 function harborAutoStop(msg) {
+    // 途中で止めたときは「再開」できるように
+    if (harborAuto.mode && msg) harborAuto.resume = { mode: harborAuto.mode, port: harborAuto.plan.port, then: harborAuto.then };
     harborAuto.mode = null; harborAuto.phase = '';
     for (const t of (window.tugs || [])) delete t.autoPower;
     if (typeof _apOrder === 'function') _apOrder(0);
@@ -122,7 +124,14 @@ function harborAutoDepartNow(then) {
     if (!plan) { _haMsg('岸壁に横付けしていません'); return false; }
     return harborAutoStart('depart', plan, then);
 }
-Object.assign(window, { harborAutoStart, harborAutoStop, harborAutoBerthNow, harborAutoDepartNow });
+function harborAutoResume() {
+    const r = harborAuto.resume;
+    if (!r) return;
+    harborAuto.resume = null;
+    if (r.mode === 'berth') harborAutoStart('berth', harborBerthPlan(r.port));
+    else if (!harborAutoDepartNow(r.then)) { if (r.then && typeof autopilotStart === 'function') autopilotStart(r.then); }
+}
+Object.assign(window, { harborAutoStart, harborAutoStop, harborAutoBerthNow, harborAutoDepartNow, harborAutoResume });
 
 // ── 目標の位置・向きへ動かす ──
 function _haTug(id) { return (window.tugs || []).find(t => t.id === id && t.state !== 'leaving'); }
@@ -205,6 +214,8 @@ function _haMakeLines(plan) {
 
 // ── 毎フレーム ──
 function updateHarborAuto(t, dt) {
+    // 着岸した状態で始めたときのもやい綱（船の位置が画面に反映されてから張る）
+    if (harborAuto.pendingLines && ++harborAuto.pendingT > 3) { _haMakeLines(harborAuto.pendingLines); harborAuto.pendingLines = null; }
     // 綱を取っている間に船が動いたら綱を外す
     if (harborAuto.lines.length && harborAuto.linePose && Math.hypot(physics.cgWorldX - harborAuto.linePose.x, physics.cgWorldZ - harborAuto.linePose.z) > 4) _haClearLines();
     if (!harborAuto.mode) return;
