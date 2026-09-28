@@ -140,13 +140,27 @@ function _haTakeTugs(keys) {
             if (d < bd) { bd = d; bi = i; }
         });
         if (bi < 0) { tugSet(t.id, 'release'); continue; }
-        out[bi] = t; t.station = keys[bi]; if (t.state === 'on') t.state = 'coming';
+        out[bi] = t; if (t.station !== keys[bi]) { t.station = keys[bi]; t.engaged = false; if (t.state === 'on') t.state = 'coming'; }
     }
     for (let i = 0; i < keys.length; i++) if (!out[i]) out[i] = tugCall(keys[i]);
     for (const t of out) if (t) { t.action = 'standby'; t.autoPower = 0; t.dir = 'side'; t.switchT = 0; t.awaySide = false; }
     if (typeof renderTugPanel === 'function') renderTugPanel();
     return out.filter(Boolean);
 }
+
+// ── タグがそろったか：全部付いた、または 2 隻以上が付いていて、残りは近づけない（すき間が狭い等）か
+//    TUG_START_WAIT 秒待ったとき。付いていないタグは近づき続け、付いたら力の割り振りに加わる ──
+const TUG_START_WAIT = 45;
+function _haReadyState(list, waitT) {
+    const all = list.length, on = list.filter(t => t.state === 'on').length;
+    const stuck = list.filter(t => t.state !== 'on' && t.stuck).length;
+    const needMin = Math.min(2, all);
+    const ok = all > 0 && (on === all || (on >= needMin && (on + stuck === all || waitT > TUG_START_WAIT)));
+    return { ok, on, all, stuck, partial: ok && on < all };
+}
+// 付いているタグだけで作業する。一度持ち場に着いたタグ（engaged）は、押す⇄引くの付き直しで
+// 少し離れている間も作業中に数える（そうしないと、引きに出たとたん待機に戻されてしまう）
+const _haWorking = (t) => t.state === 'on' || t.switchT > 0 || !!t.engaged;
 
 // ── 狭い水路・浅い水道の付き添い（サウサンプトンのように、タグが横と回頭を助ける）──
 // 自動航行（49-autopilot.js）が、狭い区間の手前で呼び、通り抜けたら帰す
@@ -187,13 +201,13 @@ function tugEscortStop(keep) {
     }
 }
 function _teTugs() { return tugEscort.ids.map(_haTug).filter(Boolean); }
-function tugEscortReady() { const L = _teTugs(); return L.length > 0 && L.every(t => t.state === 'on'); }
+function tugEscortReady() { return _haReadyState(_teTugs(), tugEscort.t || 0).ok; }
 function tugEscortAlive() { return _teTugs().length > 0; }
 // eS：航路の線へ戻る横のずれ（＋x＝左舷の方へ m）、eYaw：向けたい向きとの差（度、heading の向き）
 function tugEscortAssist(eS, eYaw, dt) {
     if (!tugEscort.active) return;
     // 持ち場に付いているタグだけで（付き直している間のタグは力を出さない）
-    const all = _teTugs(), use = all.filter(t => t.state === 'on' || t.switchT > 0);
+    const all = _teTugs(), use = all.filter(_haWorking);
     for (const t of all) if (!use.includes(t)) t.autoPower = 0;
     if (!use.length) return;
     const D = _haDims();
@@ -316,8 +330,11 @@ function _haControl(target, dt, opt) {
     const Mz = massKg * 1.5 * D.L * D.L / 12 * 0.3 * (rd - r);
     // 岸壁のすぐ近くでは、岸壁側の舷のタグは挟まれるので離れて待つ（沖側のタグだけで押し引き）
     const L = _haTugs(), open = harborAuto.plan.open;
-    const use = opt.openOnly ? L.filter(t => _haSide(t) !== -open) : L;
-    for (const t of L) { t.awaySide = !use.includes(t); if (t.awaySide) { t.action = 'standby'; t.autoPower = 0; t.switchT = 0; } }
+    const side = opt.openOnly ? L.filter(t => _haSide(t) !== -open) : L;
+    for (const t of L) { t.awaySide = !side.includes(t); if (t.awaySide) { t.action = 'standby'; t.autoPower = 0; t.switchT = 0; } }
+    // まだ持ち場に着いていないタグは、待機の位置へ向かい続ける（着いたら加わる）
+    const use = side.filter(_haWorking);
+    for (const t of side) if (!use.includes(t)) { t.autoPower = 0; if (t.action !== 'standby') t.action = 'standby'; }
     _haAllocate(Fs, Mz, use, dt);
     return { eA, eS, eY, vS, r, dist: Math.hypot(ex, ez) };
 }
@@ -367,12 +384,18 @@ function updateHarborAuto(t, dt) {
     const next = (ph, msg) => { harborAuto.phase = ph; harborAuto.phaseT = 0; _haMsg(msg); };
     const TL = _haTugs();
     if (!TL.length) { harborAutoStop('タグがいなくなったので止めました'); return; }
-    const ready = TL.every(q => q.state === 'on');
+    // 離岸の最初（岸壁から離す）は沖側の舷のタグだけで押し引きするので、そのタグがそろったかで決める
+    const workers = harborAuto.mode === 'depart' ? TL.filter(q => _haSide(q) !== -P.open) : TL;
+    const RS = _haReadyState(workers.length ? workers : TL, harborAuto.phase === 'tugs' ? harborAuto.phaseT : 0), ready = RS.ok;
+    // 一部のタグが入れないまま始めるときは、そう知らせる
+    const partialMsg = () => !RS.partial ? '' : RS.stuck > 0
+        ? `（${RS.stuck}隻は今は入れないので、入れるようになったら加わります${RS.all - RS.on - RS.stuck > 0 ? `。ほかの${RS.all - RS.on - RS.stuck}隻は着きしだい加わります` : ''}）`
+        : `（残りの${RS.all - RS.on}隻は着きしだい加わります）`;
     if (harborAuto.mode === 'berth') {
         if (harborAuto.phase === 'tugs') {
             _haControl({ x: P.turn.x, z: P.turn.z, h: physics.heading }, dt, { vA: 0.4 });
             for (const q of TL) q.autoPower = 0;
-            if (ready) next('turn', `${P.port.name}：タグで岸壁と平行に回しています`);
+            if (ready) next('turn', `${P.port.name}：タグ${RS.on}隻で岸壁と平行に回しています${partialMsg()}`);
             else if (harborAuto.phaseT > 900) harborAutoStop('タグが持ち場に着けないので止めました');
         } else if (harborAuto.phase === 'turn') {
             // 回す所（軍港などでは港口の線から横へずれた所）に着くまでは、向きを保ったまま横へ運ぶ
@@ -403,7 +426,7 @@ function updateHarborAuto(t, dt) {
         if (harborAuto.phase === 'tugs') {
             _haControl({ x: physics.cgWorldX, z: physics.cgWorldZ, h: physics.heading }, dt, { vA: 0.2, openOnly: true });
             for (const x of TL) x.autoPower = 0;
-            if (ready) next('off', `${P.port.name}：タグで岸壁から離しています`);
+            if (ready) next('off', `${P.port.name}：タグ${RS.on}隻で岸壁から離しています${partialMsg()}`);
             else if (harborAuto.phaseT > 900) harborAutoStop('タグが持ち場に着けないので止めました');
         } else if (harborAuto.phase === 'off') {
             const e = _haControl({ x: off.x, z: off.z, h: physics.heading }, dt, { vA: 0.2, vS: 0.35, r: 0.002, openOnly: true });

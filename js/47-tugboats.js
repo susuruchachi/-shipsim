@@ -184,10 +184,10 @@ function tugCall(stationKey) {
 }
 function tugSet(id, key, v) {
     const t = tugs.find(q => q.id === id); if (!t) return;
-    if (key === 'release') { t.state = 'leaving'; t.action = 'standby'; _tugToot(t, 2); }
+    if (key === 'release') { t.state = 'leaving'; t.action = 'standby'; t.engaged = false; _tugToot(t, 2); }
     else {
         t[key] = v;
-        if (key === 'station' && t.state === 'on') t.state = 'coming';
+        if (key === 'station') { t.engaged = false; if (t.state === 'on') t.state = 'coming'; }
         if (key === 'action' || key === 'power' || key === 'dir') _tugToot(t, 1);
     }
     renderTugPanel();
@@ -568,8 +568,15 @@ function _tugStep(t, dt, last) {
             nx += F.sx * sgn * worst; nz += F.sz * sgn * worst;
         }
         tg.pos.x = nx; tg.pos.z = nz;
-        if (tg.state === 'coming' && dist < 4 && Math.abs(dy) < 0.15) { tg.state = 'on'; tg.arrivedAt = t; renderTugPanel(); }
+        if (tg.state === 'coming' && dist < 4 && Math.abs(dy) < 0.15) { tg.state = 'on'; tg.arrivedAt = t; tg.engaged = true; renderTugPanel(); }
         if (tg.state === 'on' && dist > 25) tg.state = 'coming';
+        // 近づけないタグ（持ち場が岸・浅瀬に塞がれている、または 20 秒たっても近づけない：船と岸・船と船のすき間が狭いなど）
+        //（自動の離着岸・付き添いは、動けるタグだけで先に始める。このタグは近づき続け、着いたら加わる）
+        if (tg.state === 'coming') {
+            if (tg.bestDist === undefined || dist < tg.bestDist - 5) { tg.bestDist = dist; tg.stallT = 0; }
+            else tg.stallT = (tg.stallT || 0) + dt;
+        } else { tg.bestDist = undefined; tg.stallT = 0; }
+        tg.stuck = tg.state === 'coming' && (tg.blockedTarget || tg.stallT > 20);
         // 力：持ち場に付いてから、じわっと出す
         // 自動の離着岸（50-harbor-auto.js）のときは、強さを細かく決めてもらう
         const pw = tg.autoPower !== undefined ? tg.autoPower : TUG_POWERS[tg.power];
@@ -684,7 +691,7 @@ function renderTugPanel() {
     const panel = document.getElementById('tug-panel');
     if (!panel) return;
     const st = (typeof shipGroup !== 'undefined' && shipGroup) ? tugStations() : [];
-    const stateLabel = (t) => t.state === 'coming' ? (t.blockedTarget ? '近づけません（岸・浅瀬）' : '向かっています') : t.state === 'leaving' ? '帰ります' : (t.action === 'standby' ? '待機中' : t.action === 'push' ? '押しています' : '引いています');
+    const stateLabel = (t) => t.state === 'coming' ? (t.blockedTarget ? '近づけません（岸・浅瀬）' : t.stuck ? '入れません（すき間が狭い）' : '向かっています') : t.state === 'leaving' ? '帰ります' : (t.action === 'standby' ? '待機中' : t.action === 'push' ? '押しています' : '引いています');
     const active = tugs.filter(t => t.state !== 'leaving');
     panel.innerHTML = `<div class="tg-head"><span class="tg-title">タグボート</span>
         <button class="tg-call" onclick="tugCall()" ${active.length >= TUG_MAX ? 'disabled' : ''}>＋ 呼ぶ</button>
