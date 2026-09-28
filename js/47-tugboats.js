@@ -139,13 +139,13 @@ function _localToWorldFlat(x, y, z) {
 
 // ── 呼ぶ・指示・帰す ──
 let _tugNextId = 1;
-function tugCall() {
-    if (tugs.filter(t => t.state !== 'leaving').length >= TUG_MAX) return;
-    if (typeof shipGroup === 'undefined' || !shipGroup) return;
+function tugCall(stationKey) {
+    if (tugs.filter(t => t.state !== 'leaving').length >= TUG_MAX) return null;
+    if (typeof shipGroup === 'undefined' || !shipGroup) return null;
     const st = tugStations();
-    // まだ誰も付いていない持ち場から（引ける金物を先に）
-    const used = new Set(tugs.map(t => t.station));
-    const pick = st.find(s => s.fitting && !used.has(s.key)) || st.find(s => !used.has(s.key)) || st[0];
+    // 持ち場の指定が無ければ、まだ誰も付いていない持ち場から（引ける金物を先に）
+    const used = new Set(tugs.filter(t => t.state !== 'leaving').map(t => t.station));
+    const pick = (stationKey && st.find(s => s.key === stationKey)) || st.find(s => s.fitting && !used.has(s.key)) || st.find(s => !used.has(s.key)) || st[0];
     const F = _shipFrame();
     const side = pick.side || (tugs.length % 2 ? -1 : 1);
     // 沖（水の上で、まわりも水の所）から来る
@@ -173,6 +173,7 @@ function tugCall() {
     tugs.push(t);
     _tugToot(t, 1);
     renderTugPanel();
+    return t;
 }
 function tugSet(id, key, v) {
     const t = tugs.find(q => q.id === id); if (!t) return;
@@ -515,7 +516,9 @@ function _tugStep(t, dt, last) {
         if (tg.state === 'coming' && dist < 4 && Math.abs(dy) < 0.15) { tg.state = 'on'; tg.arrivedAt = t; renderTugPanel(); }
         if (tg.state === 'on' && dist > 25) tg.state = 'coming';
         // 力：持ち場に付いてから、じわっと出す
-        const want = (tg.state === 'on' && tg.action !== 'standby') ? TUG_POWERS[tg.power] * escort : 0;
+        // 自動の離着岸（50-harbor-auto.js）のときは、強さを細かく決めてもらう
+        const pw = tg.autoPower !== undefined ? tg.autoPower : TUG_POWERS[tg.power];
+        const want = (tg.state === 'on' && tg.action !== 'standby') ? pw * escort : 0;
         tg.force += (want - tg.force) * Math.min(1, dt / 4);
         let dirF = null, P = null;
         if (tg.action === 'pull' && hook) { dirF = tg.pullDir; P = hook; }
@@ -631,6 +634,10 @@ function renderTugPanel() {
     panel.innerHTML = `<div class="tg-head"><span class="tg-title">タグボート</span>
         <button class="tg-call" onclick="tugCall()" ${active.length >= TUG_MAX ? 'disabled' : ''}>＋ 呼ぶ</button>
         ${active.length ? '<button onclick="tugReleaseAll()">全部帰す</button>' : ''}</div>` +
+        (window.world && world.mode === 'world' && typeof harborAuto !== 'undefined' ? `<div class="tg-row tg-auto">
+            ${harborAuto.mode ? `<button onclick="harborAutoStop('自動の離着岸を止めました')">■ 自動の離着岸を止める</button>`
+                : `<button onclick="harborAutoBerthNow()">🤖 自動着岸</button><button onclick="harborAutoDepartNow()">🤖 自動離岸</button>`}
+            ${harborAuto.msg ? `<div class="tg-automsg">${harborAuto.msg}</div>` : ''}</div>` : '') +
         (tugs.length ? tugs.map(t => `
         <div class="tg-item${t.state === 'leaving' ? ' leaving' : ''}">
             <div class="tg-row"><b>タグ${t.id}</b><span class="tg-state">${stateLabel(t)}</span>

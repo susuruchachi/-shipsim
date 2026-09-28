@@ -20,7 +20,10 @@ const AP_FINE_R = 25000;          // 細かく探す範囲[m]
 const AP_FINE_CELL = 200;         // 細かい格子[m]
 const AP_REBASE_DIST = 150000;    // 原点を移す距離[m]
 const AP_SPEEDS = { full: 3, half: 2, slow: 1 };
-const autopilot = { active: false, planning: false, route: null, leg: 0, dest: null, cruise: 'full', msg: '', lastOrder: null, phase: '' };
+const autopilot = { active: false, planning: false, route: null, leg: 0, dest: null, cruise: 'full', msg: '', lastOrder: null, phase: '', berth: true };
+try { autopilot.berth = localStorage.getItem('susuru_ap_berth') !== '0'; } catch (e) { /* ignore */ }
+function autopilotSetBerth(on) { autopilot.berth = !!on; try { localStorage.setItem('susuru_ap_berth', on ? '1' : '0'); } catch (e) { /* ignore */ } renderAutopilotPanel(); }
+window.autopilotSetBerth = autopilotSetBerth;
 window.autopilot = autopilot;
 
 // ── 航程線（メルカトル航法）──
@@ -274,6 +277,10 @@ window.worldPlanRoute = worldPlanRoute;
 function _apMsg(s) { autopilot.msg = s; renderAutopilotPanel(); }
 async function autopilotStart(port) {
     if (!port || world.mode !== 'world') return;
+    // 岸壁に付いているなら、まずタグで離岸してから（50-harbor-auto.js。離岸が終わるとここへ戻る）
+    if (typeof harborBerthedAt === 'function' && !(harborAuto && harborAuto.mode) && harborBerthedAt()) {
+        if (harborAutoDepartNow(port)) { _apMsg(`タグで離岸してから ${port.name} へ向かいます`); return; }
+    }
     autopilotStop('', true);
     autopilot.planning = true; autopilot.dest = port;
     _apMsg(`${port.name} への航路を計算しています…`);
@@ -305,6 +312,13 @@ async function autopilotStart(port) {
             if (depthAt(a - halfLen) > draft + 3 && depthAt(a) > draft + 3 && depthAt(a + halfLen) > draft + 3) break;
         }
     }
+    // 着いたらタグで着岸する：泊地の、岸壁から船幅の3倍ほど沖（ここで回して横付けする）まで行く
+    autopilot.berthPlan = null;
+    if (autopilot.berth && !deepShip && typeof harborBerthPlan === 'function') {
+        const bp = harborBerthPlan(port);
+        if (bp.ok) { autopilot.berthPlan = bp; stopA = bp.aE; }
+        else autopilot.berthWhy = bp.why;
+    }
     const stop = portChannelPoint(port, stopA);
     autopilot.deepShip = deepShip;
     const from = route.length ? route[route.length - 1] : here;
@@ -315,7 +329,7 @@ async function autopilotStart(port) {
         route[route.length - 1].label = `${port.name} 沖`;
         if (!deepShip) {
             route.push(Object.assign(gate, { label: `${port.name} 航路の入口`, channel: true }));
-            route.push(Object.assign(stop, { label: `${port.name} 港口`, channel: true, final: true }));
+            route.push(Object.assign(stop, { label: autopilot.berthPlan ? `${port.name} 泊地` : `${port.name} 港口`, channel: true, final: true }));
         } else {
             // 止まる所が航路の中なら航路の入口を通ってから
             if (stopA < T.basin + chLen - 200) route.push(Object.assign(gate, { label: `${port.name} 航路の入口`, channel: true }));
@@ -413,6 +427,13 @@ function updateAutopilot(t, dt) {
         if (wp.final) {
             _apOrder(0);
             const nm = autopilot.dest ? autopilot.dest.name : '';
+            // タグで着岸（50-harbor-auto.js）
+            if (autopilot.berthPlan && autopilot.dest && typeof harborAutoStart === 'function') {
+                const dest = autopilot.dest;
+                autopilotStop('', false); autopilot.route = null;
+                harborAutoStart('berth', harborBerthPlan(dest));
+                return;
+            }
             autopilotStop(autopilot.deepShip ? `${nm} は船に対して浅いので、沖（水深 ${Math.round(terrain.depth || 0)}m）で止まりました。機関停止` : `${nm} の港口に着きました。機関停止`);
             autopilot.route = null; return;
         }
@@ -497,10 +518,19 @@ function _apFmtDist(m) { const nm = m / 1852; return nm < 10 ? nm.toFixed(1) + '
 function renderAutopilotPanel() {
     _apEnsureDom();
     const el = document.getElementById('ap-panel');
-    const show = world.mode === 'world' && (autopilot.active || autopilot.planning || autopilot.msg);
+    const ha = typeof harborAuto !== 'undefined' ? harborAuto : null;
+    const show = world.mode === 'world' && (autopilot.active || autopilot.planning || autopilot.msg || (ha && (ha.mode || ha.msg)));
     el.classList.toggle('open', !!show);
     if (!show) return;
+    if (ha && ha.mode) {
+        const ph = { tugs: 'タグを待っています', turn: '回しています', side: '岸壁へ寄せています', off: '岸壁から離しています' }[ha.phase] || '';
+        el.innerHTML = `<div class="ap-title">⚓ ${ha.mode === 'berth' ? '自動着岸' : '自動離岸'}：${ha.plan.port.name}</div>
+            <div class="ap-row">${ph}${ha.phase === 'side' && ha.remain !== undefined ? `（あと ${ha.remain.toFixed(1)} m）` : ''}</div>
+            <div class="ap-row"><button class="ap-off" onclick="harborAutoStop('自動の離着岸を止めました')">止める</button></div>`;
+        return;
+    }
     if (!autopilot.active) {
+        if (!autopilot.planning && !autopilot.msg && ha && ha.msg) { el.innerHTML = `<div class="ap-msg">${ha.msg}</div><button onclick="harborAuto.msg='';renderAutopilotPanel()">閉じる</button>`; return; }
         el.innerHTML = `<div class="ap-msg">${autopilot.msg || ''}</div>` + (autopilot.planning ? '<button onclick="autopilotStop(\'\')">やめる</button>' : '<button onclick="autopilotStop(\'\')">閉じる</button>');
         return;
     }
@@ -516,6 +546,7 @@ function renderAutopilotPanel() {
         <div class="ap-row">残り ${_apFmtDist(autopilot.remain || 0)}・${R.length - autopilot.leg} 区間・着くまで ${etaS}</div>
         <div class="ap-row">${Object.entries({ full: '全速', half: '半速', slow: '微速' }).map(([k, l]) => `<button class="${autopilot.cruise === k ? 'on' : ''}" onclick="autopilotSetCruise('${k}')">${l}</button>`).join('')}
             <button class="ap-off" onclick="autopilotStop('自動航行を切りました')">解除</button></div>
+        <div class="ap-row"><label><input type="checkbox" ${autopilot.berth ? 'checked' : ''} onchange="autopilotSetBerth(this.checked)"> 着いたらタグで岸壁に着岸</label>${autopilot.berthPlan ? '' : (autopilot.berth && autopilot.berthWhy ? `<div class="ap-msg">${autopilot.berthWhy}</div>` : '')}</div>
         ${autopilot.msg ? `<div class="ap-msg">${autopilot.msg}</div>` : ''}`;
 }
 window.renderAutopilotPanel = renderAutopilotPanel;
@@ -529,7 +560,7 @@ setInterval(() => {
         else if (tp) top = tp.getBoundingClientRect().bottom + 8;
         el.style.top = Math.round(top) + 'px';
     }
-    if (autopilot.active || autopilot.planning) renderAutopilotPanel();
+    if (autopilot.active || autopilot.planning || (typeof harborAuto !== 'undefined' && harborAuto.mode)) renderAutopilotPanel();
 }, 500);
 
 // 地図に描く航路（緯度・経度の列。航程線は細かく分けて）

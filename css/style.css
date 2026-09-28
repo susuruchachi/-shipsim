@@ -858,3 +858,8 @@ body.hud-hidden #ap-panel { display: none !important; }
 #ap-panel button.on { background: #1c6b5a; color: #fff; border-color: #7ee3c8; }
 #ap-panel button.ap-off { border-color: rgba(255, 120, 120, 0.7); }
 @media (max-width: 600px) { #ap-panel { width: 190px; font-size: 10px; } }
+
+/* タグでの自動離着岸（50-harbor-auto.js） */
+#tug-panel .tg-auto { border-bottom: 1px solid rgba(0, 255, 204, 0.2); padding-bottom: 6px; }
+#tug-panel .tg-automsg { width: 100%; color: #ffe38a; margin-top: 2px; }
+#ap-panel label { cursor: pointer; }
