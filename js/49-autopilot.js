@@ -774,6 +774,7 @@ async function autopilotStart(port) {
     route.forEach((w, i) => { if (!w.label) w.label = `変針点 ${i + 1}`; });
     autopilot.route = route; autopilot.leg = 0; autopilot.planning = false; autopilot.active = true;
     autopilot.planDraft = draft; autopilot.draftT = 0;           // この喫水で引いた航路（深くなったら引き直す）
+    if (autopilot.agDest !== port) { autopilot.agDest = port; autopilot.agCount = 0; }
     autopilot.legFrom = worldShipLatLon(); autopilot.lastOrder = null; autopilot.overshoot = false;
     autopilot.note = (port.point && autopilot.pointMoved > 0) ? `指定した所は浅い（または陸）ので、${autopilot.pointMoved >= 1000 ? (autopilot.pointMoved / 1000).toFixed(1) + 'km' : autopilot.pointMoved + 'm'} 離れた深い所で止まります` : '';
     _apMsg('');
@@ -786,7 +787,7 @@ function autopilotStop(msg, silent) {
         autopilot.resume = { dest: autopilot.dest, route: autopilot.route, leg: autopilot.leg, legFrom: autopilot.legFrom,
                              berthPlan: autopilot.berthPlan, deepShip: autopilot.deepShip, planDraft: autopilot.planDraft };
     }
-    autopilot.active = false; autopilot.planning = false;
+    autopilot.active = false; autopilot.planning = false; autopilot.aground = null; autopilot.turnFirst = null;
     if (!silent) { autopilot.route = null; autopilot.dest = null; }
     if (!silent && typeof tugEscortStop === 'function') tugEscortStop();
     autopilot.escort = '';
@@ -847,6 +848,279 @@ function _apOrder(v) {
     else physics.telegraphState = v;
 }
 
+// ── 座礁から抜け出す ──
+//  1) 自力：乗り上げが浅くなる方（前か後ろ）へ機関をかける（半速 → 全速 → 反対向きも一度）
+//  2) 抜けなければタグを呼び、横・回頭はタグ、前後は機関で、乗り上げが浅くなる方へ
+//  3) 抜けたら少し深い所へ出て止まり、今の場所から航路を引き直す
+//  タグが付いてから AG_TUG_MAX 秒たっても抜けなければ、自動航行を止める
+const AG_SELF_MAX = 75, AG_STALL = 18, AG_TUG_MAX = 240;
+function _agLen() { const hp = window.hullProfile; return ((hp && hp.ready) ? hp.halfLen * 2 : 12) * (physics.scale || 1); }
+// 抜け出す向きの候補：a＝前後（＋前）、s＝横（＋左舷）、h＝回頭（＋heading が増える向き）。
+// 少し動いたときにどれだけ浅くなるか（gain）と、どこまで動けば抜けるか（free：船首尾の動く道のり[m]）
+function _agOptions(withTugs) {
+    const L = _agLen(), s0 = worldGroundTry(0, 0, 0), kMax = Math.max(60, 1.5 * L);
+    const out = [];
+    const add = (name, a, s, h) => {
+        const n = Math.hypot(a, s) || 1, ua = a / n, us = s / n;
+        const step = h && !a && !s ? 3 : 10;
+        const r1 = h && !a && !s ? worldGroundTry(0, 0, h * step) : worldGroundTry(ua * step, us * step, 0);
+        if (r1.hard > s0.hard) return;                                  // 岸壁・陸の方へは行かない
+        let free = Infinity;
+        if (h && !a && !s) {
+            for (const k of [3, 6, 10, 15, 22, 30]) { const r = worldGroundTry(0, 0, h * k); if (r.hard > s0.hard) break; if (r.score < 0.02) { free = L / 2 * k * Math.PI / 180; break; } }
+        } else {
+            for (const k of [8, 16, 30, 50, 80, 120, 180, 260, 360]) { if (k > kMax) break; const r = worldGroundTry(ua * k, us * k, 0); if (r.hard > s0.hard) break; if (r.score < 0.02 && r.hard === 0) { free = k; break; } }
+        }
+        out.push({ name, a: ua * (a ? 1 : 0), s: us * (s ? 1 : 0), h, gain: s0.score - r1.score, free });
+    };
+    add('astern', -1, 0, 0); add('ahead', 1, 0, 0);
+    if (withTugs) {
+        add('port', 0, 1, 0); add('stbd', 0, -1, 0);
+        for (const a of [-1, 1]) for (const s of [-1, 1]) add(`diag${a}${s}`, a, s, 0);
+        add('rotL', 0, 0, 1); add('rotR', 0, 0, -1);
+    }
+    // 近くで抜けられる向き → だめなら、いちばん浅くなる向き（後進を少しひいきする：来た道を戻る）
+    out.forEach(o => { o.cost = o.free < Infinity ? o.free : 1e6 - 1000 * o.gain; if (o.name === 'astern') o.cost *= 0.8; });
+    out.sort((x, y) => x.cost - y.cost);
+    return out.filter(o => o.free < Infinity || o.gain > 0.01);
+}
+// 船を前後 dA・横 dS[m] 動かした所で、船体のまわり（両舷・船首尾の先 40m まで）が十分深いか
+function _agDeepAt(dA, dS) {
+    const hp = window.hullProfile, sc = physics.scale || 1, HL = ((hp && hp.ready) ? hp.halfLen : 6) * sc;
+    let hw = 0; if (hp && hp.ready) for (const sl of hp.slices || []) hw = Math.max(hw, sl.halfWidth || 0); hw = (hw || 1.5) * sc;
+    const need = apMargins().needTug, h = physics.heading * _apRad, fx = Math.sin(h), fz = Math.cos(h), sx = Math.cos(h), sz = -Math.sin(h);
+    const x0 = physics.cgWorldX + fx * dA + sx * dS, z0 = physics.cgWorldZ + fz * dA + sz * dS;
+    for (const a of [-(HL + 40), -HL * 0.5, 0, HL * 0.5, HL + 40]) for (const s of [-(hw + 40), 0, hw + 40]) {
+        if (worldSeabedAt(x0 + fx * a + sx * s, z0 + fz * a + sz * s) > -need) return false;
+    }
+    return true;
+}
+// 抜けたあと、どちらへどれだけ動けば深い所に出るか（途中で乗り上げない向きのうち、いちばん近い所）。
+// タグがいなければ前後だけ
+function _agRetreat(withTugs, prefer) {
+    const dirs = [[-1, 0], [1, 0]];
+    if (withTugs) dirs.push([0, 1], [0, -1], [-0.7, 0.7], [-0.7, -0.7], [0.7, 0.7], [0.7, -0.7]);
+    let best = null;
+    for (const [a, s] of dirs) {
+        for (let k = 0; k <= 1500; k += 25) {
+            if (k && worldGroundTry(a * k, s * k, 0).score > 0.02) break;
+            if (_agDeepAt(a * k, s * k)) {
+                // 横へ動くのは遅い（タグで 0.4m/s）ので、前後の 3 倍の道のりとみる。抜けてきた向きを少しひいきする
+                const cost = k * (1 + 2 * Math.abs(s)) * (prefer && Math.sign(a) === Math.sign(prefer.a) && Math.sign(s) === Math.sign(prefer.s) ? 0.8 : 1);
+                if (!best || cost < best.cost) best = { a, s, k, cost };
+                break;
+            }
+        }
+    }
+    return best;
+}
+// 座礁から抜けて航路を引き直したあと：最初の区間の向きへ回る円（旋回径）が浅い所にかかるなら、
+// 機関は止めたまま、タグでその場で回頭してから進む（かからなければ、そのまま航路へ）。
+// 回し終えたら、座礁のときに呼んだタグは帰す。true を返す間は、ふつうの航路の操船をしない
+function _apTurnFirst(dt) {
+    const F = autopilot.turnFirst, R = autopilot.route;
+    if (!R || !R[autopilot.leg]) { autopilot.turnFirst = null; return false; }
+    const here = worldShipLatLon(), wp = R[autopilot.leg];
+    const hT = _apHeadingForTrue(rhumbCourse(here.lat, here.lon, wp.lat, wp.lon).course);
+    const e = ((hT - physics.heading + 540) % 360) - 180;
+    const done = () => { if (F.ownTugs && typeof tugEscortStop === 'function') tugEscortStop(); autopilot.turnFirst = null; return false; };
+    if (!F.checked) {
+        F.checked = true;
+        if (Math.abs(e) < 20) return done();
+        // 回る円の上で、船体のまわりが喫水＋1m より深いか（10°おき）
+        const hp = window.hullProfile, sc = physics.scale || 1, HL = ((hp && hp.ready) ? hp.halfLen : 6) * sc;
+        let hw = 0; if (hp && hp.ready) for (const sl of hp.slices || []) hw = Math.max(hw, sl.halfWidth || 0); hw = (hw || 1.5) * sc;
+        const Rt = _apTurnRadius(), s = Math.sign(e), h0 = physics.heading * _apRad, dr = worldShipDraft() + 1;
+        const px = Math.cos(h0), pz = -Math.sin(h0);                       // 左舷の向き（heading が増える向きへ回る）
+        const cx = physics.cgWorldX + px * Rt * s, cz = physics.cgWorldZ + pz * Rt * s;
+        let blocked = false;
+        for (let th = 10; th <= Math.abs(e) + 10 && !blocked; th += 10) {
+            const h = h0 + s * th * _apRad, fx = Math.sin(h), fz = Math.cos(h), qx = Math.cos(h), qz = -Math.sin(h);
+            const X = cx - s * Rt * qx, Z = cz - s * Rt * qz;
+            for (const a of [-HL, 0, HL]) for (const o of [-hw, 0, hw]) if (worldSeabedAt(X + fx * a + qx * o, Z + fz * a + qz * o) > -dr) { blocked = true; break; }
+        }
+        if (!blocked) return done();
+        if (!tugEscort.active && typeof tugEscortStart === 'function') { tugEscortStart(); F.ownTugs = true; tugEscort.t = 0; }
+        _apMsg('ここで向きを変えると浅い所にかかるので、タグでその場で回します');
+    }
+    F.t += dt;
+    _apOrder(0); _apHelm(0, dt);
+    if (Math.abs(e) < 8 || F.t > 600) { _apMsg(''); return done(); }
+    tugEscort.t = (tugEscort.t || 0) + dt;
+    if (typeof tugEscortReady === 'function' && tugEscortReady()) {
+        tugEscortAssist(0, e, dt);
+        _apMsg(`タグでその場で回頭しています（あと ${Math.round(Math.abs(e))}°）`);
+    } else _apMsg('ここで向きを変えると浅い所にかかるので、タグを待っています（その場で回します）');
+    return true;
+}
+function _agDirWord(o) {
+    if (!o) return '';
+    if (o.h && !o.a && !o.s) return '回頭して';
+    const w = [];
+    if (o.a < 0) w.push('後ろ'); else if (o.a > 0) w.push('前');
+    if (o.s > 0) w.push('左舷の方'); else if (o.s < 0) w.push('右舷の方');
+    return w.join('・') + 'へ';
+}
+function _apAground(dt) {
+    if (!autopilot.aground) {
+        autopilot.agCount = (autopilot.agCount || 0) + 1;
+        autopilot.turnFirst = null;
+        if (autopilot.agCount > 4) {
+            _apOrder(0);
+            if (typeof tugEscortStop === 'function' && tugEscort.active) tugEscortStop();
+            autopilotStop('何度も座礁するので、自動航行を止めました。浅瀬の少ない所まで手で操船してください');
+            return;
+        }
+    }
+    const G = autopilot.aground || (autopilot.aground = { phase: 'self', t: 0, phaseT: 0, stallT: 0, best: Infinity, opt: null, tries: 0, order: 2, freeT: 0, tugs: false, tugT: 0, planT: 0 });
+    G.t += dt; G.phaseT += dt;
+    const grounded = !!(window.terrain && terrain.grounded);
+    const score = worldGroundTry(0, 0, 0).score;
+    _apHelm(0, dt);
+    const go = (phase) => { G.phase = phase; G.phaseT = 0; G.stallT = 0; G.best = Infinity; G.planT = 0; G.stopT = 0; };
+    // 抜けたか（波で一瞬浮いただけでなく、1.5 秒続けて）
+    G.freeT = grounded ? 0 : G.freeT + dt;
+    if (G.t > 900) {                                       // 15 分たっても抜けられない
+        _apOrder(0);
+        if (G.ownTugs && typeof tugEscortStop === 'function') tugEscortStop();
+        autopilotStop('座礁から抜け出せませんでした。操作パネルの Draft レバーで喫水を浅くするか、手で操船してください');
+        return;
+    }
+    if ((G.phase === 'self' || G.phase === 'tug') && G.freeT > 1.5) {
+        G.back = G.phase; go('clear');
+        G.from = { x: physics.cgWorldX, z: physics.cgWorldZ };
+        // 深い所まで出てから航路を引き直す（浅瀬の近くから引くと、また同じ浅瀬を通ることがある）
+        G.ret = _agRetreat(G.tugs, G.opt);
+        _apMsg('抜け出しました。深い所へ出ています');
+    }
+    // 進み具合：乗り上げが浅くなっていれば進んでいる
+    if (score < G.best - Math.max(0.05, G.best * 0.03)) { G.best = score; G.stallT = 0; } else G.stallT += dt;
+    // タグ：前後へ抜けるときは、そちらの端の 2 隻がまっすぐ引き（power）、残りで横ずれ・回頭を押さえる。
+    // 横・回頭で抜けるときは、全部で横へ押し引き・回す
+    const tugWork = (o, power) => {
+        if (typeof _teTugs !== 'function' || typeof _haAllocate !== 'function') return;
+        tugEscort.t = (tugEscort.t || 0) + dt;
+        const all = _teTugs(), use = all.filter(_haWorking);
+        for (const t of all) if (!use.includes(t)) t.autoPower = 0;
+        const st = tugStations(), zOf = (t) => { const q = st.find(s2 => s2.key === t.station); return q ? q.z : 0; };
+        const along = (o && o.a && !o.s && !o.h) ? use.filter(t => Math.sign(zOf(t)) === Math.sign(o.a)).sort((x, y) => Math.abs(zOf(y)) - Math.abs(zOf(x))).slice(0, 2) : [];
+        for (const t of along) {
+            if (t.action !== 'pull' || t.dir !== (o.a > 0 ? 'fwd' : 'aft')) { t.action = 'pull'; t.dir = o.a > 0 ? 'fwd' : 'aft'; t.engaged = true; }
+            t.autoPower = power; t.switchT = 0;
+        }
+        const rest = use.filter(t => !along.includes(t));
+        if (!rest.length) return;
+        const D = _haDims(), massKg = Math.max(1e5, (physics.mass || 1) * 1e6);
+        const vS = _tugShip.vSway, r = _tugShip.yawRate + (physics.turnRate || 0) * _haRad;
+        const vSd = o ? Math.max(-0.4, Math.min(0.4, 0.015 * o.s * 30 * power)) : 0;
+        const rd = o ? Math.max(-0.006, Math.min(0.006, 0.03 * o.h * 10 * power * _haRad)) : 0;
+        _haAllocate(massKg * 1.8 * 0.3 * (vSd - vS), massKg * 1.5 * D.L * D.L / 12 * 0.3 * (rd - r), rest, dt);
+    };
+    const engStopped = () => Math.abs(physics.propRpm || 0) < 0.15 && !(Number.isFinite(physics.telegraphAnswer) && physics.telegraphAnswer !== 0);
+    const orderFor = (o, lvl) => (o && o.a) ? Math.sign(o.a) * lvl : 0;
+    if (G.phase === 'self') {
+        if (!G.opt) {
+            G.opt = _agOptions(false)[0] || null;
+            if (!G.opt) { go('tug'); return; }
+            G.order = 2;
+            _apMsg(`座礁しました。${G.opt.a < 0 ? '後進' : '前進'}で、自力で抜け出そうとしています`);
+        }
+        // 半速で進まなければ全速、全速でもだめなら反対向きを一度、それでもだめならタグ
+        if (G.stallT > AG_STALL) {
+            if (G.order < 3) { G.order = 3; G.stallT = 0; _apMsg(`座礁しました。${G.opt.a < 0 ? '全速後進' : '全速前進'}で、自力で抜け出そうとしています`); }
+            else if (G.tries < 1) {
+                G.tries++; G.stallT = 0; G.best = Infinity;
+                const other = _agOptions(false).find(o => Math.sign(o.a) !== Math.sign(G.opt.a));
+                if (other) { G.opt = other; G.order = 2; _apMsg(`座礁しました。今度は${other.a < 0 ? '後進' : '前進'}で抜け出そうとしています`); }
+                else G.tries = 9;
+            } else { go('tug'); return; }
+        }
+        if (G.phaseT > AG_SELF_MAX) { go('tug'); return; }
+        _apOrder(orderFor(G.opt, G.order));
+        return;
+    }
+    if (G.phase === 'tug') {
+        if (!G.tugs) {
+            G.tugs = true;
+            if (typeof tugEscortStart === 'function') {
+                G.ownTugs = !tugEscort.active;
+                if (G.ownTugs) tugEscortStart();
+                tugEscort.t = 0;
+            }
+            _apOrder(0);
+            G.opt = null;
+        }
+        const ready = typeof tugEscortReady === 'function' && tugEscortReady();
+        const n = (typeof _teTugs === 'function') ? _teTugs().length : 0, on = (typeof _teTugs === 'function') ? _teTugs().filter(t => t.state === 'on').length : 0;
+        if (!ready) {
+            _apMsg(`自力では抜け出せないので、タグを呼びました（${on}/${n} 隻が付いています）。タグと一緒に抜け出します`);
+            _apOrder(0);
+            return;
+        }
+        G.tugT += dt; G.planT -= dt;
+        // 向きは 4 秒おき（止まっていれば、すぐ）に選び直す
+        if (!G.opt || G.planT <= 0 || G.stallT > 10) {
+            const o = _agOptions(true)[0] || null;
+            if (o && (!G.opt || o.name !== G.opt.name)) G.stallT = 0;
+            G.opt = o; G.planT = 4;
+            if (G.stallT > 10) G.stallT = 0;
+        }
+        if (G.tugT > AG_TUG_MAX || (!G.opt && G.tugT > 30)) {
+            _apOrder(0);
+            if (G.ownTugs && typeof tugEscortStop === 'function') tugEscortStop();
+            autopilotStop('タグと一緒でも座礁から抜け出せませんでした。操作パネルの Draft レバーで喫水を浅くするか、手で操船してください');
+            return;
+        }
+        _apMsg(`タグ${on}隻と機関で、${_agDirWord(G.opt)}抜け出しています`);
+        _apOrder(orderFor(G.opt, G.tugT > 60 ? 3 : 2));
+        tugWork(G.opt, 1);
+        return;
+    }
+    if (G.phase === 'clear') {
+        // また乗り上げた：もとの手順へ（何度も乗り上げるなら、はじめからタグで）
+        if (grounded && G.freeT === 0 && G.phaseT > 0.5) {
+            G.regrounds = (G.regrounds || 0) + 1;
+            go(G.regrounds > 2 ? 'tug' : (G.back || 'self')); G.opt = null; G.order = 2; G.tries = 0;
+            return;
+        }
+        const moved = Math.hypot(physics.cgWorldX - G.from.x, physics.cgWorldZ - G.from.z);
+        const L = _agLen(), v = physics.speed || 0;
+        // 深い所へ、ゆっくり（1.5 以下）出る。行き足が付いていれば機関は止めて惰性で。横へはタグで
+        G.deepT = (G.deepT || 0) - dt;
+        if (G.deepT <= 0) { G.deepT = 0.5; G.deep = _agDeepAt(0, 0); }
+        const R = G.ret || (G.opt ? { a: Math.sign(G.opt.a || 0), s: Math.sign(G.opt.s || 0) } : { a: 0, s: 0 });
+        if (!G.stopT && (G.ret ? !G.deep : moved < Math.max(40, 0.3 * L)) && G.phaseT < 300) {
+            const away = Math.abs(R.a) > 0.3 ? Math.sign(R.a) : 0;
+            let o = 0;
+            if (Math.abs(v) > 1.5 && Math.sign(v) === away) o = 0;
+            else if (away && Math.sign(v) !== away || Math.abs(v) < 0.8) o = away;
+            else if (Math.abs(v) < 1.5 && (autopilot.lastOrder || 0) === away) o = away;
+            _apOrder(o);
+            if (G.tugs) tugWork({ a: away, s: R.s ? Math.sign(R.s) : 0, h: 0 }, Math.abs(v) < 1 ? (away && !R.s ? 0.4 : 1) : 0);
+            _apMsg(`抜け出しました。深い所へ出ています${G.ret ? `（${_agDirWord({ a: away, s: R.s ? Math.sign(R.s) : 0 })}あと ${Math.max(0, Math.round(G.ret.k - moved))}m ほど）` : ''}`);
+            return;
+        }
+        // 止まって（プロペラも止まって）から航路を引き直す。逆へかけるとプロペラの遅れで行き過ぎるので、機関を止めて惰性で
+        G.stopT = (G.stopT || 0) + dt;
+        _apOrder(0);
+        if (G.tugs) tugWork(null, 0);
+        if ((Math.abs(v) > 0.5 || !engStopped() || autopilot.lastOrder) && G.stopT < 120) return;
+        _apOrder(0);
+        const withTugs = G.tugs, ownTugs = !!G.ownTugs;
+        autopilot.aground = null;
+        const dest = autopilot.dest;
+        if (!dest) { if (ownTugs && typeof tugEscortStop === 'function') tugEscortStop(); autopilotStop('座礁から抜け出しました'); return; }
+        const note = withTugs ? '座礁からタグと一緒に抜け出しました。今の場所から航路を引き直しました' : '座礁から自力で抜け出しました。今の場所から航路を引き直しました';
+        autopilotStart(dest).then(() => {
+            if (!autopilot.active) { if (ownTugs && typeof tugEscortStop === 'function') tugEscortStop(); return; }
+            if (!autopilot.note) autopilot.note = note;
+            // 最初の区間へ向きを変える前に、回る円が浅い所にかからないか見る（かかるならタグでその場で回す）
+            autopilot.turnFirst = { t: 0, ownTugs, checked: false };
+            renderAutopilotPanel();
+        });
+    }
+}
+
 // ── 毎フレーム ──
 function updateAutopilot(t, dt) {
     if (!window.world || world.mode !== 'world') { if (autopilot.active) autopilotStop('世界を航海するモードではないので、自動航行を止めました'); return; }
@@ -857,7 +1131,9 @@ function updateAutopilot(t, dt) {
     dt = Math.min(0.1, Math.max(0, dt || 0));
     // 手で舵を取ったら切る
     if ((typeof keys !== 'undefined' && (keys.a || keys.d)) || (typeof _br !== 'undefined' && _br.wheelDrag)) { autopilotStop('手で舵を取ったので、自動航行を切りました'); return; }
-    if (window.terrain && terrain.grounded) { _apOrder(0); autopilotStop('座礁したので、自動航行を止めました'); return; }
+    // 座礁した：自動航行は切らずに、自力で → 無理ならタグを呼んで一緒に抜け出す
+    if (autopilot.aground || (window.terrain && terrain.grounded)) { _apAground(dt); return; }
+    if (autopilot.turnFirst) { if (_apTurnFirst(dt)) return; }
     // レバーで喫水を深くした（0.5m より多く）：レバーを動かし終えて 2 秒たったら、今の喫水で航路を引き直す
     if (autopilot.planDraft > 0 && autopilot.dest) {
         const dNow = worldShipDraft();

@@ -11,7 +11,9 @@
 // 船のモデル（.glb 等）は数十MBあり、アプリ側で IndexedDB に保存している
 // （27-model-store.js）ので、ここでは二重に保存しない。
 
-const CACHE_NAME = 'shipsim-runtime-v1';
+// 版（js/00-version.js）が変わったら、保存分も入れ替える
+try { importScripts('js/00-version.js'); } catch (e) { /* 無くても動く */ }
+const CACHE_NAME = 'shipsim-runtime-' + (self.APP_VERSION || 'v1');
 const CDN_HOSTS = ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net'];
 const SKIP_EXT = /\.(glb|gltf|obj|mtl|bin|zip|apk)(\?|$)/i;
 

@@ -773,6 +773,17 @@ function _trHullScore(x, z, h, off, out) {
     _trHullScore.hard = hard;
     return score;
 }
+// 今の船を、前後 dA[m]・横 dS[m]（＋＝左舷の方）・向き dH[度] だけ動かしたら、どれだけ乗り上げるか（座礁から抜け出す向きを探す）
+function worldGroundTry(dA, dS, dH) {
+    if (typeof shipGroup === 'undefined' || !shipGroup) return { score: 0, hard: 0 };
+    const x0 = physics.cgWorldX || 0, z0 = physics.cgWorldZ || 0, h0 = physics.heading || 0, r0 = h0 * Math.PI / 180;
+    const dx = shipGroup.position.x - x0, dz = shipGroup.position.z - z0;
+    const off = { a: dx * Math.sin(r0) + dz * Math.cos(r0), s: dx * Math.cos(r0) - dz * Math.sin(r0) };
+    const x = x0 + Math.sin(r0) * dA + Math.cos(r0) * dS, z = z0 + Math.cos(r0) * dA - Math.sin(r0) * dS;
+    const score = _trHullScore(x, z, h0 + (dH || 0), off);
+    return { score, hard: _trHullScore.hard };
+}
+window.worldGroundTry = worldGroundTry;
 // 前の姿勢より悪くなったか（固い所に入る点が増えた、または深く乗り上げた）
 function _trWorse(score, hard, good) { return hard > good.hard || score > good.score + 0.02; }
 function _trCheckGrounding(t, dt) {
@@ -796,8 +807,14 @@ function _trCheckGrounding(t, dt) {
     if (!terrain.near && !terrain.ports.size && terrain.depth > worldShipDraft() + 80) { terrain.grounded = false; terrain.good = { x, z, h, score: 0, hard: 0 }; return; }
     const hits = [];
     const score = _trHullScore(x, z, h, off, hits), hard = _trHullScore.hard;
-    const good = terrain.good;
     const wasGrounded = terrain.grounded;
+    // 前の位置（good）と、今の波・姿勢のまま比べる（波で船底が上下しただけで「深く入った」としない。
+    // そうしないと、波のたびに動きを取り消されて、乗り上げた所から後進で抜けられない）
+    let good = terrain.good;
+    if (good && (score > 0.02 || hard > 0) && (good.x !== x || good.z !== z || good.h !== h)) {
+        const so = _trHullScore(good.x, good.z, good.h, off), ho = _trHullScore.hard;
+        good = { x: good.x, z: good.z, h: good.h, score: so, hard: ho };
+    }
     if (good && _trWorse(score, hard, good)) {
         // 前より深く入った：動いた分を取り消す（向きだけ・位置だけ戻して済むならそれで）
         const cands = [{ x, z, h: good.h }, { x: good.x, z: good.z, h }, { x: good.x, z: good.z, h: good.h }];

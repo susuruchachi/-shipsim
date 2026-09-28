@@ -446,6 +446,11 @@ function _rwFairway(p) {
     const nb = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
     // 深いほど通りやすい。陸は低い所（3m まで：砂州・狭い水路の口）だけ高くついて通れる
     const cost = (h) => h < 0 ? 1 + 40 / Math.max(2, -h) : h < 3 ? 120 : Infinity;
+    // 高い陸（3m 以上）のとなりの升目は、なるべく通らない（掘っても航路の端に陸が残って座礁する）
+    const nearHigh = (i, j) => {
+        for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) { const ii = i + a, jj = j + b; if (ii >= 0 && jj >= 0 && ii < R.cols && jj < R.rows && hAt(ii, jj) >= 3) return true; }
+        return false;
+    };
     const openDeep = (i, j) => {
         for (let b = -2; b <= 2; b++) for (let a = -2; a <= 2; a++) { const ii = i + a, jj = j + b; if (ii < 0 || jj < 0 || ii >= R.cols || jj >= R.rows || hAt(ii, jj) > -(D + 2)) return false; }
         return true;
@@ -469,8 +474,11 @@ function _rwFairway(p) {
             for (const [a, b] of nb) {
                 const ii = i + a, jj = j + b;
                 if (ii < i0 || jj < j0 || ii > i1 || jj > j1) continue;
-                const c = cost(hAt(ii, jj));
+                let c = cost(hAt(ii, jj));
                 if (c === Infinity) continue;
+                // 斜めに進むとき、両どなりがどちらも陸のすき間：低い陸（10m 未満）なら掘って通すので通りにくいだけ、高い陸ならすり抜けない
+                if (a && b && hAt(i + a, j) >= 3 && hAt(i, j + b) >= 3) { if (Math.max(hAt(i + a, j), hAt(i, j + b)) >= 10) continue; c *= 3; }
+                if (nearHigh(ii, jj)) c *= 4;
                 const kk = (jj - j0) * W + (ii - i0), ng = g[k] + Math.hypot(a * dx, b * dy) * c;
                 if (ng < g[kk]) { g[kk] = ng; from[kk] = k; push(kk, ng); }
             }
@@ -495,9 +503,16 @@ function _rwFairway(p) {
     if (cells.length < 2) return null;
     // まっすぐにできる所はまっすぐに（途中がずっと水の上の範囲で。低い陸を横切ると、掘ったときに
     // ありもしない運河ができてしまう。道すじそのものが通る低い陸（狭い口）は、そのまま残る）
+    // （線の両側 200m に高い陸がある所も、まっすぐにしない：掘った航路の端に陸が残る）
     const clear = (A, B) => {
         const L = Math.max(Math.abs(B[0] - A[0]), Math.abs(B[1] - A[1])) * 4;
-        for (let t = 1; t < L; t++) { const u = t / L, q = llOf(A[0] + (B[0] - A[0]) * u, A[1] + (B[1] - A[1]) * u); if (_rwSample(q.lat, q.lon) >= -1) return false; }
+        const ex = (B[0] - A[0]) * dx, ey = (B[1] - A[1]) * dy, el = Math.hypot(ex, ey) || 1;
+        const oi = -ey / el * 200 / dx, oj = ex / el * 200 / dy;          // 横 200m（格子の升目で）
+        for (let t = 1; t < L; t++) {
+            const u = t / L, ci = A[0] + (B[0] - A[0]) * u, cj = A[1] + (B[1] - A[1]) * u, q = llOf(ci, cj);
+            if (_rwSample(q.lat, q.lon) >= -1) return false;
+            for (const k of [-1, 1]) { const r = llOf(ci + oi * k, cj + oj * k); if (_rwSample(r.lat, r.lon) >= 3) return false; }
+        }
         return true;
     };
     const simp = [cells[0]];
@@ -509,15 +524,19 @@ function _rwFairway(p) {
     }
     return { depth: D, pts: [{ lat: p.lat, lon: p.lon }, ...simp.map(([i, j]) => llOf(i, j))] };
 }
-// 航路を格子に掘る：線から 250m は航路の深さ、700m まではなだらかに（3m 以上の陸は削らない）
+// 航路を格子に掘る：線から 400m は航路の深さ、900m まではなだらかに（3m 以上の陸は削らない）。
+// （格子は 460m おきなので、全部の深さで掘る幅が升目より狭いと、ならした地形で航路の端が浅くなる）
+// ただし港の外の航路では、線から 200m の中の低い陸（10m 未満：砂州・浜の砂丘）と、線から 150m の中の陸（30m 未満）も掘る
+// （格子は 460m なので、航路の端に陸の升目が残ると、ならした地形が浅くなって必ず座礁する）
 function _rwCarve(fw) {
     const R = _RW, RAD = Math.PI / 180, mLat = WORLD_R * RAD;
+    const P0 = fw.pts[0];
     for (let s = 0; s < fw.pts.length - 1; s++) {
         const A = fw.pts[s], B = fw.pts[s + 1];
         const mLon = mLat * Math.cos((A.lat + B.lat) / 2 * RAD);
         const ax = (A.lon - R.lon0) * mLon, ay = (R.lat1 - A.lat) * mLat, bx = (B.lon - R.lon0) * mLon, by = (R.lat1 - B.lat) * mLat;
         const L2 = (bx - ax) ** 2 + (by - ay) ** 2 || 1;
-        const pad = 700;
+        const pad = 900;
         const ci0 = Math.max(0, Math.floor((Math.min(ax, bx) - pad) / (R.cell * mLon))), ci1 = Math.min(R.cols - 1, Math.ceil((Math.max(ax, bx) + pad) / (R.cell * mLon)));
         const cj0 = Math.max(0, Math.floor((Math.min(ay, by) - pad) / (R.cell * mLat))), cj1 = Math.min(R.rows - 1, Math.ceil((Math.max(ay, by) + pad) / (R.cell * mLat)));
         for (let j = cj0; j <= cj1; j++) for (let i = ci0; i <= ci1; i++) {
@@ -526,8 +545,12 @@ function _rwCarve(fw) {
             const d = Math.hypot(px - ax - t * (bx - ax), py - ay - t * (by - ay));
             if (d > pad) continue;
             const k = j * R.cols + i, h = R.h[k];
-            if (h >= 3) continue;
-            const want = d < 250 ? fw.depth : fw.depth * (1 - (d - 250) / (pad - 250));
+            if (h >= 3) {
+                if (!(s > 0 && (d < 200 && h < 10 || d < 150 && h < 30))) continue;   // 升目の真ん中が航路の線から 150m なら、升目の大半は水路
+                const lat = R.lat1 - j * R.cell, lon = R.lon0 + i * R.cell;
+                if (Math.hypot((lat - P0.lat) * mLat, (lon - P0.lon) * mLon) < 400) continue;   // 港の岸壁のまわりは残す
+            }
+            const want = d < 400 ? fw.depth : fw.depth * (1 - (d - 400) / (pad - 400));
             if (h > -want) R.h[k] = -Math.round(want);
         }
     }

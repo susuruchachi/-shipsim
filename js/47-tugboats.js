@@ -613,6 +613,8 @@ function _tugStep(t, dt, last) {
         const hit = (along, sideSign, move) => {
             const hw = _tugHalfWidth(along / sc) * sc;
             const q = _tugFromShip(C, along, sideSign * (hw + 1 + Math.abs(move)));
+            // 座礁から抜け出す間（49-autopilot.js）は、岸壁・陸だけで止める（浅い所は座礁の判定が深く入る動きを止める）
+            if (typeof autopilot !== 'undefined' && autopilot.aground) return worldSeabedAt(q.x, q.z) > -1;
             return worldSeabedAt(q.x, q.z) > -dr;
         };
         const vS2 = _tugShip.vSway;
