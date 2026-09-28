@@ -42,7 +42,7 @@ const PORT_TYPES = {
     town:    { label: '港町',     suffix: '港',   color: '#ffe38a', size: 2, depth: 12, basin: 380, pier: 10, quay: 320 },
     city:    { label: '港湾都市', suffix: '港',   color: '#ffb36b', size: 3, depth: 18, basin: 640, pier: 10, quay: 720 },
     cargo:   { label: '貨物港',   suffix: '貨物港', color: '#8cc6ff', size: 3, depth: 18, basin: 760, pier: 10, quay: 1050 },
-    naval:   { label: '軍港',     suffix: '軍港', color: '#ff7a7a', size: 2, depth: 16, basin: 620, pier: 270, quay: 640 },
+    naval:   { label: '軍港',     suffix: '軍港', color: '#ff7a7a', size: 2, depth: 16, basin: 620, pier: 270, quay: 800 },
 };
 window.PORT_TYPES = PORT_TYPES;
 

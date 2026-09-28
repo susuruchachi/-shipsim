@@ -48,6 +48,25 @@ function _portShape(p) {
     return { id: p.id, type: p.type, x: loc.x, z: loc.z, sx: -Math.sin(br), sz: Math.cos(br),
              quayLen, apron, basin, depth: T.depth, seed: p.seed, name: p.name, chLen: worldPortChannelLen(p) };
 }
+// 桟橋の並び（港の座標：b＝岸沿い）。軍港は桟橋を岸壁の片側に寄せ、残りを大きな船が横付けできる岸壁にする
+//（50-harbor-auto.js の着岸の計画もこれを使う）。free：横付けに使える岸壁の区間 [b0, b1]、
+// keepOut：桟橋と横に付いている軍艦が占める b の範囲（桟橋の長さ len まで）
+function _portPierLayout(type, quayLen) {
+    const half = quayLen / 2;
+    if (type === 'naval') {
+        const len = 260, w = 22;
+        const piers = [{ b: -half + 70, w, len }, { b: -half + 230, w, len }];
+        const edge = piers[1].b + w / 2 + 3 + 19;                  // 横の軍艦（幅 19m まで）の外側
+        return { piers, len, free: [edge + 25, half - 10], keepOut: [-half, edge] };
+    }
+    if (type === 'fishing') {
+        const piers = [];
+        for (let i = 0; i < 2; i++) piers.push({ b: -half + (i + 1) * quayLen / 3, w: 6, len: 60 });
+        return { piers, len: 60, free: null, keepOut: null };
+    }
+    return { piers: [], len: 0, free: [-half, half], keepOut: null };
+}
+window._portPierLayout = _portPierLayout;
 // 高さに港の手直しを加える（ワーカーと同じ式。関数の中身を文字列にしてワーカーへ渡す）
 function _portAdjust(h, x, z, shapes) {
     for (let i = 0; i < shapes.length; i++) {
@@ -337,11 +356,10 @@ function _buildPort(S) {
         }
     }
     // 桟橋（漁港・軍港）
-    const pierN = S.type === 'fishing' ? 2 : S.type === 'naval' ? 3 : 0;
-    const pierLen = S.type === 'naval' ? 260 : 60;
-    for (let i = 0; i < pierN; i++) {
-        const b = -half + (i + 1) * S.quayLen / (pierN + 1);
-        const w = S.type === 'naval' ? 22 : 6;
+    const PL = _portPierLayout(S.type, S.quayLen);
+    const pierLen = PL.len;
+    for (const pr of PL.piers) {
+        const b = pr.b, w = pr.w;
         addBox(S.type === 'naval' ? concrete : wood, pierLen / 2, b, S.type === 'naval' ? -3 : 1.6, pierLen, S.type === 'naval' ? 12 : 1, w);
         colliders.push([0, pierLen, b - w / 2, b + w / 2]);
         for (let a = 15; a < pierLen - 5; a += 25) { const q = P(a, b + w / 2 - 0.6); bollards.push({ x: q.x, y: S.type === 'naval' ? 3.35 : 2.4, z: q.z, w: 0.6, h: 0.6, d: 0.6, rot }); }

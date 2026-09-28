@@ -38,9 +38,12 @@ function _haQ(S) {
 // 着岸の計画：どの港のどこに、どちら向きで付けるか
 function harborBerthPlan(port, prefHeading) {
     if (!port) return { ok: false, why: '港がありません' };
-    if (port.type === 'fishing' || port.type === 'naval') return { ok: false, why: `${port.name}には大きな船が横付けできる岸壁がありません` };
+    if (port.type === 'fishing') return { ok: false, why: `${port.name}には大きな船が横付けできる岸壁がありません` };
     const S = _portShape(port), Q = _haQ(S), D = _haDims();
-    if (S.quayLen < D.L + 20) return { ok: false, why: `${port.name}の岸壁（${Math.round(S.quayLen)}m）は船（${Math.round(D.L)}m）より短いので付けられません` };
+    // 横付けに使える岸壁の区間（軍港は桟橋の無い側）
+    const PL = _portPierLayout(port.type, S.quayLen);
+    const segLen = PL.free[1] - PL.free[0];
+    if (segLen < D.L + 20) return { ok: false, why: `${port.name}の空いている岸壁（${Math.round(segLen)}m）は船（${Math.round(D.L)}m）より短いので付けられません` };
     const T = PORT_TYPES[port.type];
     const draft = worldShipDraft();
     if (draft + 1 > T.depth + 2) return { ok: false, why: `${port.name}の岸壁は船に対して浅いので付けられません` };
@@ -51,15 +54,21 @@ function harborBerthPlan(port, prefHeading) {
     const lo = 6 + 12 + D.HL, hi = outerWall - 15 - D.HL;
     if (lo > hi) return { ok: false, why: `${port.name}の泊地（防波堤まで ${Math.round(outerWall)}m）は、この船（${Math.round(D.L)}m）を回すには狭すぎます` };
     const aE = Math.max(lo, Math.min(hi, aB + 3 * D.B + 60));
+    // 岸沿いの位置：空いている区間の真ん中。回るときの円（半径 HL）が桟橋の軍艦や防波堤に掛からないように
+    let bLo = PL.free[0] + D.HL + 10, bHi = PL.free[1] - D.HL - 10;
+    if (PL.keepOut) bLo = Math.max(bLo, PL.keepOut[1] + D.HL + 15);
+    bHi = Math.min(bHi, S.quayLen / 2 + 40 - 8 - D.HL - 15);
+    if (bLo > bHi) return { ok: false, why: `${port.name}には、この船（${Math.round(D.L)}m）を回して横付けできる広さがありません` };
+    const bC = Math.max(bLo, Math.min(bHi, (PL.free[0] + PL.free[1]) / 2));
     // 岸壁と平行な 2 つの向きのうち、今の向きに近い方
     const h1 = Math.atan2(S.sz, -S.sx) / _haRad, h2 = h1 + 180;
     const cur = prefHeading !== undefined ? prefHeading : physics.heading;
     const useH1 = Math.abs(_haWrap(h1 - cur)) <= Math.abs(_haWrap(h2 - cur));
     const hB = useH1 ? h1 : h2;
     const open = useH1 ? -1 : 1;              // 沖側の舷（船の中の +x ＝ 左舷 なら +1）。h1 では左舷が岸壁側
-    const pB = Q.toW(aB, 0), pE = Q.toW(aE, 0);
+    const pB = Q.toW(aB, bC), pE = Q.toW(aE, bC);
     return {
-        ok: true, port, S, aB, aE, open,
+        ok: true, port, S, aB, aE, bC, open,
         berth: { x: pB.x, z: pB.z, h: hB },
         turn: { x: pE.x, z: pE.z },
         hIn: Math.atan2(-S.sx, -S.sz) / _haRad,     // 岸壁の方を向く
@@ -196,7 +205,7 @@ function _haMsg(s) { harborAuto.msg = s; if (typeof renderTugPanel === 'function
 function harborAutoStart(mode, plan, then) {
     if (!plan || !plan.ok) { _haMsg(plan ? plan.why : '港の近くではありません'); return false; }
     if (typeof autopilot !== 'undefined' && autopilot.active) autopilotStop('', true);
-    Object.assign(harborAuto, { mode, plan, then: then || null, phase: 'tugs', t: 0, phaseT: 0, lastOrderT: -99, tugIds: [], resume: null });
+    Object.assign(harborAuto, { mode, plan, then: then || null, phase: 'tugs', t: 0, phaseT: 0, lastOrderT: -99, tugIds: [], resume: null, holdH: null, turning: false });
     _haClearLines();
     // タグ：もう付いているタグ（狭い水路で付き添ってきたタグなど）はそのまま使い、足りなければ呼ぶ
     const T = _haTakeTugs(_haStationKeys(plan.open, harborTugCount()));
@@ -279,7 +288,8 @@ function _haControl(target, dt, opt) {
     const massKg = Math.max(1e5, (physics.mass || 1) * 1e6);
     // 前後：機関を少しずつ（ベルが鳴りすぎないよう 6 秒に一度まで）
     const vA = physics.speed || 0;
-    const vAd = Math.abs(eA) < 3 ? 0 : Math.max(-(opt.vA || 0.5), Math.min(opt.vA || 0.5, 0.02 * eA));
+    // （目標の速さは、機関を動かす幅 ±0.2 より大きくしておく。小さいと、ずれが残っても機関が動かない）
+    const vAd = Math.abs(eA) < 12 ? 0 : Math.sign(eA) * Math.max(0.25, Math.min(opt.vA || 0.5, 0.02 * Math.abs(eA)));
     harborAuto.t += dt;
     // （ふだんは 6 秒に一度。速すぎ・後ろへ速いときはすぐ直す）
     const urgent = Math.abs(vA - vAd) > 1.0 && harborAuto.t - harborAuto.lastOrderT > 1.5;
@@ -339,7 +349,7 @@ function updateHarborAuto(t, dt) {
     if (tugEscort.held && !harborAuto.mode) {
         tugEscort.held.t += Math.max(0, dt || 0);
         const ap = typeof autopilot !== 'undefined' ? autopilot : null;
-        if (!ap || (!ap.planning && !ap.active) || tugEscort.held.t > 240) tugEscortStop();
+        if (!ap || (!ap.planning && !ap.active) || tugEscort.held.t > 900) tugEscortStop();
     }
     if (!harborAuto.mode) return;
     dt = Math.min(2, Math.max(0, dt || 0));
@@ -358,12 +368,18 @@ function updateHarborAuto(t, dt) {
             if (ready) next('turn', `${P.port.name}：タグで岸壁と平行に回しています`);
             else if (harborAuto.phaseT > 900) harborAutoStop('タグが持ち場に着けないので止めました');
         } else if (harborAuto.phase === 'turn') {
-            const e = _haControl({ x: P.turn.x, z: P.turn.z, h: P.berth.h }, dt, { vA: 0.3, r: 0.006 });
-            if (Math.abs(e.eY) < 2.5 && Math.abs(e.r) < 0.002) next('side', `${P.port.name}：タグで岸壁へ寄せています`);
+            // 回す所（軍港などでは港口の線から横へずれた所）に着くまでは、向きを保ったまま横へ運ぶ
+            //（途中で回すと、船尾が桟橋の軍艦などを払ってしまう）
+            const dTurn = Math.hypot(P.turn.x - physics.cgWorldX, P.turn.z - physics.cgWorldZ);
+            if (harborAuto.holdH === undefined || harborAuto.holdH === null) harborAuto.holdH = physics.heading;
+            const moving = dTurn > 40 && !harborAuto.turning;
+            if (!moving) harborAuto.turning = true;
+            const e = _haControl({ x: P.turn.x, z: P.turn.z, h: moving ? harborAuto.holdH : P.berth.h }, dt, { vA: 0.3, r: 0.006 });
+            if (!moving && Math.abs(e.eY) < 2.5 && Math.abs(e.r) < 0.002) next('side', `${P.port.name}：タグで岸壁へ寄せています`);
         } else if (harborAuto.phase === 'side') {
             const e = _haControl(P.berth, dt, { vA: 0.3, vS: 0.35, r: 0.003, openOnly: true });
             harborAuto.remain = Math.abs(e.eS);
-            if (Math.abs(e.eS) < 0.8 && Math.abs(e.eA) < 6 && Math.abs(e.eY) < 1.5 && Math.abs(e.vS) < 0.06 && Math.abs(physics.speed || 0) < 0.15) {
+            if (Math.abs(e.eS) < 0.8 && Math.abs(e.eA) < 15 && Math.abs(e.eY) < 1.5 && Math.abs(e.vS) < 0.06 && Math.abs(physics.speed || 0) < 0.15) {
                 _tugShip.vSway = 0; _tugShip.yawRate = 0; physics.speed = 0; physics.turnRate = 0;
                 _apOrder(0);
                 _haMakeLines(P);
@@ -376,7 +392,7 @@ function updateHarborAuto(t, dt) {
     } else if (harborAuto.mode === 'depart') {
         const Q = _haQ(P.S);
         const q = Q.toQ(physics.cgWorldX, physics.cgWorldZ);
-        const off = Q.toW(P.aE, q.b * 0.5);
+        const off = Q.toW(P.aE, (P.bC || 0) + (q.b - (P.bC || 0)) * 0.5);
         if (harborAuto.phase === 'tugs') {
             _haControl({ x: physics.cgWorldX, z: physics.cgWorldZ, h: physics.heading }, dt, { vA: 0.2, openOnly: true });
             for (const x of TL) x.autoPower = 0;
