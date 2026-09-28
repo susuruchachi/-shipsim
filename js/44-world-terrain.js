@@ -221,6 +221,12 @@ function _trBuildMesh(H, n, half, cx, cz, lowerInside, opts) {
             const hx = H[j * n + Math.min(n - 1, i + 1)] - H[j * n + Math.max(0, i - 1)];
             const hz = H[Math.min(n - 1, j + 1) * n + i] - H[Math.max(0, j - 1) * n + i];
             _trColor(h, Math.hypot(hx, hz) / (2 * step), x, z, Cc, k * 3);
+            // 作り込んだ港の細かい網：港の敷地はアスファルト、桟橋はコンクリートの色
+            if (opts && opts.detail && h > 0.3) {
+                const ll = worldUnitToLatLon(worldLocalToUnit(x, z)), kd = _rwDetailKindAt(opts.detail, ll.lat, ll.lon);
+                if (kd === 4) { Cc[k * 3] = 0.52 * 0.52; Cc[k * 3 + 1] = 0.52 * 0.52; Cc[k * 3 + 2] = 0.50 * 0.50; }
+                else if (kd === 3) { Cc[k * 3] = 0.60 * 0.60; Cc[k * 3 + 1] = 0.58 * 0.58; Cc[k * 3 + 2] = 0.54 * 0.54; }
+            }
         }
     }
     // 陸を含むマスだけ三角形にする（水面下だけのマスは作らない）。
@@ -320,7 +326,8 @@ function _trOnHeights(msg) {
         if (terrain.near) scene.add(terrain.near);
     } else if (msg.which === 'fine') {
         _trDispose(terrain.fine);
-        terrain.fine = _trBuildMesh(msg.H, TR_FINE.n, TR_FINE.half, cx, cz, null, { coastOnly: 10 });
+        const ll = worldUnitToLatLon(worldLocalToUnit(cx, cz));
+        terrain.fine = _trBuildMesh(msg.H, TR_FINE.n, TR_FINE.half, cx, cz, null, { coastOnly: 10, detail: _rwDetailOf(ll.lat, ll.lon) || (typeof _hdNearDetail === 'function' ? _hdNearDetail(cx, cz) : null) });
         if (terrain.fine) scene.add(terrain.fine);
     } else {
         _trDispose(terrain.far);

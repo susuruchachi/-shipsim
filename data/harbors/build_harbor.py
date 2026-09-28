@@ -24,7 +24,22 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # 港ごとの設定：範囲（緯度・経度）、1 升[m]、ドックの深さ[m]
 HARBORS = {
-    'southampton': dict(name='サウサンプトン', lat0=50.795, lat1=50.918, lon0=-1.448, lon1=-1.295, cell=10, dock_depth=12.5, berth_depth=13.0, berth_reach=400),
+    'southampton': dict(name='サウサンプトン', lat0=50.795, lat1=50.918, lon0=-1.448, lon1=-1.295, cell=10, dock_depth=12.5, berth_depth=13.0, berth_reach=400,
+                        # 本航路（ドック・ヘッド → サウサンプトン・ウォーター → カルショット沖）。最低潮位で 12.6m ＋ 潮の分
+                        channels=[dict(width=260, depth=13.5, pts=[[50.8973, -1.4118], [50.8923, -1.4067], [50.889, -1.4016], [50.8793, -1.3913], [50.8347, -1.3155], [50.8142, -1.2956], [50.8128, -1.2940]])]),
+    # リヴァプール：マージー川（ピア・ヘッドの浮き桟橋・ドック）から、クロスビー水道・クイーンズ水道を通ってリヴァプール湾へ
+    'liverpool': dict(name='リヴァプール', lat0=53.385, lat1=53.555, lon0=-3.225, lon1=-2.955, cell=10, dock_depth=11.0, berth_depth=12.0, berth_reach=250,
+                      # 掘った航路（潮の満ち引きが無いので、満潮を待たずに通れる深さにする）：ピア・ヘッド → マージー川（ナローズ）→ クロスビー水道 → クイーンズ水道 → 西の縁
+                      channels=[dict(width=350, depth=13.5, pts=[[53.4025, -3.0010], [53.4100, -3.0060], [53.4250, -3.0150], [53.4410, -3.0265], [53.4577, -3.0367], [53.470, -3.062], [53.4808, -3.0790], [53.5151, -3.1017], [53.521, -3.130], [53.5307, -3.1887], [53.533, -3.226]]),
+                                dict(width=450, depth=13.5, pts=[[53.5296, -3.1788], [53.5307, -3.1887], [53.533, -3.226]]),
+                                # クロスビー水道からクイーンズ水道へ曲がる所は広く（大きな船が回れるように）
+                                dict(width=700, depth=13.5, pts=[[53.5040, -3.0930], [53.5151, -3.1017], [53.5185, -3.1180]]),
+                                # 角の内側（回り始める 1km 手前から 1km 先まで：旋回半径 2km ほどの大きな船の通り道）
+                                dict(width=600, depth=13.5, pts=[[53.5067, -3.0962], [53.5124, -3.1061], [53.5181, -3.1160], [53.5215, -3.1320]])]),
+    # グラスゴー：クライド川（キング・ジョージ5世ドック・クライドバンクのジョン・ブラウン造船所）から、グリーノック沖（テイル・オブ・ザ・バンク）まで
+    'glasgow': dict(name='グラスゴー', lat0=55.845, lat1=55.975, lon0=-4.790, lon1=-4.270, cell=10, dock_depth=10.0, berth_depth=11.0, berth_reach=150),
+    # ベルファスト：ハーランド＆ウルフ（クイーンズ島・トンプソン・ドック）・ヴィクトリア水道から、ベルファスト湾まで
+    'belfast': dict(name='ベルファスト', lat0=54.595, lat1=54.705, lon0=-5.945, lon1=-5.720, cell=10, dock_depth=11.0, berth_depth=12.0, berth_reach=250),
 }
 
 UA = 'shipsim-harbor-builder/0.1 (personal ship simulator; one-off download)'
@@ -355,6 +370,20 @@ def build(key, cache):
         near_port = near_port | np.roll(near_port, 1, 0) | np.roll(near_port, -1, 0) | np.roll(near_port, 1, 1) | np.roll(near_port, -1, 1)
     bz = water & near_port
     depth[bz] = np.maximum(depth[bz], H.get('berth_depth', 12.0))
+    # 港ごとに書いた掘った航路（線と幅・深さ）：水の所だけ
+    for ch in H.get('channels', []):
+        r = int(round(ch['width'] / 2 / cell))
+        yy, xx = np.mgrid[-r:r + 1, -r:r + 1]
+        disk = (yy * yy + xx * xx) <= r * r
+        P = [((lon - lon0) / dLon, (lat1 - lat) / dLat) for lat, lon in ch['pts']]
+        for (x0, y0), (x1, y1) in zip(P, P[1:]):
+            L = math.hypot(x1 - x0, y1 - y0)
+            for t in np.arange(0, L + 1, max(1, r / 2)):
+                cx, cy = int(round(x0 + (x1 - x0) * t / max(L, 1e-9))), int(round(y0 + (y1 - y0) * t / max(L, 1e-9)))
+                ys, xs = slice(max(0, cy - r), min(rows, cy + r + 1)), slice(max(0, cx - r), min(cols, cx + r + 1))
+                dk = disk[(ys.start - cy + r):(ys.stop - cy + r), (xs.start - cx + r):(xs.stop - cx + r)]
+                sub = depth[ys, xs]; mm = dk & water[ys, xs]
+                sub[mm] = np.maximum(sub[mm], ch['depth'])
     # 岸壁の前の掘った所を、いちばん近い深い所（EMODnet の航路）まで、幅 250m の水路でつなぐ
     connect_berths(depth, water, bz, (~np.isnan(emod)) & (-emod >= H.get('berth_depth', 12.0) - 1.5), cell, 250, H.get('berth_depth', 12.0))
     depth[water] = np.maximum(depth[water], 1.0)

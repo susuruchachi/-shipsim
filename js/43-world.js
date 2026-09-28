@@ -122,7 +122,7 @@ const REAL_WORLDS = {
     britain: {
         name: 'ブリテン諸島・アイルランド', url: 'data/britain', center: { lat: 54.3, lon: -4.5 }, start: 'サウサンプトン港',
         // 作り込んだ港（data/harbors/<key>：10m おきの地形。OpenStreetMap の海岸線・ドック＋EMODnet の水深）
-        harbors: ['southampton'],
+        harbors: ['southampton', 'liverpool'],
         // 実在の港（おおよその位置。実際の海岸に合わせて数km以内で置き直す）
         ports: [
             // イングランド南岸
@@ -140,7 +140,7 @@ const REAL_WORLDS = {
             ['カークウォール港', 'town', 58.985, -2.960], ['ストーノウェイ港', 'town', 58.207, -6.385], ['ウラプール漁港', 'fishing', 57.895, -5.160],
             ['オーバン港', 'town', 56.415, -5.475], ['ファスレーン軍港', 'naval', 56.065, -4.820], ['グリーノック港', 'city', 55.950, -4.765],
             // アイリッシュ海・ウェールズ・ブリストル海峡
-            ['ベルファスト港', 'city', 54.620, -5.890], ['リヴァプール港', 'city', 53.450, -3.020], ['ホーリーヘッド港', 'town', 53.315, -4.625],
+            ['ベルファスト港', 'city', 54.620, -5.890], ['リヴァプール港', 'city', 53.450, -3.020, [[53.5325, -3.2210]], { at: [53.40454, -2.99848], bearing: 252 }], ['ホーリーヘッド港', 'town', 53.315, -4.625],
             ['ダグラス港', 'town', 54.148, -4.475], ['ミルフォード・ヘイヴン港', 'cargo', 51.705, -5.050], ['ブリストル港', 'cargo', 51.505, -2.715],
             ['カーディフ港', 'town', 51.460, -3.165], ['スウォンジー港', 'town', 51.615, -3.925],
             // アイルランド
@@ -162,6 +162,12 @@ function _rwDetailAt(d, lat, lon) {
     const x0 = Math.min(d.cols - 2, Math.floor(fx)), y0 = Math.min(d.rows - 2, Math.floor(fy));
     const tx = fx - x0, ty = fy - y0, H = d.h, k = y0 * d.cols + x0;
     return ((H[k] * (1 - tx) + H[k + 1] * tx) * (1 - ty) + (H[k + d.cols] * (1 - tx) + H[k + d.cols + 1] * tx) * ty) * 0.1;
+}
+// 作り込んだ港の升目の種類（0 海・1 陸・2 ドックの水・3 桟橋・4 港の敷地）。範囲の外は -1
+function _rwDetailKindAt(d, lat, lon) {
+    const j = Math.round((d.lat1 - lat) / d.dLat), i = Math.round((lon - d.lon0) / d.dLon);
+    if (i < 0 || j < 0 || i >= d.cols || j >= d.rows) return -1;
+    return d.k[j * d.cols + i];
 }
 // その所が作り込んだ港の中なら、その港（と、縁からの升目の数）
 function _rwDetailOf(lat, lon) {
@@ -623,7 +629,8 @@ function _rwDetailRoute(d, st, tgt) {
             if (ii < 0 || jj < 0 || ii >= nx || jj >= ny) continue;
             const kk = jj * nx + ii, dd = dep[kk];
             if (dd < 6) continue;
-            const ng = v + Math.hypot(a, b) * (1 + 200 / (dd * dd)) * (nearShoal[kk] ? 4 : 1);
+            // 大きな船（喫水 10m ほど）が通れる深さ（12.5m）より浅い所は、ずっと通りにくく（掘ってある航路を通る）
+            const ng = v + Math.hypot(a, b) * (1 + 200 / (dd * dd) + (dd < 12.5 ? 8 : 0)) * (nearShoal[kk] ? 4 : 1);
             if (ng < g[kk]) { g[kk] = ng; from[kk] = k; push(kk, ng); }
         }
     }
@@ -632,7 +639,10 @@ function _rwDetailRoute(d, st, tgt) {
     const path = [];
     for (let k = end; k >= 0; k = from[k]) path.push(k);
     path.reverse();
-    // まっすぐにできる所はまっすぐに（線の上と左右 40m を 20m おきに、8m より深いか：大きな船の幅と横ずれの分）
+    // まっすぐにできる所はまっすぐに（線の上と左右 40m を 20m おきに、12m（道すじの浅い所がそれより浅ければ、そこまで）より深いか：
+    // 大きな船の幅と横ずれの分）
+    let deepest = Infinity;
+    for (const k of path) deepest = Math.min(deepest, dep[k]);
     const clear = (k0, k1) => {
         const A = ll(k0 % nx, (k0 / nx) | 0), B = ll(k1 % nx, (k1 / nx) | 0);
         const ey = (B.lat - A.lat) / d.dLat, ex = (B.lon - A.lon) / d.dLon, el = Math.hypot(ex, ey) || 1;
@@ -640,7 +650,7 @@ function _rwDetailRoute(d, st, tgt) {
         const oLat = ex / el * 40 / d.cell * d.dLat, oLon = -ey / el * 40 / d.cell * d.dLon;   // 横 40m
         for (let q = 1; q < n; q++) {
             const u = q / n, la = A.lat + (B.lat - A.lat) * u, lo = A.lon + (B.lon - A.lon) * u;
-            for (const k of [0, -1, 1]) if (!(_rwDetailAt(d, la + oLat * k, lo + oLon * k) < -8)) return false;
+            for (const k of [0, -1, 1]) if (!(_rwDetailAt(d, la + oLat * k, lo + oLon * k) < -Math.min(12, deepest - 0.5))) return false;
         }
         return true;
     };

@@ -11,7 +11,9 @@
 //               細かい地形の深い所をたどる）。サウサンプトンの地形。港は西ドックの岸壁
 // 0.02.000.001  港のそばの細かい地形の網を、水から 100m 以内だけに（三角形 41 万 → 5 万。内陸は粗い網）
 // 0.02.001.000  作り込んだ港に建物（OpenStreetMap の輪郭・高さ）・航路の標識（ブイ・立標・灯火。夜は点滅）・クレーン
-var APP_VERSION = '0.02.001.000';
+// 0.02.002.000  リヴァプールを作り込み（マージー川・ピア・ヘッドの浮き桟橋・ドック・クロスビー水道・クイーンズ水道・建物）。
+//               港ごとの掘った航路（線・幅・深さ）。サウサンプトンの本航路を 13.5m に。港の中の航路は 12.5m より深い所を通る
+var APP_VERSION = '0.02.002.000';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
