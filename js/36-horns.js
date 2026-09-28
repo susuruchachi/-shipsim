@@ -816,6 +816,33 @@ const HORN_SIG_BUTTONS = [
     ['L', 'fog', '━', '霧笛 長音1回', '霧中・航行中'],
     ['LL', 'fog', '━━', '霧笛 長音2回', '霧中・停止中'],
 ];
+// ボタンから開くメニューの置き場所。ふつうはボタンの上に出し、上に入りきらない狭い画面では
+// ボタンの横に画面の上下いっぱいの高さで出す。どちらも入りきらない分はメニューの中でスクロールする
+function placePopupPanel(panel, btn) {
+    const W = window.innerWidth, H = window.innerHeight, M = 8;
+    const vv = window.visualViewport;
+    const top0 = M + (vv ? Math.max(0, vv.offsetTop) : 0);
+    const r = btn.getBoundingClientRect();
+    panel.style.top = ''; panel.style.bottom = '';
+    const want = panel.scrollHeight + 2;            // 中身をすべて出したときの高さ（枠線の分を足す）
+    const above = r.top - 10 - top0;                // ボタンの上に使える高さ
+    const w = panel.offsetWidth;
+    if (above >= Math.min(want, 220)) {
+        panel.style.left = Math.max(M, Math.min(W - w - M, r.left)) + 'px';
+        panel.style.bottom = (H - r.top + 10) + 'px';
+        panel.style.maxHeight = Math.min(want, above) + 'px';
+    } else {
+        // 上が狭い：ボタンの右（入らなければ左）に、画面の上から下まで使って出す
+        let left = r.right + 10;
+        if (left + w > W - M) left = r.left - w - 10;
+        if (left < M) left = Math.max(M, Math.min(W - w - M, r.left));
+        const h = Math.min(want, H - top0 - M);
+        panel.style.left = left + 'px';
+        panel.style.top = Math.max(top0, Math.min(H - M - h, r.bottom - h)) + 'px';   // 下端をボタンにそろえる
+        panel.style.maxHeight = h + 'px';
+    }
+}
+window.placePopupPanel = placePopupPanel;
 function _hornSigSetup() {
     const horn = document.getElementById('btn-horn');
     if (!horn || document.getElementById('btn-horn-sig')) return;
@@ -831,11 +858,7 @@ function _hornSigSetup() {
         HORN_SIG_BUTTONS.map((x, i) => `<button class="hs-btn${x[1] ? ' fog' : ''}" data-i="${i}"><span class="hs-pat">${x[2]}</span><span class="hs-name">${x[3]}</span><span class="hs-mean">${x[4]}</span></button>`).join('') +
         '</div><button class="hs-stop">■ 止める</button>';
     document.body.appendChild(panel);
-    const place = () => {
-        const r = b.getBoundingClientRect();
-        panel.style.left = Math.max(8, Math.min(window.innerWidth - panel.offsetWidth - 8, r.left)) + 'px';
-        panel.style.bottom = Math.max(8, window.innerHeight - r.top + 10) + 'px';
-    };
+    const place = () => placePopupPanel(panel, b);
     const setOpen = (on) => {
         panel.classList.toggle('open', on);
         b.classList.toggle('on', on);

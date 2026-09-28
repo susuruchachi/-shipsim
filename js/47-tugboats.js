@@ -672,11 +672,7 @@ function _tugSetup() {
     const panel = document.createElement('div');
     panel.id = 'tug-panel';
     document.body.appendChild(panel);
-    const place = () => {
-        const r = b.getBoundingClientRect();
-        panel.style.left = Math.max(8, Math.min(window.innerWidth - panel.offsetWidth - 8, r.left)) + 'px';
-        panel.style.bottom = Math.max(8, window.innerHeight - r.top + 10) + 'px';
-    };
+    const place = () => placePopupPanel(panel, b);
     const setOpen = (on) => { panel.classList.toggle('open', on); b.classList.toggle('on', on); if (on) { renderTugPanel(); place(); } };
     b.addEventListener('click', (e) => { e.stopPropagation(); setOpen(!panel.classList.contains('open')); });
     panel.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -693,6 +689,7 @@ function renderTugPanel() {
     const st = (typeof shipGroup !== 'undefined' && shipGroup) ? tugStations() : [];
     const stateLabel = (t) => t.state === 'coming' ? (t.blockedTarget ? '近づけません（岸・浅瀬）' : t.stuck ? '入れません（すき間が狭い）' : '向かっています') : t.state === 'leaving' ? '帰ります' : (t.action === 'standby' ? '待機中' : t.action === 'push' ? '押しています' : '引いています');
     const active = tugs.filter(t => t.state !== 'leaving');
+    const keepScroll = panel.scrollTop;   // 書き換えてもスクロール位置はそのまま
     panel.innerHTML = `<div class="tg-head"><span class="tg-title">タグボート</span>
         <button class="tg-call" onclick="tugCall()" ${active.length >= TUG_MAX ? 'disabled' : ''}>＋ 呼ぶ</button>
         ${active.length ? '<button onclick="tugReleaseAll()">全部帰す</button>' : ''}</div>` +
@@ -711,6 +708,7 @@ function renderTugPanel() {
                 <span class="tg-sep"></span>${t.action === 'pull' ? Object.entries(TUG_DIRS).map(([k, l]) => `<button class="dir${t.dir === k ? ' on' : ''}" onclick="tugSet(${t.id}, 'dir', '${k}')">${l}</button>`).join('') : ''}</div>` : ''}
         </div>`).join('') : '<div class="tg-empty">「＋ 呼ぶ」でタグボートが来ます。持ち場（係船設備の金物・舷側）を選んで、押す・引くを指示します。<br>速さが5ノットを超えると力が弱まり、8ノットでは効きません。</div>');
     if (panel.classList.contains('open') && _tugSetup.place) _tugSetup.place();
+    panel.scrollTop = keepScroll;
 }
 window.renderTugPanel = renderTugPanel;
 document.addEventListener('DOMContentLoaded', () => { setTimeout(_tugSetup, 0); });

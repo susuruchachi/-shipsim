@@ -144,6 +144,7 @@
         body.hud-hidden #btn-horn-sig, body.hud-hidden #horn-sig-panel { display: none !important; }
         #horn-sig-panel {
             position: fixed; z-index: 30; display: none; width: 264px; max-width: calc(100vw - 16px);
+            overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y;
             padding: 8px; border-radius: 10px; box-sizing: border-box;
             background: rgba(8, 20, 40, 0.92); border: 1px solid rgba(0, 255, 204, 0.5);
             box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5); color: #cfe; font-size: 11px;
@@ -804,7 +805,8 @@
 body.menu-open #btn-tug { left: 448px; }
 body.hud-hidden #btn-tug, body.hud-hidden #tug-panel { display: none !important; }
 #tug-panel {
-    position: fixed; z-index: 30; display: none; width: 300px; max-width: calc(100vw - 16px); max-height: 60vh; overflow-y: auto;
+    position: fixed; z-index: 30; display: none; width: 300px; max-width: calc(100vw - 16px); overflow-y: auto;
+    overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y;
     padding: 8px; border-radius: 10px; box-sizing: border-box;
     background: rgba(8, 20, 40, 0.92); border: 1px solid rgba(0, 255, 204, 0.5);
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5); color: #cfe; font-size: 11px;
