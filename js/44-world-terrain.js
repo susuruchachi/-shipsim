@@ -491,7 +491,9 @@ function _trBuildMesh(H, n, half, cx, cz, lowerInside, opts) {
     if (coastLines && opts.quayWalls) { const qw = _trQuayWalls(coastLines, H, n, step, cx, cz, opts.detail); if (qw) m.add(qw); }
     m.receiveShadow = true;
     m.castShadow = false;
-    m.userData.noLightBake = true;
+    m.userData.noLightBake = true; m.userData.noBloom = true;      // 地面は光らない（ブルームに入れない）
+    if (m.children[0]) m.children[0].userData.noBloom = true;
+    if (typeof bloomTargetsDirty === 'function') bloomTargetsDirty();
     return m;
 }
 

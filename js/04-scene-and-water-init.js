@@ -45,6 +45,13 @@ function init() {
     // レンダラー側で対数深度バッファを有効化し、水面用・パーティクル用カスタム
     // シェーダー側にも対応コード（USE_LOGDEPTHBUF分岐）を追加して精度を底上げする。
     renderer = new THREE.WebGLRenderer({ antialias: ENABLE_ANTIALIAS, powerPreference: 'high-performance', logarithmicDepthBuffer: true });
+    // 使っている GPU の名前（設定の「軽量化」に出す。外部 GPU を優先するよう powerPreference で頼んでいる）
+    try {
+        const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
+        window.gpuName = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+        document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('gpu-info'); if (el) el.textContent = window.gpuName || '—'; });
+        const el = document.getElementById('gpu-info'); if (el) el.textContent = window.gpuName || '—';
+    } catch (e) { /* ignore */ }
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, perf.pixelRatio));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;

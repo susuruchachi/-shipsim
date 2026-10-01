@@ -876,7 +876,7 @@ async function autopilotStart(port) {
     route.forEach((w, i) => { if (!w.label) w.label = `変針点 ${i + 1}`; });
     autopilot.route = route; autopilot.leg = 0; autopilot.planning = false; autopilot.active = true;
     autopilot.planDraft = draft; autopilot.draftT = 0;           // この喫水で引いた航路（深くなったら引き直す）
-    if (autopilot.agDest !== port) { autopilot.agDest = port; autopilot.agCount = 0; }
+    if (autopilot.agDest !== port) { autopilot.agDest = port; autopilot.agCount = 0; autopilot.agLog = []; }
     autopilot.legFrom = worldShipLatLon(); autopilot.lastOrder = null; autopilot.overshoot = false;
     autopilot.note = (port.point && autopilot.pointMoved > 0) ? `指定した所は浅い（または陸）ので、${autopilot.pointMoved >= 1000 ? (autopilot.pointMoved / 1000).toFixed(1) + 'km' : autopilot.pointMoved + 'm'} 離れた深い所で止まります` : '';
     _apMsg('');
@@ -1065,7 +1065,12 @@ function _agDirWord(o) {
 }
 function _apAground(dt) {
     if (!autopilot.aground) {
-        autopilot.agCount = (autopilot.agCount || 0) + 1;
+        // 「何度も座礁する」は、同じ辺り（3km 以内）での回数で数える（リヴァプールを出るときの座礁を、
+        // サウサンプトンに着いたときまで数えていて、1 回目の座礁で止まっていた）
+        const ll = worldShipLatLon();
+        autopilot.agLog = (autopilot.agLog || []).filter(e => worldDistance(e.lat, e.lon, ll.lat, ll.lon) < 3000);
+        autopilot.agLog.push({ lat: ll.lat, lon: ll.lon });
+        autopilot.agCount = autopilot.agLog.length;
         autopilot.turnFirst = null;
         if (autopilot.agCount > 4) {
             _apOrder(0);

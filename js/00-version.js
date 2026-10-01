@@ -57,7 +57,9 @@
 //               岸壁の縁の舗装の高さを直す（地形の下に隠れていた）。ブルームの対象を毎フレームたどらない（軽量化）
 // 0.03.009.001  街の建物（作り込んだ港の区画）の壁・屋根が裏返っていて、裏側の面しか見えなかったのを直す。
 //               光らない物（地形・建物・港の施設など）をブルームから外す（昼の地面がにじんで白っぽく光っていた）
-var APP_VERSION = '0.03.009.001';
+// 0.03.009.002  「何度も座礁する」は同じ辺り（3km 以内）の回数で数える（前の港を出るときの座礁を持ち越していた）。
+//               使っている GPU の名前を設定の「軽量化」に出す。地形・建物は作ったときからブルームの外
+var APP_VERSION = '0.03.009.002';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

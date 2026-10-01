@@ -121,6 +121,9 @@ function renderWithBloom() {
 // 黒く塗る対象（noBloom）の一覧。毎フレームシーン全体（陸の建物・地形まで数千）をたどると重いので、
 // 1 秒ごとに作り直し、その間は一覧だけを回す
 const _bloomList = { list: [], frame: 0 };
+// 新しく光らない物を足したら、次のフレームで一覧を作り直す
+function bloomTargetsDirty() { _bloomList.frame = 0; }
+window.bloomTargetsDirty = bloomTargetsDirty;
 function _bloomTargets() {
     if ((_bloomList.frame++ % 60) === 0) {
         const L = [];

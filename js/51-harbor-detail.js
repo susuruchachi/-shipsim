@@ -87,7 +87,8 @@ function _hdBuildTile(d, list, org) {
     if (!_hdBuildTile.mat) _hdBuildTile.mat = noShipLightProbe(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0.0 }));
     const m = new THREE.Mesh(geo, _hdBuildTile.mat);
     m.receiveShadow = true; m.castShadow = false;
-    m.userData.noLightBake = true;
+    m.userData.noLightBake = true; m.userData.noBloom = true;
+    if (typeof bloomTargetsDirty === 'function') bloomTargetsDirty();
     return m;
 }
 
