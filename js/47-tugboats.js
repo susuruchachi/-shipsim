@@ -506,7 +506,9 @@ function _tugCrumbGoal(tg, gx, gz) {
 function updateTugs(t, dt) {
     _tugRecordCrumb();
     // （タグがいない間は船の速さを測らないので、次に呼んだとき古い位置との差で速さが跳ねないよう、測り直す）
-    if (!tugs.length || typeof shipGroup === 'undefined' || !shipGroup) { _tugShip.vSway *= 0.95; _tugShip.yawRate *= 0.95; _tugShip.lastX = null; _tugShip.vx = 0; _tugShip.vz = 0; return; }
+    // （サイドスラスター・アジポッド（58-maneuvering.js）を使っている間は、タグがいなくても横流れ・回頭を計算する）
+    const extra = typeof maneuverActive === 'function' && maneuverActive();
+    if ((!tugs.length && !extra) || typeof shipGroup === 'undefined' || !shipGroup) { _tugShip.vSway *= 0.95; _tugShip.yawRate *= 0.95; _tugShip.lastX = null; _tugShip.vx = 0; _tugShip.vz = 0; return; }
     dt = Math.min(2, Math.max(0, dt || 0));
     if (dt <= 0) return;
     shipGroup.updateMatrixWorld();
@@ -730,6 +732,8 @@ function _tugStep(t, dt, last) {
         }
         if (last) _tugVisual(tg, t, hook, dist);
     }
+    // サイドスラスター・アジポッドの横の力（58-maneuvering.js）
+    if (typeof shipExtraForces === 'function') { const X = shipExtraForces(C); if (X) { Fs += X.Fs; Ff += X.Ff; Mz += X.Mz; } }
     // ── 船への効き目 ──
     if (typeof isDesignMode !== 'undefined' && isDesignMode) return;
     const rho = 1025, Cd = 0.9;

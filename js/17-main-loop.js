@@ -180,7 +180,8 @@ function animate() {
         const rudderLeverArm = Math.abs(physics.rudderOffset.z * physics.scale - physics.cgOffset.z * physics.scale);
         const rudderEffectiveness = 1.0 + rudderLeverArm * 0.02;
         const targetTurnRateRad = -(speedMps / R) * (physics.rudderAngle / maxRudder);
-        const targetTurnRateDeg = targetTurnRateRad * (180.0 / Math.PI);
+        // アジポッドを個別・ジョイスティックで動かしているときは舵が無い（58-maneuvering.js）
+        const targetTurnRateDeg = targetTurnRateRad * (180.0 / Math.PI) * ((typeof maneuverRudderFactor === 'function') ? maneuverRudderFactor() : 1);
 
         if (isDesignMode) {
             physics.turnRate += (0.0 - physics.turnRate) * 3.0 * subDt;
@@ -665,6 +666,7 @@ function animate() {
     // 船の照明の焼き込み（40-light-bake.js）：焼き込みを少しずつ進め、昼夜などの倍率を渡す
     if (typeof updateAutopilot === 'function') updateAutopilot(t, physicsDt);  // 自動航行（49-autopilot.js）
     if (typeof updateHarborAuto === 'function') updateHarborAuto(t, physicsDt);  // タグでの自動離着岸（50-harbor-auto.js）
+    if (typeof updateManeuver === 'function') updateManeuver(t, physicsDt);    // サイドスラスター・アジポッド（58-maneuvering.js）
     if (typeof updateTugs === 'function') updateTugs(t, physicsDt);          // タグボート（47-tugboats.js。物理の早送りに合わせる）
     if (typeof updateMinimap === 'function') updateMinimap(t);               // 小さな地図（48-minimap.js）
     if (typeof updateWorldTerrain === 'function') updateWorldTerrain(t, dt);

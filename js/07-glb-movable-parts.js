@@ -3,6 +3,8 @@ const GLB_PART_PATTERNS = [
     { key: 'screw',  label: '🌀 スクリュー', regex: /screw|propeller|プロペラ|スクリュー/i },
     { key: 'rudder', label: '🕹 舵',          regex: /rudder|舵/i },
     { key: 'paddle', label: '🛞 外輪',         regex: /paddle|wheel|外輪|水車/i },
+    // アジポッドの胴体（向きを変える部品。中のプロペラは別に "Propeller" などの名前で）
+    { key: 'azipod', label: '🧭 アジポッド',   regex: /azipod|azimuth|ポッド/i },
 ];
 
 function createGlbPartLabel(text) {
@@ -164,7 +166,7 @@ function detectGlbMovableParts(model) {
                     baseRot: child.rotation.clone(),
                     invert: false,
                     spin: 0,
-                    spinAxis: 'x',           // 回転軸 x/y/z
+                    spinAxis: pat.key === 'azipod' ? 'y' : 'x',   // 回転軸 x/y/z（アジポッドは上下の軸で向きを変える）
                     disabled: false,         // true の場合、アニメーション対象から除外（誤検出パーツの機能停止用）
                     pivotOffset: new THREE.Vector3(), // 回転軸のオフセット（モデルは動かない）
                     pivotMarker: null,       // 回転軸位置を示すギズモ用マーカー
@@ -234,7 +236,7 @@ function buildGlbPartCard(part) {
             <input type="number" id="pivot-z-${part.id}" class="sp-xyz-input" value="${pv.z.toFixed(3)}" step="0.05"
                 oninput="setGlbPartPivot('${part.id}','z',parseFloat(this.value)||0)">
         </div>
-        <div style="font-size:10px;color:#888;margin-bottom:4px;">${part.key === 'rudder' ? '舵角に連動して回転します。' : '船速に連動して回転します。'}</div>
+        <div style="font-size:10px;color:#888;margin-bottom:4px;">${part.key === 'rudder' ? '舵角に連動して回転します。' : part.key === 'azipod' ? 'ポッドの向きに連動して回転します（いちばん近い機関のポッド）。' : '船速に連動して回転します。'}</div>
         <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
             <button class="sp-add-btn" style="flex:none;" onclick="resetGlbPart('${part.id}')" title="回転・位置も含めて完全に初期状態へ(回転軸はバウンディング中心)">↺ 全リセット</button>
             <button class="sp-add-btn" style="flex:none;" onclick="setGlbPartPivotToCentroid('${part.id}')" title="面積重心。奇数枚のスクリュー等、バウンディング中心だと軸がずれる場合に">⚖️ 重心中心</button>
@@ -248,7 +250,7 @@ function renderGlbPartsList() {
     const rudderList = $('glb-rudder-parts-list');
     if (!propList && !rudderList) return;
 
-    const propParts = glbMovableParts.filter(p => p.key === 'screw' || p.key === 'paddle');
+    const propParts = glbMovableParts.filter(p => p.key === 'screw' || p.key === 'paddle' || p.key === 'azipod');
     const rudderParts = glbMovableParts.filter(p => p.key === 'rudder');
 
     if (propList) {

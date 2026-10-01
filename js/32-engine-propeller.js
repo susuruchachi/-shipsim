@@ -227,12 +227,14 @@ function getPropEmitSources() {
         for (const g of propMeshes) {
             if (!g.userData.isProp) continue;
             const size = g.userData.size || 1;
-            g.updateWorldMatrix(true, false);
+            g.updateWorldMatrix(true, true);
             const src = _psSlot(out.length);
-            src.center.setFromMatrixPosition(g.matrixWorld);
-            src.axisDir.copy(fwd);
+            // アジポッドはプロペラの所から、ポッドの向き（推力の向き）へ
+            const spin = g.userData.spinner;
+            src.center.setFromMatrixPosition(spin ? spin.matrixWorld : g.matrixWorld);
+            if (spin) src.axisDir.set(0, 0, 1).transformDirection(g.matrixWorld); else src.axisDir.copy(fwd);
             src.radius = (paddle ? 0.8 : 0.55) * size * (_psTmp.setFromMatrixScale(g.matrixWorld).x || 1);
-            src.angle = g.rotation.z;
+            src.angle = (spin || g).rotation.z;
             src.handed = 1;
             src.dir = g.userData.dir || 1;
             src.paddle = paddle;

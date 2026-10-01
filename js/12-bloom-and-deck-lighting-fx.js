@@ -804,7 +804,8 @@ function animatePropellers(t, dt) {
             // 機関ごとの回転数（56-engines.js）
             const id = 'prop:' + g.userData.propIndex + (g.userData.isMirror ? ':m' : '');
             const sr = (typeof engineRpmFor === 'function') ? engineRpmFor(id) * Math.max(0.1, physics.maxSpeed || 1) * 1.5 * (1 + (window._propRacingIntensity || 0) * 0.6) : spinRate;
-            g.rotation.z += sr * dir * (dt || 0);   // GLBのスクリューと同じ速さ
+            // （アジポッドはプロペラだけ回す。ポッドの向きは 58-maneuvering.js）
+            (g.userData.spinner || g).rotation.z += sr * dir * (dt || 0);   // GLBのスクリューと同じ速さ
         }
     });
 
@@ -834,6 +835,14 @@ function animatePropellers(t, dt) {
                 const pvRot = pv.clone().applyEuler(obj.rotation);  // 回転後のオフセット
                 obj.position.copy(part.basePos).add(pvBase).sub(pvRot);
 
+            } else if (part.key === 'azipod') {
+                // アジポッドの部品：いちばん近い機関のポッドの向きへ（58-maneuvering.js）。回す軸は既定で y（上下）
+                const az = ((typeof maneuverPodAzForPart === 'function') ? maneuverPodAzForPart(part) : 0) * invert;
+                obj.rotation.copy(part.baseRot);
+                obj.rotation[axis] = part.baseRot[axis] + az;
+                const pvBase = pv.clone().applyEuler(part.baseRot);
+                const pvRot = pv.clone().applyEuler(obj.rotation);
+                obj.position.copy(part.basePos).add(pvBase).sub(pvRot);
             } else if (part.key === 'rudder') {
                 const rudderRad = THREE.MathUtils.degToRad(physics.rudderAngle) * invert;
 

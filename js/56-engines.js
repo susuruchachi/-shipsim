@@ -133,7 +133,10 @@ function engineUpdate(dt, designMode) {
     const now = performance.now();
     for (const E of L) {
         if (E.answerAt > 0 && now >= E.answerAt) { E.answerAt = -1; E.answer = E.order; if (typeof telegraphBell === 'function') telegraphBell(bridgeUI.telegraph, true); _engDrawAll(); }
-        const target = designMode ? 0 : ENG_RPM_OF[_engTargetOrder(E)] || 0;
+        // アジポッドのジョイスティック操船（58-maneuvering.js）では、回転数をそちらで決める
+        const ov = (!designMode && typeof maneuverRpmTarget === 'function') ? maneuverRpmTarget(E) : null;
+        let target = designMode ? 0 : (ov !== null ? ov : ENG_RPM_OF[_engTargetOrder(E)] || 0);
+        if (E.conf && E.conf.astern === false && target < 0) target = 0;
         let r = E.rpm;
         const ap = (v, t, rate) => { const d = t - v, s = rate * dt; return Math.abs(d) <= s ? t : v + Math.sign(d) * s; };
         if (target * r < 0) { r = ap(r, 0, ENG_SPOOL_DOWN); if (r === 0) E.hold = ENG_REVERSE_DELAY; }
@@ -142,13 +145,16 @@ function engineUpdate(dt, designMode) {
         E.rpm = r;
     }
     const w = _engWeights();
-    let S = 0; L.forEach((E, i) => { S += w[i] * E.rpm * Math.abs(E.rpm); });
+    // アジポッドは推力のうち前向きの成分だけが前後の速さに効く（横の成分は 58-maneuvering.js の力）
+    const pc = typeof maneuverPodCos === 'function' ? maneuverPodCos : null;
+    let S = 0; L.forEach((E, i) => { S += w[i] * E.rpm * Math.abs(E.rpm) * (pc ? pc(E) : 1); });
     return Math.sign(S) * Math.sqrt(Math.abs(S));
 }
 window.engineUpdate = engineUpdate;
 // 左右の機関の推力の差で回る速さ[度/秒]（左舷の機関が前進 → 船首は右へ＝heading が減る）
 function engineTwistDeg() {
     const L = engineList(); if (L.length < 2) return 0;
+    if (typeof azipodActive === 'function' && azipodActive()) return 0;     // アジポッドは力で回す（58-maneuvering.js）
     const w = _engWeights();
     let m = 0; L.forEach((E, i) => { m += w[i] * E.rpm * Math.abs(E.rpm) * E.side; });
     const hp = window.hullProfile, len = ((hp && hp.ready) ? hp.halfLen * 2 : 12) * (physics.scale || 1);

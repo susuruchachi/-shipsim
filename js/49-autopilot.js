@@ -1115,6 +1115,7 @@ function _apTurnFirst(dt) {
         const gd = dt * (typeof physicsSpeed !== 'undefined' ? physicsSpeed : 1);
         const rate = Math.max(0.4, Math.min(3, 130 / Math.max(20, apShipLen())));
         if (Math.abs(physics.speed || 0) < 1.5) physics.heading += Math.sign(e) * Math.min(Math.abs(e), rate * gd);
+        if (typeof maneuverAutoVis === 'function') maneuverAutoVis(0, Math.sign(e));      // スラスターの噴き出す水（58-maneuvering.js）
         _apMsg(`サイドスラスターでその場で回頭しています（あと ${Math.round(Math.abs(e))}°）`);
         return true;
     }
@@ -1316,6 +1317,7 @@ function updateAutopilot(t, dt) {
             S.v = Math.min(S.moved < 25 ? 0.6 : 1.6, S.v + 0.08 * d, Math.max(0.15, left * 0.08));
             const step = Math.min(left, S.v * d);
             physics.cgWorldX += S.dx * step; physics.cgWorldZ += S.dz * step; S.moved += step;
+            if (typeof maneuverAutoVis === 'function' && typeof _shipFrame === 'function') { const F = _shipFrame(); maneuverAutoVis(Math.sign(S.dx * F.sx + S.dz * F.sz), 0); }
             physics.speed = 0;
             return;
         }
@@ -1325,6 +1327,7 @@ function updateAutopilot(t, dt) {
             if (Math.abs(e) > 2) {
                 const rate = Math.max(0.4, Math.min(3, 130 / Math.max(20, apShipLen())));
                 physics.heading += Math.sign(e) * Math.min(Math.abs(e), rate * d);
+                if (typeof maneuverAutoVis === 'function') maneuverAutoVis(0, Math.sign(e));
                 _apMsg(`サイドスラスターで港口の方へ回っています（あと ${Math.round(Math.abs(e))}°）`);
                 return;
             }
@@ -1547,6 +1550,7 @@ function worldRebase() {
     if (window._tugCrumbs) for (const c of _tugCrumbs) { c.x += shift.x; c.z += shift.z; }
     if (typeof subTorpShift === 'function') subTorpShift(shift, dH);
     if (typeof navalShift === 'function') navalShift(shift);
+    if (typeof maneuverShift === 'function') maneuverShift(shift, dH);
     if (typeof _tugShip !== 'undefined') { _tugShip.lastX = null; }
     if (typeof worldTerrainModeChanged === 'function') worldTerrainModeChanged(true);
     if (typeof _worldSave === 'function') _worldSave();

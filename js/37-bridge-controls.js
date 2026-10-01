@@ -1048,7 +1048,7 @@ function applyBridgeLayout() {
     //（出ていないボタンの分は詰める。以前はボタンごとに位置を決めていて、隠れたボタンの所が空いた）
     let row = document.getElementById('hud-row');
     if (!row) { row = document.createElement('div'); row.id = 'hud-row'; document.body.appendChild(row); }
-    for (const id of ['btn-horn-sig', 'btn-tug', 'btn-sub']) { const b = document.getElementById(id); if (b && b.parentNode !== row) row.appendChild(b); }
+    for (const id of ['btn-horn-sig', 'btn-tug', 'btn-sub', 'btn-mnv']) { const b = document.getElementById(id); if (b && b.parentNode !== row) row.appendChild(b); }
     row.style.bottom = `calc(${useTg ? S + 41 : 221}px + env(safe-area-inset-bottom))`;
     if (typeof engineLayoutUI === 'function') engineLayoutUI();      // 機関ごとのテレグラフ（56-engines.js）
     _br.dirtyT = _br.dirtyW = true;

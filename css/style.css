@@ -935,3 +935,40 @@ body.menu-open #engine-tgs { left: 300px; }
 #hud-row .control-btn { position: relative; left: auto !important; bottom: auto !important; pointer-events: auto; }
 body.menu-open #hud-row { left: 392px; }
 body.hud-hidden #hud-row { display: none !important; }
+
+/* 操船（58-maneuvering.js）：サイドスラスター・アジポッド */
+#btn-mnv { width: 48px; height: 48px; font-size: 13px; letter-spacing: 1px; }
+#btn-mnv.on { background: rgba(0, 255, 204, 0.35); border-color: #7ee3c8; }
+body.hud-hidden #btn-mnv, body.hud-hidden #mnv-panel { display: none !important; }
+#mnv-panel {
+    position: fixed; z-index: 30; display: none; width: 360px; max-width: calc(100vw - 16px); max-height: calc(100vh - 80px); overflow-y: auto;
+    overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y;
+    padding: 8px; border-radius: 10px; box-sizing: border-box;
+    background: rgba(6, 18, 34, 0.92); border: 1px solid rgba(0, 255, 204, 0.5);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5); color: #cfe; font-size: 11px;
+}
+#mnv-panel.open { display: block; }
+#mnv-panel button { font-family: inherit; color: #e8fff8; background: rgba(0, 255, 204, 0.08); font-size: 11px; border: 1px solid rgba(0, 255, 204, 0.4); border-radius: 6px; padding: 4px 7px; cursor: pointer; touch-action: manipulation; }
+#mnv-panel button.on { background: #1c6b5a; color: #fff; border-color: #7ee3c8; }
+#mnv-panel button:disabled { opacity: 0.35; }
+#mnv-panel .mv-head { margin-bottom: 4px; }
+#mnv-panel .mv-title { color: #00ffcc; font-weight: bold; }
+#mnv-panel .mv-body { display: flex; gap: 8px; align-items: flex-start; }
+#mnv-panel #mnv-diag { flex: none; width: 110px; height: 200px; background: rgba(0, 20, 40, 0.6); border-radius: 8px; }
+#mnv-panel .mv-ctl { flex: 1; min-width: 0; }
+#mnv-panel .mv-sec { color: #00ffcc; font-weight: bold; margin: 2px 0 4px; border-bottom: 1px solid rgba(0, 255, 204, 0.2); }
+#mnv-panel .mv-th { margin-bottom: 5px; }
+#mnv-panel .mv-thn { margin-bottom: 2px; }
+#mnv-panel .mv-val { color: #ffd65a; }
+#mnv-panel .mv-row { display: flex; gap: 3px; flex-wrap: wrap; margin-bottom: 5px; }
+#mnv-panel .mv-note { color: #8ab; font-size: 10px; line-height: 1.4; margin-bottom: 5px; }
+#mnv-panel .mv-dials { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-bottom: 4px; }
+#mnv-panel .mv-dial { text-align: center; font-size: 10px; }
+#mnv-panel .mv-dial canvas { width: 96px; height: 96px; touch-action: none; cursor: pointer; }
+#mnv-panel .mv-joy { display: flex; gap: 6px; align-items: flex-start; margin-bottom: 4px; }
+#mnv-panel #mnv-pad { width: 130px; height: 130px; flex: none; touch-action: none; cursor: grab; }
+#mnv-panel .mv-jcol { display: flex; flex-direction: column; gap: 3px; font-size: 10px; min-width: 0; }
+#mnv-panel .mv-jcol input[type=range] { width: 100%; touch-action: none; }
+#mnv-panel .mv-stat { color: #bde; font-size: 10px; line-height: 1.5; border-top: 1px solid rgba(0, 255, 204, 0.2); padding-top: 4px; }
+#mnv-panel .mv-hold { color: #ffd65a; }
+@media (max-width: 420px) { #mnv-panel .mv-body { flex-direction: column; } #mnv-panel #mnv-diag { align-self: center; } }

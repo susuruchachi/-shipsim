@@ -17,7 +17,7 @@ let currentGizmoMode = 'translate';
 
 function syncSettingsVisibility() {
     const isOpen = $('settings-panel').classList.contains('open');
-    propMeshes.forEach(m => m.visible = isOpen);
+    propMeshes.forEach(m => m.visible = isOpen || !!m.userData.alwaysShow);   // アジポッドはいつも見える
     funnelMeshes3D.forEach(m => m.visible = isOpen);
     if (rudder3DMesh) rudder3DMesh.visible = isOpen;
     glbMovableParts.forEach(p => { if (p.pivotMarker) p.pivotMarker.visible = isOpen; });
@@ -535,7 +535,7 @@ function copyPropulsor(i) {
     renderPropList();
     buildPropMeshes();
 }
-function updatePropulsionType() { disableGizmo(); buildPropMeshes(); }
+function updatePropulsionType() { disableGizmo(); buildPropMeshes(); if (typeof renderManeuverSettings === 'function') renderManeuverSettings(); }
 
 function renderPropList() {
     const list = $('prop-list'); if (!list) return;
@@ -653,20 +653,48 @@ function buildPropMeshes() {
         return g;
     }
 
+    // アジポッド（牽引式：プロペラが前を向いた流線形のポッド）。グループの +z が推力の向きで、
+    // 58-maneuvering.js が rotation.y で向きを変える。プロペラ（spinner）だけが回る。
     function makeAzipod(x, y, z, size) {
         const g = new THREE.Group();
-        const pod = new THREE.Mesh(new THREE.CylinderGeometry(0.18 * size, 0.18 * size, 0.8 * size, 10), mat);
-        pod.rotation.x = Math.PI / 2;
-        g.add(pod);
-        const strut = new THREE.Mesh(new THREE.BoxGeometry(0.12 * size, 0.35 * size, 0.12 * size), mat);
-        strut.position.y = 0.4 * size;
+        const podMat = new THREE.MeshStandardMaterial({ color: 0x5c6670, roughness: 0.45, metalness: 0.6 });
+        const bronze = new THREE.MeshStandardMaterial({ color: 0xb08a4a, roughness: 0.35, metalness: 0.85 });
+        // 胴体：前（プロペラ側）が太く、後ろへ細くなる
+        const prof = [[0, -0.62], [0.06, -0.58], [0.13, -0.45], [0.19, -0.2], [0.21, 0.05], [0.2, 0.25], [0.15, 0.38], [0.09, 0.43], [0, 0.44]]
+            .map(([r, zz]) => new THREE.Vector2(r * size, zz * size));
+        const body = new THREE.Mesh(new THREE.LatheGeometry(prof, 20), podMat);
+        body.rotation.x = Math.PI / 2;                   // 回転体の軸（y）を前後（z）へ
+        g.add(body);
+        // 支柱（船体へつながる翼形の柱）
+        const strut = new THREE.Mesh(new THREE.BoxGeometry(0.07 * size, 0.75 * size, 0.42 * size), podMat);
+        strut.position.set(0, 0.48 * size, -0.02 * size);
         g.add(strut);
-        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.08 * size, 0.08 * size, 0.15 * size, 8), mat);
-        hub.rotation.x = Math.PI / 2;
-        hub.position.z = -0.5 * size;
-        g.add(hub);
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.3 * size, 0.3 * size, 0.06 * size, 24), podMat);
+        cap.position.y = 0.86 * size;                    // 船底の旋回部（ここで向きを変える）
+        g.add(cap);
+        // 下のひれ
+        const fin = new THREE.Mesh(new THREE.BoxGeometry(0.05 * size, 0.3 * size, 0.3 * size), podMat);
+        fin.position.set(0, -0.3 * size, -0.25 * size);
+        g.add(fin);
+        // プロペラ（前向き・5 枚）
+        const spinner = new THREE.Group();
+        spinner.position.z = 0.5 * size;
+        const hub = new THREE.Mesh(new THREE.SphereGeometry(0.1 * size, 12, 8), bronze);
+        hub.scale.z = 1.2;
+        spinner.add(hub);
+        for (let b = 0; b < 5; b++) {
+            const a = (b / 5) * Math.PI * 2;
+            const blade = new THREE.Mesh(new THREE.BoxGeometry(0.16 * size, 0.38 * size, 0.025 * size), bronze);
+            const arm = new THREE.Group(); arm.rotation.z = a;
+            blade.position.y = 0.27 * size; blade.rotation.y = 0.5;   // ピッチ
+            arm.add(blade); spinner.add(arm);
+        }
+        g.add(spinner);
         g.position.set(x, y, z);
         g.userData.isProp = true;
+        g.userData.isPod = true;
+        g.userData.spinner = spinner;
+        g.userData.alwaysShow = true;                    // 船の外に見える本物の部品なので、ふだんも表示する
         return g;
     }
 
