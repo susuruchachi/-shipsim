@@ -1437,7 +1437,7 @@ function _wmShowInfo() {
     // 埠頭が複数：埠頭を選ぶ
     el.innerHTML = `<div class="wp-pname"><i style="background:${T.color}"></i>${G.name}</div>
         <div class="wp-pmeta">埠頭 ${G.ports.length} か所・${worldFmtLatLon(G.lat, G.lon)}　${distOf(G)}</div>
-        <div class="wp-berths">${G.ports.map(p => `<div class="wp-berth"><div class="wp-bname"><i style="background:${PORT_TYPES[p.type].color}"></i>${worldBerthLabel(p)}<span class="wp-btype">${PORT_TYPES[p.type].label}</span></div>
+        <div class="wp-berths">${G.ports.map(p => `<div class="wp-berth"><div class="wp-bname"><i style="background:${PORT_TYPES[p.type].color}"></i>${worldBerthLabel(p)}<span class="wp-btype">${typeof shipTypeSuits === 'function' && shipTypeSuits(p.type) ? '<b class="wp-suit" title="この船に合う埠頭">★</b>' : ''}${PORT_TYPES[p.type].label}</span></div>
             <div class="wp-pbtns">${btns(p)}</div></div>`).join('')}</div>
         <div class="wp-pbtns"><button onclick="_wm.sel=null;_wmShowInfo();worldMapRedraw(true)">閉じる</button></div>`;
 }

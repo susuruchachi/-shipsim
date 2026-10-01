@@ -118,8 +118,20 @@ function renderWithBloom() {
     renderer.autoClear = true;
 }
 
+// 黒く塗る対象（noBloom）の一覧。毎フレームシーン全体（陸の建物・地形まで数千）をたどると重いので、
+// 1 秒ごとに作り直し、その間は一覧だけを回す
+const _bloomList = { list: [], frame: 0 };
+function _bloomTargets() {
+    if ((_bloomList.frame++ % 60) === 0) {
+        const L = [];
+        scene.traverse(o => { if ((o.isMesh || o.isPoints) && o.userData.noBloom) L.push(o); });
+        _bloomList.list = L;
+    }
+    return _bloomList.list;
+}
 function _renderBloomExtract() {
-    scene.traverse(darkenNoBloomObjects);
+    const targets = _bloomTargets();
+    for (const o of targets) darkenNoBloomObjects(o);
 
     // v87: ブルーム抽出パスの間だけ霧の色を黒に差し替える。
     // 理由: 窓明かりなど(hasWindowGlow=trueでnoBloom対象から外れているメッシュ)は
@@ -135,7 +147,7 @@ function _renderBloomExtract() {
     bloomComposer.render();
 
     if (scene.fog && savedFogColorHex !== null) scene.fog.color.setHex(savedFogColorHex);
-    scene.traverse(restoreNoBloomObjects);
+    for (const o of targets) restoreNoBloomObjects(o);
 }
 
 // 今のフレームのシーンの奥行き（ブルーム抽出パスで描いたもの）。無ければ null。

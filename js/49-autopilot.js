@@ -1432,6 +1432,7 @@ function worldRebase() {
     if (window.tugs) for (const tg of tugs) { tg.pos.add(shift); tg.g.position.add(shift); tg.path = null; }
     if (window._tugCrumbs) for (const c of _tugCrumbs) { c.x += shift.x; c.z += shift.z; }
     if (typeof subTorpShift === 'function') subTorpShift(shift, dH);
+    if (typeof navalShift === 'function') navalShift(shift);
     if (typeof _tugShip !== 'undefined') { _tugShip.lastX = null; }
     if (typeof worldTerrainModeChanged === 'function') worldTerrainModeChanged(true);
     if (typeof _worldSave === 'function') _worldSave();

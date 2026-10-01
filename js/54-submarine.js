@@ -9,7 +9,7 @@
 //  ・潜望鏡：設定した位置（模型の座標）から上へ伸ばす。覗くとその頭からの眺め（倍率・照準線付き）。
 //  ・ソナー：パッシブ（タグ・魚雷の方位）とアクティブ（ピン：海底・岸の反響）。測深儀で船底から海底まで。
 //  ・魚雷：艦首から（潜望鏡を覗いていればその向きへ）。岸・海底・タグに当たるか、射程の終わりで爆発。
-const SUB_DEF = { type: 'surface', maxDepth: 300, scope: null, scopeLen: 8, tubes: 6, torpSpeed: 45, torpRange: 9 };
+const SUB_DEF = { type: 'other', maxDepth: 300, scope: null, scopeLen: 8, tubes: 6, torpSpeed: 45, torpRange: 9 };
 const subCfg = Object.assign({}, SUB_DEF);
 const sub = {
     depth: 0, vDepth: 0, cmd: 0, ballast: 0, mode: 'surface', pitch: 0, applied: 0, k: 1, under: false,
@@ -513,10 +513,11 @@ function updateSubmarine(t, dt) {
     _subUpdateTorps(gdt);
     _subUpdateOverlay();
     _subDrawSonar();
+    if (typeof updateNaval === 'function') updateNaval(t, dt);       // 軍艦の主砲・空母の艦載機（55-ship-types.js）
     const p = document.getElementById('sub-panel');
     if (p && p.classList.contains('open')) {
         const now = performance.now();
-        if (!sub._statT || now - sub._statT > 400) { sub._statT = now; _subRenderStatus(); }
+        if (!sub._statT || now - sub._statT > 400) { sub._statT = now; if (isSubmarine()) _subRenderStatus(); else renderSubPanel(); }
     }
 }
 window.updateSubmarine = updateSubmarine;
@@ -524,10 +525,18 @@ window.updateSubmarine = updateSubmarine;
 // ════════════════════════════════════════════════════════════
 //  画面：ボタンとパネル
 // ════════════════════════════════════════════════════════════
+// 装備のある船（潜水艦・軍艦・空母）だけボタンを出す。名前は種類で変える
+function _subHasPanel() { if (isSubmarine()) return true; const T = (typeof shipType === 'function') ? shipType() : null; return !!(T && (T.gun || T.air)); }
 function _subUpdateHudButton() {
     const b = document.getElementById('btn-sub');
-    if (b) b.style.display = isSubmarine() ? '' : 'none';
-    if (!isSubmarine()) { const p = document.getElementById('sub-panel'); if (p) p.classList.remove('open'); if (b) b.classList.remove('on'); }
+    const on = _subHasPanel();
+    if (b) {
+        b.style.display = on ? '' : 'none';
+        const T = (typeof shipType === 'function') ? shipType() : null;
+        b.textContent = isSubmarine() ? '潜水' : (T && T.air ? '航空' : '兵装');
+        b.title = isSubmarine() ? '潜水艦' : (T ? T.label : '');
+    }
+    if (!on) { const p = document.getElementById('sub-panel'); if (p) p.classList.remove('open'); if (b) b.classList.remove('on'); }
 }
 function _subSetup() {
     const tug = document.getElementById('btn-tug') || document.getElementById('btn-horn-sig');
@@ -571,6 +580,12 @@ function _subRenderStatus() {
 function renderSubPanel() {
     const panel = document.getElementById('sub-panel');
     if (!panel) return;
+    // 軍艦・空母は兵装のパネル（55-ship-types.js）
+    if (!isSubmarine()) {
+        if (typeof navalPanelHTML === 'function' && _subHasPanel()) uiSetHTML(panel, navalPanelHTML());
+        if (panel.classList.contains('open') && _subSetup.place) _subSetup.place();
+        return;
+    }
     const pd = subPeriscopeDepth();
     uiSetHTML(panel, `<div class="sb-head"><span class="sb-title">潜水艦</span></div>
         <div id="sub-status" class="sb-status"></div>
@@ -607,12 +622,16 @@ function renderSubSettings() {
     if (!el) return;
     const p = subScopePos(), auto = !subCfg.scope;
     const num = (k, v, step) => `<input type="number" class="sp-num-input" style="width:64px" step="${step}" value="${(+v).toFixed(2)}" onchange="subSetScope('${k}', this.value)">`;
-    el.innerHTML = `<div class="sp-section-title">🌊 艦種</div>
+    const TT = window.SHIP_TYPES || { other: { label: 'その他' }, submarine: { label: '潜水艦' } };
+    const cur = (typeof shipTypeKey === 'function') ? shipTypeKey() : subCfg.type;
+    const T = TT[cur] || {};
+    el.innerHTML = `<div class="sp-section-title">🚢 船の種類</div>
         <div class="sp-row"><span class="sp-label">種類:</span>
             <select onchange="subSetCfg('type', this.value)">
-                <option value="surface"${subCfg.type === 'surface' ? ' selected' : ''}>水上艦（ふつうの船）</option>
-                <option value="submarine"${subCfg.type === 'submarine' ? ' selected' : ''}>潜水艦</option>
+                ${Object.entries(TT).map(([k, t]) => `<option value="${k}"${cur === k ? ' selected' : ''}>${t.icon || ''} ${t.label}</option>`).join('')}
             </select></div>
+        <div style="font-size:10px;color:#888;margin:4px 0 6px;">地図の埠頭の一覧で、この船に合う埠頭に ★ が付きます${T.berth ? `（${T.berth.map(b => (window.PORT_TYPES && PORT_TYPES[b] ? PORT_TYPES[b].label : b)).join('・')}）` : ''}。
+            ${T.gun ? `画面の「${T.air ? '航空' : '兵装'}」ボタンで主砲（${T.gun.cal}mm × ${T.gun.n}・射程 ${T.gun.range}km）を撃てます。` : ''}${T.air ? `艦載機（${T.air.n} 機）の発艦・着艦もできます。` : ''}</div>
         ${isSubmarine() ? `
         <div style="font-size:10px;color:#888;margin:4px 0 6px;">画面の「潜水」ボタンで、潜航・浮上・潜望鏡・ソナー・魚雷を操作します。</div>
         <div class="sp-row"><span class="sp-label">安全潜航深度:</span>

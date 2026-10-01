@@ -917,3 +917,4 @@ body.hud-hidden #btn-sub, body.hud-hidden #sub-panel { display: none !important;
     box-shadow: 0 0 0 0.5px rgba(255,255,255,0.15); }
 #sub-scope .ss-v { position: absolute; left: 50%; top: 50%; width: 1px; height: 40vmin; margin-top: -20vmin; background: rgba(0,0,0,0.75); }
 #sub-scope .ss-info { position: absolute; left: 0; right: 0; bottom: calc(50% - 36vmin); text-align: center; color: #bfe8c8; font: 13px monospace; text-shadow: 0 0 4px #000; }
+.wp-suit { color: #ffd84a; margin-right: 3px; }

@@ -387,9 +387,11 @@ function _trQuayWalls(lines, H, n, step, cx, cz, detail) {
             const hin = Math.max(hAt(mx + nx * 4, mz + nz * 4), hAt(mx + nx * 8, mz + nz * 8));
             const hout = Math.min(hAt(mx - nx * 5, mz - nz * 5), hAt(mx - nx * 9, mz - nz * 9));
             if (!(hin > 0.6 && hout < -1.5)) continue;
+            // 岸壁の上の高さ：線から陸の側 4〜20m の、いちばん高い所（格子の点の間は線の近くで低く出るので）
             const topAt = (x, z) => {
-                const t = Math.max(hAt(x + nx * 3, z + nz * 3), hAt(x + nx * 7, z + nz * 7));
-                return (Number.isFinite(t) ? Math.min(8, Math.max(0.8, t)) : hin) + 0.08;
+                let t = -Infinity;
+                for (let d = 4; d <= 20; d += 4) { const v = hAt(x + nx * d, z + nz * d); if (v > t) t = v; }
+                return (Number.isFinite(t) ? Math.min(8, Math.max(0.8, t)) : hin) + 0.1;
             };
             const ta = topAt(ax, az), tb = topAt(bx, bz);
             const A1 = [ax, ta - drop(ax, az), az], B1 = [bx, tb - drop(bx, bz), bz];
@@ -418,7 +420,15 @@ function _trQuayWalls(lines, H, n, step, cx, cz, detail) {
     geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
-    const mesh = new THREE.Mesh(geo, _trMaterialFine());
+    // 細かい網（地形）より手前に描く（同じ高さの陸と重なっても、縁の舗装が勝つように）
+    if (!_trQuayWalls.mat) {
+        const m = _trMaterialFine().clone();
+        m.onBeforeCompile = _trMaterial().onBeforeCompile; m.customProgramCacheKey = () => 'worldTerrain';
+        m.userData = {}; noShipLightProbe(m);
+        m.polygonOffset = true; m.polygonOffsetFactor = -4; m.polygonOffsetUnits = -8;
+        _trQuayWalls.mat = m;
+    }
+    const mesh = new THREE.Mesh(geo, _trQuayWalls.mat);
     mesh.receiveShadow = true; mesh.userData.noLightBake = true;
     return mesh;
 }
