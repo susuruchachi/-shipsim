@@ -86,7 +86,10 @@
 //               地図の港の情報で、岸壁に付ける舷（自動・左舷付け・右舷付け）を選べる（ここから出航・自動の着岸）。
 //               座礁して動けなくなったタグは、代わりのタグを呼ぶ。メニューを開いたとき機関の一括/独立ボタンもテレグラフと一緒に動く。
 //               作り込んだ港の建物・クレーン・標識の位置を、地形と同じく緯度経度から正しく求める（数 m ずれていた）。
-var APP_VERSION = '0.03.013.000';
+// 0.03.013.001  ドックの岸壁：岸壁に付ける舷の設定に合わせ、逆ならドックの外で船尾をドックへ向けて後ろからまっすぐ入る。
+//               ドックの外で回す所は、回るときに船体が通る所がどこも喫水より深い所を探す（真ん中の線から横へずれた所も）。
+//               ずれた所で回したときは、入口の前の線の上へ寄せてから入る・出る。離岸は今付けている舷のまま計画する。
+var APP_VERSION = '0.03.013.001';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
