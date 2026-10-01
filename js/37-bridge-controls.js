@@ -1044,12 +1044,12 @@ function applyBridgeLayout() {
     // 汽笛ボタンはテレグラフの上へ
     const horn = document.getElementById('btn-horn');
     if (horn) horn.style.bottom = `calc(${useTg ? S + 30 : 210}px + env(safe-area-inset-bottom))`;
-    const sig = document.getElementById('btn-horn-sig');
-    if (sig) sig.style.bottom = `calc(${useTg ? S + 41 : 221}px + env(safe-area-inset-bottom))`;
-    const tugB = document.getElementById('btn-tug');
-    if (tugB) tugB.style.bottom = `calc(${useTg ? S + 41 : 221}px + env(safe-area-inset-bottom))`;
-    const subB = document.getElementById('btn-sub');
-    if (subB) subB.style.bottom = `calc(${useTg ? S + 41 : 221}px + env(safe-area-inset-bottom))`;
+    // 汽笛の右に並ぶ小さなボタン（信号・タグ・潜水／兵装）は 1 列にまとめて並べる
+    //（出ていないボタンの分は詰める。以前はボタンごとに位置を決めていて、隠れたボタンの所が空いた）
+    let row = document.getElementById('hud-row');
+    if (!row) { row = document.createElement('div'); row.id = 'hud-row'; document.body.appendChild(row); }
+    for (const id of ['btn-horn-sig', 'btn-tug', 'btn-sub']) { const b = document.getElementById(id); if (b && b.parentNode !== row) row.appendChild(b); }
+    row.style.bottom = `calc(${useTg ? S + 41 : 221}px + env(safe-area-inset-bottom))`;
     if (typeof engineLayoutUI === 'function') engineLayoutUI();      // 機関ごとのテレグラフ（56-engines.js）
     _br.dirtyT = _br.dirtyW = true;
 }

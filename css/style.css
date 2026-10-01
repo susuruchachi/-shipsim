@@ -929,3 +929,9 @@ body.menu-open #engine-tgs { left: 300px; }
 #engine-tgs canvas { touch-action: none; }
 .ap-tugopt button, #tug-panel .ap-tugopt button { font-size: 10px; padding: 2px 6px; }
 #tug-panel .ap-tugopt { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; width: 100%; margin-top: 4px; }
+
+/* 汽笛の右に並ぶ小さなボタンの列（37-bridge-controls.js の applyBridgeLayout） */
+#hud-row { position: absolute; z-index: 10; left: 112px; display: flex; gap: 8px; align-items: center; pointer-events: none; transition: left 0.3s ease-in-out; }
+#hud-row .control-btn { position: relative; left: auto !important; bottom: auto !important; pointer-events: auto; }
+body.menu-open #hud-row { left: 392px; }
+body.hud-hidden #hud-row { display: none !important; }

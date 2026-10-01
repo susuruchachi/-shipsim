@@ -68,7 +68,9 @@
 //               今いる所から最初の点へまっすぐ行くと岸壁の角にかかるときは、港の中の深い所を通る道すじを足す
 // 0.03.010.002  作り込んだ港で、岸壁の前の低い陸を掘らない（岸の線がでこぼこになり、クレーンが水の上に立っていた）。
 //               岸の線をもっとまっすぐに（小さな段を 9m まで省く）。クレーンは 4 本の脚がすべて陸に載る所だけ
-var APP_VERSION = '0.03.010.002';
+// 0.03.010.003  汽笛の右の小さなボタン（信号・タグ・潜水／兵装）を 1 列にまとめて並べる（隠れたボタンの所を詰める）。
+//               灯りのにじみの隠れ判定に、重い地形の網を入れない（建物・港の施設・タグだけ）
+var APP_VERSION = '0.03.010.003';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

@@ -615,7 +615,8 @@ function _haloDepthPass() {
 
 function _haloOccluders() {
     const roots = [];
-    if (window.terrain) { if (terrain.near) roots.push(terrain.near); if (terrain.fine) roots.push(terrain.fine); for (const [, P] of terrain.ports || []) if (P.group) roots.push(P.group); }
+    // 地形の網は重い（細かい網は 25 万点）ので入れない：灯りのにじみを隠すのは、ほとんど建物と船
+    if (window.terrain) { for (const [, P] of terrain.ports || []) if (P.group) roots.push(P.group); }
     if (typeof hdState !== 'undefined' && hdState.group) roots.push(hdState.group);
     if (typeof lmState !== 'undefined') for (const [, o] of lmState.built) roots.push(o);
     if (window.tugs) for (const t of tugs) if (t.g) roots.push(t.g);
