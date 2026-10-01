@@ -12,6 +12,8 @@ function loadGltfBuffer(buffer, name) {
         const loader = new THREE.GLTFLoader(manager);
         const success = (gltf) => {
             applyGltfEmissiveStrengthExt(gltf.scene, gltf.parser && gltf.parser.json);
+            // テクスチャを読み込み直すとき（42-texture-guard.js）のために、画像 → GLB の中の画像の番号を覚えておく
+            if (typeof texRememberGltf === 'function') texRememberGltf(gltf, isBinary);
             setCustomModel(gltf.scene);
             if (statusText) statusText.innerText = 'Loaded: ' + name;
             window.lastLoadedModelName = name;

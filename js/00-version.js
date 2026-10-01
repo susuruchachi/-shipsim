@@ -82,7 +82,11 @@
 // 0.03.012.002  着岸のもやい綱も、「索・もやい綱を直接かける」を選んでいないビット・ボラードからは岸壁のボラードへ取らない。
 // 0.03.012.003  岸壁にめり込む船を直す：着岸の間隔・タグの持ち場・岸壁との当たりに、喫水線の幅だけでなく
 //               張り出した所（砲郭・スポンソン・フレア）も入れた船体の外形の幅を使う（43-world.js worldHullExtentAt）。
-var APP_VERSION = '0.03.012.003';
+// 0.03.013.000  ⚡ 軽量化タブに「テクスチャを読み込み直す」（真っ黒になったテクスチャを保存してあるモデルから展開し直す）。
+//               地図の港の情報で、岸壁に付ける舷（自動・左舷付け・右舷付け）を選べる（ここから出航・自動の着岸）。
+//               座礁して動けなくなったタグは、代わりのタグを呼ぶ。メニューを開いたとき機関の一括/独立ボタンもテレグラフと一緒に動く。
+//               作り込んだ港の建物・クレーン・標識の位置を、地形と同じく緯度経度から正しく求める（数 m ずれていた）。
+var APP_VERSION = '0.03.013.000';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

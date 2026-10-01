@@ -290,3 +290,95 @@ function syncTextureMaxSizeUI() {
     if (el) el.value = texGuard.setting;
 }
 window.addEventListener('load', syncTextureMaxSizeUI);
+
+// ════════════════════════════════════════════════════════════
+//  テクスチャを読み込み直す（⚡ 軽量化タブのボタン）
+// ════════════════════════════════════════════════════════════
+// メモリが足りないときなどに一部のテクスチャが真っ黒のまま残ることがある。保存してあるモデル
+//（27-model-store.js の IndexedDB、同梱モデルはサーバー）から画像だけをもう一度展開して貼り直し、
+// ほかのテクスチャも GPU へ送り直す。モデル全体は読み込み直さないので、設定はそのまま。
+let _texImgIndex = new WeakMap();      // 画像（ImageBitmap など）→ GLB の images の番号
+function texRememberGltf(gltf, isBinary) {
+    _texImgIndex = new WeakMap();
+    const P = gltf && gltf.parser; if (!P || !P.associations || !isBinary) return;
+    const json = P.json || {};
+    P.associations.forEach((ref, obj) => {
+        if (!obj || !obj.isTexture || !ref || ref.type !== 'textures') return;
+        const T = (json.textures || [])[ref.index]; if (!T) return;
+        let src = T.source;
+        const ext = T.extensions || {};
+        for (const k in ext) if (ext[k] && ext[k].source !== undefined) src = ext[k].source;   // WebP などの拡張
+        if (src !== undefined && obj.image) _texImgIndex.set(obj.image, src);
+    });
+}
+async function _texModelBuffer() {
+    const ref = (typeof getCurrentModelRef === 'function') ? getCurrentModelRef() : null;
+    if (!ref) return null;
+    try {
+        if (ref.embedded) { const r = await fetch(ref.name); return r.ok ? await r.arrayBuffer() : null; }
+        if (!ref.id || typeof modelStoreGet !== 'function') return null;
+        const rec = await modelStoreGet(ref.id);
+        return rec ? await modelRecordBuffer(rec) : null;
+    } catch (e) { return null; }
+}
+async function reloadModelTextures() {
+    const el = document.getElementById('tex-reload-status');
+    const say = (t) => { if (el) el.textContent = t; };
+    if (typeof importedModelGroup === 'undefined' || !importedModelGroup) { say('モデルが読み込まれていません'); return; }
+    // モデルの中のテクスチャを集める（同じ画像を使うものはまとめる）
+    const byImage = new Map();
+    importedModelGroup.traverse(o => {
+        const mats = !o.material ? [] : Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) for (const k in m) {
+            const t = m[k];
+            if (t && t.isTexture && t.image) { if (!byImage.has(t.image)) byImage.set(t.image, new Set()); byImage.get(t.image).add(t); }
+        }
+    });
+    if (!byImage.size) { say('このモデルにはテクスチャがありません'); return; }
+    say(`読み込み直しています…（${byImage.size} 枚）`);
+    const buf = await _texModelBuffer();
+    let redone = 0, resent = 0, failed = 0;
+    let json = null, binStart = 0;
+    if (buf) {
+        try {
+            const dv = new DataView(buf);
+            if (dv.getUint32(0, true) === 0x46546C67) {
+                const jl = dv.getUint32(12, true);
+                json = JSON.parse(new TextDecoder('utf-8').decode(new Uint8Array(buf, 20, jl)));
+                binStart = 20 + jl + 8;
+            }
+        } catch (e) { json = null; }
+    }
+    const cap = json ? _texChooseCap(_texScanGlb(buf)) : _texLimits().edge;
+    const ctx = { cap, stats: _texNewStats(cap) };
+    let n = 0;
+    for (const [img, texs] of byImage) {
+        n++; if (n % 4 === 0) say(`読み込み直しています…（${n}/${byImage.size}）`);
+        const idx = _texImgIndex.get(img);
+        const im = json && idx !== undefined ? (json.images || [])[idx] : null;
+        if (im && im.bufferView !== undefined) {
+            try {
+                const bv = json.bufferViews[im.bufferView];
+                const blob = new Blob([new Uint8Array(buf, binStart + (bv.byteOffset || 0), bv.byteLength)], { type: im.mimeType || 'image/png' });
+                const url = URL.createObjectURL(blob);
+                const t0 = texs.values().next().value;
+                const opts = { imageOrientation: t0 && t0.flipY ? 'flipY' : 'none', premultiplyAlpha: 'none', colorSpaceConversion: 'none' };
+                const bmp = await _texRun(() => _texLoadBitmap(url, opts, ctx));
+                URL.revokeObjectURL(url);
+                for (const t of texs) { t.image = bmp; t.needsUpdate = true; }
+                _texImgIndex.set(bmp, idx);
+                if (img && img.close && img !== bmp) { try { img.close(); } catch (e) { /* */ } }
+                redone++;
+                continue;
+            } catch (e) { failed++; }
+        }
+        // 元の画像が分からないものは、今の画像を GPU へ送り直すだけ
+        for (const t of texs) t.needsUpdate = true;
+        resent++;
+    }
+    if (typeof bloomTargetsDirty === 'function') bloomTargetsDirty();
+    const st = ctx.stats;
+    say(`読み込み直しました：${redone} 枚を展開し直し${resent ? `・${resent} 枚を送り直し` : ''}${st.failed || failed ? `（${st.failed + failed} 枚は読み込めず）` : ''}`);
+}
+window.reloadModelTextures = reloadModelTextures;
+window.texRememberGltf = texRememberGltf;

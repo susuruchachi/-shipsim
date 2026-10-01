@@ -196,9 +196,10 @@ function _engLayoutUI() {
     U.btn.textContent = shipEngines.split ? '機関：独立' : '機関：一括';
     U.btn.classList.toggle('on', !!shipEngines.split);
     U.btn.style.bottom = `calc(${useTg ? S + 6 : 150}px + env(safe-area-inset-bottom))`;
-    // テレグラフの右上（汽笛のボタンと重ならないように）
-    if (!document.body.classList.contains('menu-open')) U.btn.style.left = `calc(${14 + Math.max(90, S - 84)}px + env(safe-area-inset-left))`;
-    else U.btn.style.left = '';
+    // テレグラフの右上（汽笛のボタンと重ならないように）。メニューを開いたときにテレグラフと一緒に
+    // 右へ動くよう、位置は CSS の変数で渡し、動かす分は CSS（body.menu-open）で足す
+    U.btn.style.left = '';
+    U.btn.style.setProperty('--eng-x', `${14 + Math.max(90, S - 84)}px`);
     const split = show && shipEngines.split;
     if (tg) tg.style.visibility = split ? 'hidden' : '';
     U.box.style.display = split ? 'flex' : 'none';

@@ -544,6 +544,13 @@ function _tugStep(t, dt, last) {
         tg.st = st;
         // 目標の位置と向き
         let tx, tz, tyaw, hook = null;
+        if (tg.state === 'leaving' && tg.aground) {
+            // 座礁したタグ：その場で動かず、しばらくしたら（引き出された）ことにして消す
+            tg.agT = (tg.agT || 0) + dt; tg.vel.set(0, 0, 0); tg.force = 0;
+            if (tg.agT > 90) { scene.remove(tg.g); scene.remove(tg.line); tg.line.geometry.dispose(); tugs.splice(i, 1); renderTugPanel(); continue; }
+            if (last) _tugVisual(tg, t, null, 0);
+            continue;
+        }
         if (tg.state === 'leaving') {
             const away = tg.pos.clone().sub(sp).setY(0).normalize();
             tx = tg.pos.x + away.x * 200; tz = tg.pos.z + away.z * 200; tyaw = Math.atan2(away.x, away.z);
@@ -708,6 +715,9 @@ function _tugStep(t, dt, last) {
             nx += F.sx * sgn * worst; nz += F.sz * sgn * worst;
         }
         tg.pos.x = nx; tg.pos.z = nz;
+        // 座礁：浅い所に入り込んだまま、または持ち場へ向かっているのにまったく動けないまま、しばらくたったら
+        // 代わりのタグを呼ぶ（持ち場が岸・浅瀬に塞がれているだけのときは、代わりも入れないので呼ばない）
+        if (tg.state !== 'leaving' && _tugCheckAground(tg, stuckIn, dt)) { _tugReplace(tg); if (last) renderTugPanel(); continue; }
         if (tg.state === 'coming' && dist < (tg.tugNear ? 16 : 4) && Math.abs(dy) < 0.15) { tg.state = 'on'; tg.arrivedAt = t; tg.engaged = true; renderTugPanel(); }
         if (tg.state === 'on' && dist > 25) tg.state = 'coming';
         // 近づけないタグ（持ち場が岸・浅瀬に塞がれている、または 20 秒たっても近づけない：船と岸・船と船のすき間が狭いなど）
@@ -777,6 +787,35 @@ function _tugStep(t, dt, last) {
     // 前後の力：ノットの速さへ
     physics.speed += (Ff / massKg) / 0.514 * dt;
 }
+// ── 座礁したタグと、代わりのタグ ──
+function _tugCheckAground(tg, stuckIn, dt) {
+    if (!tg.mv || Math.hypot(tg.pos.x - tg.mv.x, tg.pos.z - tg.mv.z) > 10) { tg.mv = { x: tg.pos.x, z: tg.pos.z, t: 0 }; return false; }
+    tg.mv.t += dt;
+    if (stuckIn && tg.mv.t > 20) return true;                                                   // 浅い所で 20 秒動けない
+    return tg.state === 'coming' && !tg.blockedTarget && tg.mv.t > 60 && (tg.stallT || 0) > 60;   // 向かう途中で 1 分動けない
+}
+function _tugReplace(tg) {
+    const job = { station: tg.station, action: tg.action, dir: tg.dir, power: tg.power, autoPower: tg.autoPower, awaySide: tg.awaySide };
+    tg.aground = true; tg.state = 'leaving'; tg.action = 'standby'; tg.engaged = false; tg.lineOn = null; tg.force = 0; tg.agT = 0;
+    if (tg.line) tg.line.visible = false;
+    // 同じ持ち場・同じ仕事で、新しいタグを呼ぶ（続けて座礁する所なら、5 分に 2 隻まで）
+    const now = performance.now();
+    _tugReplace.log = (_tugReplace.log || []).filter(q => now - q.t < 300000);
+    if (_tugReplace.log.filter(q => q.st === job.station).length >= 2) return null;
+    _tugReplace.log.push({ st: job.station, t: now });
+    const n = tugCall(job.station);
+    if (!n) return null;
+    n.action = job.action; n.dir = job.dir; n.power = job.power;
+    if (job.autoPower !== undefined) n.autoPower = job.autoPower;
+    if (job.awaySide) n.awaySide = job.awaySide;
+    // 自動の離着岸・付き添い（50-harbor-auto.js）が覚えているタグの番号を付け替える
+    const swap = (arr) => { if (Array.isArray(arr)) { const k = arr.indexOf(tg.id); if (k >= 0) arr[k] = n.id; } };
+    if (typeof harborAuto !== 'undefined') swap(harborAuto.tugIds);
+    if (typeof tugEscort !== 'undefined') { swap(tugEscort.ids); if (tugEscort.held) swap(tugEscort.held.ids); }
+    tg.replacedBy = n.id;
+    return n;
+}
+window.tugReplaceAground = _tugReplace;
 // 見た目（波に乗る・引き索）
 function _tugVisual(tg, t, hook, dist) {
     const oh = (typeof getOceanHeight === 'function') ? getOceanHeight(tg.pos.x, tg.pos.z, t) : 0;
@@ -825,7 +864,7 @@ function renderTugPanel() {
     const panel = document.getElementById('tug-panel');
     if (!panel) return;
     const st = (typeof shipGroup !== 'undefined' && shipGroup) ? tugStations() : [];
-    const stateLabel = (t) => t.state === 'coming' ? (t.blockedTarget ? '近づけません（岸・浅瀬）' : t.stuck ? '入れません（すき間が狭い）' : '向かっています') : t.state === 'leaving' ? '帰ります' : (t.action === 'standby' ? '待機中' : t.action === 'push' ? '押しています' : '引いています');
+    const stateLabel = (t) => t.aground ? (t.replacedBy ? '座礁（代わりのタグを呼びました）' : '座礁') : t.state === 'coming' ? (t.blockedTarget ? '近づけません（岸・浅瀬）' : t.stuck ? '入れません（すき間が狭い）' : '向かっています') : t.state === 'leaving' ? '帰ります' : (t.action === 'standby' ? '待機中' : t.action === 'push' ? '押しています' : '引いています');
     const active = tugs.filter(t => t.state !== 'leaving');
     uiSetHTML(panel, `<div class="tg-head"><span class="tg-title">タグボート</span>
         <button class="tg-call" onclick="tugCall()" ${active.length >= TUG_MAX ? 'disabled' : ''}>＋ 呼ぶ</button>

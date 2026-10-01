@@ -1228,6 +1228,10 @@
             <option value="none">制限なし</option>
           </select>
         </div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+          <button class="sp-add-btn" onclick="reloadModelTextures()">🔄 テクスチャを読み込み直す</button>
+          <span id="tex-reload-status" style="font-size:10px;color:#aef;"></span>
+        </div>
         <div style="font-size:10px;color:#888;">
           大きなテクスチャがたくさんあるモデルは、メモリが足りなくなって船体が真っ黒になることがあります。
           「自動」では、モデルの中の画像の大きさを調べて、この端末に収まるように縮めて読み込みます

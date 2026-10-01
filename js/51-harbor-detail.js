@@ -10,7 +10,30 @@ const hdState = { key: null, frame: '', feat: null, loading: null, tiles: new Ma
 window.hdState = hdState;
 
 function _hdFrameKey(d) { return d.key + '@' + world.ref.lat.toFixed(6) + ',' + world.ref.lon.toFixed(6); }
-function _hdOrigin(d) { return worldUnitToLocal(worldLatLonToUnit(d.lat0, d.lon0)); }
+// 枠の南西の角からの東・北の m（x, y）→ 物理の面の位置。
+// 以前は角の位置に m をそのまま足していたが、物理の面は船の所で地球に接する平面で、角（ドックから
+// 10km 以上離れている）とは北の向きが少しずれる（子午線の収束）。そのため、地形（緯度経度から 1 点ずつ
+// 求める）に比べて建物などが数 m〜10m ほどずれていた。250m 四方の格子の角だけ緯度経度から正しく求め、
+// その間は線形に補間する（ずれは 1cm 未満）
+function _hdOrigin(d) {
+    const o = worldUnitToLocal(worldLatLonToUnit(d.lat0, d.lon0));
+    const mLat = d.cell / d.dLat, mLon = d.cell / d.dLon, G = 250, cache = new Map();
+    const corner = (i, j) => {
+        const k = i * 100003 + j;
+        let q = cache.get(k);
+        if (!q) { q = worldUnitToLocal(worldLatLonToUnit(d.lat0 + j * G / mLat, d.lon0 + i * G / mLon)); cache.set(k, q); }
+        return q;
+    };
+    o.p = (x, y) => {
+        const i = Math.floor(x / G), j = Math.floor(y / G), u = x / G - i, v = y / G - j;
+        const a = corner(i, j), b = corner(i + 1, j), c = corner(i, j + 1), e = corner(i + 1, j + 1);
+        return {
+            x: (a.x * (1 - u) + b.x * u) * (1 - v) + (c.x * (1 - u) + e.x * u) * v,
+            z: (a.z * (1 - u) + b.z * u) * (1 - v) + (c.z * (1 - u) + e.z * u) * v,
+        };
+    };
+    return o;
+}
 
 // 船のまわりにかかる作り込んだ港
 function _hdNearDetail(cx, cz) {
@@ -60,7 +83,7 @@ function _hdBuildTile(d, list, org) {
         const seed = Math.round(ex * 7 + ny * 13);
         const C = _HD_COLORS[kind] || _HD_COLORS[2];
         const wall = _hdPick(C.wall, seed), roof = _hdPick(C.roof, seed + 1);
-        const L = P.map(([x, y]) => [org.x - x, org.z + y]);        // 物理の面（x は西が +）
+        const L = P.map(([x, y]) => { const q = org.p(x, y); return [q.x, q.z]; });   // 物理の面（x は西が +）
         // 壁：辺ごとに 4 点・三角形 2 つ（向きで少し明るさを変える）
         for (let i = 0; i < n; i++) {
             const a = L[i], q = L[(i + 1) % n];
@@ -112,7 +135,7 @@ function _hdLightHex(s) {
 function _hdMark(m, org) {
     const [x, y, st, colour, cat, shape, lc] = m;
     const g = new THREE.Group();
-    g.position.set(org.x - x, 0, org.z + y);
+    { const q = org.p(x, y); g.position.set(q.x, 0, q.z); }
     const col = _hdColourHex(colour);
     const floating = st.startsWith('buoy');
     const add = (geo, mat, px, py, pz) => { const o = new THREE.Mesh(geo, mat); o.position.set(px, py, pz); o.userData.sharedGeo = true; o.castShadow = false; g.add(o); return o; };
@@ -185,7 +208,7 @@ function _hdCrane(d, cr, org) {
         if (_rwDetailAt(d, clat + n / mLat, clon + e / mLon) < 0.3) return null;
     }
     const g = new THREE.Group();
-    g.position.set(org.x - x - sa * shift, _rwDetailAt(d, clat, clon), org.z + y + ca * shift);
+    { const q = org.p(x + sa * shift, y + ca * shift); g.position.set(q.x, _rwDetailAt(d, clat, clon), q.z); }
     g.rotation.y = Math.atan2(-Math.sin(best), Math.cos(best));      // 物理の面：東は −x
     const mat = _hdMat(0xd8742a), dark = _hdMat(0x3a3a3a);
     const box = _hdG('unitBox', () => new THREE.BoxGeometry(1, 1, 1));
@@ -221,7 +244,7 @@ function _hdLandmark(d, L, org) {
     const mLat = d.cell / d.dLat, mLon = d.cell / d.dLon;
     const x = (L.lon - d.lon0) * mLon, y = (L.lat - d.lat0) * mLat;
     const g = new THREE.Group();
-    g.position.set(org.x - x, Math.max(0, _rwDetailAt(d, L.lat, L.lon)), org.z + y);
+    { const q = org.p(x, y); g.position.set(q.x, Math.max(0, _rwDetailAt(d, L.lat, L.lon)), q.z); }
     const br = L.bearing * Math.PI / 180;
     g.rotation.y = Math.atan2(-Math.sin(br), Math.cos(br));            // 物理の面：東は −x。+z が長い方の軸
     const box = _hdG('unitBox', () => new THREE.BoxGeometry(1, 1, 1));

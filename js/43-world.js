@@ -1468,18 +1468,23 @@ function _wmShowInfo() {
         return t;
     };
     const btns = (p) => `${(ll && typeof autopilotStart === 'function') ? `<button onclick="autopilotStart(world.ports.find(q => q.id === '${p.id}'))">🧭 ここへ自動航行</button>` : ''}<button onclick="worldStartAtPort(world.ports.find(q => q.id === '${p.id}')); toggleWorldMap(false);">⚓ ここから出航</button>`;
+    // 岸壁に付ける舷（「ここから出航」で着岸した状態から始めるときと、自動の着岸。50-harbor-auto.js）
+    const sideRow = typeof harborSetSidePref === 'function' ? `<div class="wp-side">岸壁に付ける舷：${[['auto', '自動'], ['port', '左舷付け'], ['starboard', '右舷付け']].map(([k, l]) =>
+        `<button class="${(harborAuto.sidePref || 'auto') === k ? 'on' : ''}" onclick="harborSetSidePref('${k}');_wmShowInfo()">${l}</button>`).join('')}</div>` : '';
     const T = PORT_TYPES[G.type];
     el.style.display = 'block';
     if (G.ports.length === 1) {
         const p = G.ports[0];
         el.innerHTML = `<div class="wp-pname"><i style="background:${PORT_TYPES[p.type].color}"></i>${p.name}</div>
             <div class="wp-pmeta">${PORT_TYPES[p.type].label}・${worldFmtLatLon(p.lat, p.lon)}　${distOf(p)}</div>
+            ${p.type !== 'fishing' ? sideRow : ''}
             <div class="wp-pbtns">${btns(p)}<button onclick="_wm.sel=null;_wmShowInfo();worldMapRedraw(true)">閉じる</button></div>`;
         return;
     }
     // 埠頭が複数：埠頭を選ぶ
     el.innerHTML = `<div class="wp-pname"><i style="background:${T.color}"></i>${G.name}</div>
         <div class="wp-pmeta">埠頭 ${G.ports.length} か所・${worldFmtLatLon(G.lat, G.lon)}　${distOf(G)}</div>
+        ${sideRow}
         <div class="wp-berths">${G.ports.map(p => `<div class="wp-berth"><div class="wp-bname"><i style="background:${PORT_TYPES[p.type].color}"></i>${worldBerthLabel(p)}<span class="wp-btype">${typeof shipTypeSuits === 'function' && shipTypeSuits(p.type) ? '<b class="wp-suit" title="この船に合う埠頭">★</b>' : ''}${PORT_TYPES[p.type].label}</span></div>
             <div class="wp-pbtns">${btns(p)}</div></div>`).join('')}</div>
         <div class="wp-pbtns"><button onclick="_wm.sel=null;_wmShowInfo();worldMapRedraw(true)">閉じる</button></div>`;
