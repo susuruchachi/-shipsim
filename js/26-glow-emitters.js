@@ -620,7 +620,7 @@ function _haloOccluders() {
     if (typeof lmState !== 'undefined') for (const [, o] of lmState.built) roots.push(o);
     if (window.tugs) for (const t of tugs) if (t.g) roots.push(t.g);
     for (const r of roots) r.traverse(o => {
-        if (!o.isMesh || o.layers.isEnabled(HALO_DEPTH_LAYER)) return;
+        if (!o.isMesh || (o.layers.mask & (1 << HALO_DEPTH_LAYER))) return;
         const m = o.material;
         // 透けるもの・光るだけのもの（加算のにじみ・灯り）は隠すものにしない
         if (!m || (m.transparent && (m.opacity < 0.6 || m.blending === THREE.AdditiveBlending))) return;
