@@ -44,6 +44,8 @@ const PORT_TYPES = {
     city:    { label: '港湾都市', suffix: '港',   color: '#ffb36b', size: 3, depth: 18, basin: 640, pier: 10, quay: 720 },
     cargo:   { label: '貨物港',   suffix: '貨物港', color: '#8cc6ff', size: 3, depth: 18, basin: 760, pier: 10, quay: 1050 },
     naval:   { label: '軍港',     suffix: '軍港', color: '#ff7a7a', size: 2, depth: 16, basin: 620, pier: 270, quay: 800 },
+    // 客船ターミナル（現実世界の港の埠頭だけ。形は貨物港と同じ大きさ）
+    passenger: { label: '客船ターミナル', suffix: '港', color: '#e0a8ff', size: 3, depth: 18, basin: 760, pier: 10, quay: 1050 },
 };
 window.PORT_TYPES = PORT_TYPES;
 
@@ -127,14 +129,14 @@ const REAL_WORLDS = {
         ports: [
             // イングランド南岸
             // （5番目：航路が通る所。サウサンプトンは東の口：カルショット沖 → カウズ沖 → スピットヘッド → ナブ）
-            ['サウサンプトン港', 'cargo', 50.895, -1.405, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.9034, -1.4252], bearing: 207 }],
+            ['サウサンプトン港', 'cargo', 50.895, -1.405, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.9034, -1.4252], bearing: 201, quay: 400, group: 'サウサンプトン港', berth: '西ドック（貨物）' }],
             // サウサンプトンのほかの埠頭（東ドック）：オーシャン・ドックは幅 135m ほどの細長いドックなので、
             // ドックの外で向きを合わせてからまっすぐ入り、中で横へ寄せる（dock：入口の真ん中と、入っていく向き）
-            ['サウサンプトン港 オーシャン・ドック（43/44番）', 'cargo', 50.8915, -1.3985, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.89152, -1.39851], bearing: 285, quay: 360, dock: { entrance: [50.89025, -1.40008], inBearing: 15 } }],
-            ['サウサンプトン港 オーシャン・クルーズ・ターミナル（46番）', 'cargo', 50.8922, -1.4002, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.89218, -1.4002], bearing: 105, quay: 360, dock: { entrance: [50.89025, -1.40008], inBearing: 15 } }],
-            ['サウサンプトン港 QEIIターミナル（38/39番）', 'cargo', 50.8848, -1.3964, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.88481, -1.39643], bearing: 249, quay: 400 }],
-            ['サウサンプトン港 シティ・クルーズ・ターミナル（101番）', 'cargo', 50.8999, -1.4146, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.89992, -1.4146], bearing: 201, quay: 500 }],
-            ['サウサンプトン港 メイフラワー・クルーズ・ターミナル（106番）', 'cargo', 50.9047, -1.4290, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.90466, -1.42897], bearing: 201, quay: 500 }],
+            ['サウサンプトン港 オーシャン・ドック（43/44番）', 'passenger', 50.8915, -1.3985, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.89152, -1.39851], bearing: 285, quay: 360, dock: { entrance: [50.89025, -1.40008], inBearing: 15 }, group: 'サウサンプトン港', berth: 'オーシャン・ドック（43/44番）' }],
+            ['サウサンプトン港 オーシャン・クルーズ・ターミナル（46番）', 'passenger', 50.8922, -1.4002, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.89218, -1.4002], bearing: 105, quay: 360, dock: { entrance: [50.89025, -1.40008], inBearing: 15 }, group: 'サウサンプトン港', berth: 'オーシャン・クルーズ・ターミナル（46番）' }],
+            ['サウサンプトン港 QEIIターミナル（38/39番）', 'passenger', 50.8848, -1.3964, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.88481, -1.39643], bearing: 249, quay: 400, group: 'サウサンプトン港', berth: 'QEIIターミナル（38/39番）' }],
+            ['サウサンプトン港 シティ・クルーズ・ターミナル（101番）', 'passenger', 50.8999, -1.4146, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.89992, -1.4146], bearing: 201, quay: 500, group: 'サウサンプトン港', berth: 'シティ・クルーズ・ターミナル（101番）' }],
+            ['サウサンプトン港 メイフラワー・クルーズ・ターミナル（106番）', 'passenger', 50.9047, -1.4290, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.90466, -1.42897], bearing: 201, quay: 500, group: 'サウサンプトン港', berth: 'メイフラワー・クルーズ・ターミナル（106番）' }],
             ['ポーツマス軍港', 'naval', 50.800, -1.110], ['プリマス軍港', 'naval', 50.375, -4.180],
             ['プール港', 'town', 50.705, -1.990], ['ポートランド港', 'town', 50.570, -2.440], ['ファルマス港', 'town', 50.155, -5.055],
             ['ニューリン漁港', 'fishing', 50.102, -5.548], ['ブリクサム漁港', 'fishing', 50.398, -3.510], ['ドーヴァー港', 'city', 51.120, 1.330],
@@ -148,9 +150,14 @@ const REAL_WORLDS = {
             ['カークウォール港', 'town', 58.985, -2.960], ['ストーノウェイ港', 'town', 58.207, -6.385], ['ウラプール漁港', 'fishing', 57.895, -5.160],
             ['オーバン港', 'town', 56.415, -5.475], ['ファスレーン軍港', 'naval', 56.065, -4.820], ['グリーノック港', 'city', 55.950, -4.765, null, { at: [55.95596, -4.76121], bearing: 0, quay: 360 }],
             // クライド川を遡ったグラスゴー：キング・ジョージ5世ドック（幅 115m）。川幅が 250m ほどなので、ドックの前で回せる長さの船だけ
-            ['グラスゴー港 キング・ジョージ5世ドック', 'cargo', 55.868, -4.3514, [[55.9284, -4.4996], [55.9568, -4.7598]], { at: [55.86806, -4.35142], bearing: 265, quay: 360, dock: { entrance: [55.87236, -4.35312], inBearing: 175, turnOut: 110 } }],
+            ['グラスゴー港 キング・ジョージ5世ドック', 'cargo', 55.868, -4.3514, [[55.9284, -4.4996], [55.9568, -4.7598]], { at: [55.86806, -4.35142], bearing: 265, quay: 360, dock: { entrance: [55.87236, -4.35312], inBearing: 175, turnOut: 110 }, group: 'グラスゴー港', berth: 'キング・ジョージ5世ドック' }],
             // アイリッシュ海・ウェールズ・ブリストル海峡
-            ['ベルファスト港', 'city', 54.620, -5.890, [[54.7170, -5.6050]], { at: [54.63449, -5.87459], bearing: 303 }], ['リヴァプール港', 'city', 53.450, -3.020, [[53.5325, -3.2210]], { at: [53.40454, -2.99848], bearing: 252 }], ['ホーリーヘッド港', 'town', 53.315, -4.625],
+            ['ベルファスト港', 'cargo', 54.620, -5.890, [[54.7170, -5.6050]], { at: [54.63449, -5.87459], bearing: 303, group: 'ベルファスト港', berth: 'コンテナ・ターミナル（貨物）' }],
+            ['ベルファスト港 クルーズ・ターミナル', 'passenger', 54.6260, -5.8850, [[54.7170, -5.6050]], { at: [54.62604, -5.88505], bearing: 312, quay: 360, group: 'ベルファスト港', berth: 'クルーズ・ターミナル（スターモント埠頭）' }],
+            // リヴァプール：ピア・ヘッド（浮き桟橋。昔の大西洋航路の客船）・クルーズ・ターミナル・シーフォースの川の埠頭（貨物）
+            ['リヴァプール港', 'passenger', 53.450, -3.020, [[53.5325, -3.2210]], { at: [53.40454, -2.99848], bearing: 252, quay: 300, group: 'リヴァプール港', berth: 'ピア・ヘッド（浮き桟橋）' }],
+            ['リヴァプール港 クルーズ・ターミナル', 'passenger', 53.4072, -2.9990, [[53.5325, -3.2210]], { at: [53.40740, -2.99905], bearing: 250, quay: 300, group: 'リヴァプール港', berth: 'クルーズ・ターミナル（プリンシズ・パレード）' }],
+            ['リヴァプール港 シーフォース', 'cargo', 53.4600, -3.0345, [[53.5325, -3.2210]], { at: [53.46000, -3.03453], bearing: 231, quay: 500, group: 'リヴァプール港', berth: 'シーフォースの川の埠頭（貨物）' }], ['ホーリーヘッド港', 'town', 53.315, -4.625],
             ['ダグラス港', 'town', 54.148, -4.475], ['ミルフォード・ヘイヴン港', 'cargo', 51.705, -5.050], ['ブリストル港', 'cargo', 51.505, -2.715],
             ['カーディフ港', 'town', 51.460, -3.165], ['スウォンジー港', 'town', 51.615, -3.925],
             // アイルランド
@@ -446,7 +453,7 @@ function _rwPlacePort(def, idx) {
     const seedOf = () => { let seed = 7; for (const ch of name) seed = (seed * 31 + ch.charCodeAt(0)) % 1000000007; return seed; };
     if (opt && opt.at && Number.isFinite(opt.bearing)) {
         const [la, lo] = opt.at;
-        return { id: 'r' + idx, type, name, lat: la, lon: lo, u: worldLatLonToUnit(la, lo), real: true, via: via || null, seaBearing: opt.bearing, seed: seedOf(), fixed: true, quay: opt.quay || null, dock: opt.dock || null };
+        return { id: 'r' + idx, type, name, lat: la, lon: lo, u: worldLatLonToUnit(la, lo), real: true, via: via || null, seaBearing: opt.bearing, seed: seedOf(), fixed: true, quay: opt.quay || null, dock: opt.dock || null, group: opt.group || null, berth: opt.berth || null };
     }
     const SR = 6000, STEP = 150;
     let best = null;
@@ -728,6 +735,32 @@ function _rwBuildPorts() {
     return out;
 }
 // 港の一覧を作る（決まった種なので、いつも同じ）
+// 港のまとまり：同じ港の埠頭（opt.group）を 1 つにまとめる。地図には港として 1 つだけ出し、タップで埠頭を選ぶ
+//  { name, lat, lon, type, ports: [埠頭…] }（埠頭が 1 つの港は、その港だけのまとまり）
+function worldPortGroups() {
+    const ports = worldBuildPorts();
+    if (world.portGroups && world.portGroups.src === ports) return world.portGroups.list;
+    const map = new Map(), list = [];
+    for (const p of ports) {
+        const key = p.group || ('#' + p.id);
+        let g = map.get(key);
+        if (!g) { g = { name: p.group || p.name, lat: p.lat, lon: p.lon, type: p.type, ports: [] }; map.set(key, g); list.push(g); }
+        g.ports.push(p);
+    }
+    // 埠頭が複数ある港は、埠頭の真ん中に印を置き、種類はいちばん多いもの（同じなら最初の埠頭）
+    for (const g of list) if (g.ports.length > 1) {
+        g.lat = g.ports.reduce((a, p) => a + p.lat, 0) / g.ports.length;
+        g.lon = g.ports.reduce((a, p) => a + p.lon, 0) / g.ports.length;
+        const cnt = {}; for (const p of g.ports) cnt[p.type] = (cnt[p.type] || 0) + 1;
+        g.type = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0];
+    }
+    world.portGroups = { src: ports, list };
+    return list;
+}
+window.worldPortGroups = worldPortGroups;
+// 埠頭の短い名前（地図の一覧や小さな地図に出す）
+function worldBerthLabel(p) { return p.berth || p.name; }
+window.worldBerthLabel = worldBerthLabel;
 function worldBuildPorts() {
     if (world.ports) return world.ports;
     if (_RW) { world.ports = _rwBuildPorts(); return world.ports; }
@@ -1070,7 +1103,7 @@ function worldStartAtPort(port) {
     const hp = window.hullProfile;
     const halfLen = ((hp && hp.ready) ? hp.halfLen : 6) * (physics.scale || 1) * 1.1 + 10;
     const mouth = T.basin * 0.76;                     // 防波堤の出入り口
-    let off = { fishing: 150, town: 220, city: 360, cargo: 420, naval: 350 }[port.type] || 250;
+    let off = { fishing: 150, town: 220, city: 360, cargo: 420, naval: 350, passenger: 420 }[port.type] || 250;
     // 泊地に収まらない（長すぎる・深すぎる）船は、港の外の、船の端から端まで深さが足りる所へ
     if (need > T.depth + 1 || off - halfLen < T.pier || off + halfLen > mouth) {
         const depthAt = (d) => {
@@ -1359,9 +1392,9 @@ function _wmToScreen(lat, lon, cv) {
 }
 function _wmTap(p) {
     const cv = document.getElementById('wp-canvas');
-    const ports = worldBuildPorts();
+    const groups = worldPortGroups();
     let best = null, bd = 22;
-    for (const q of ports) {
+    for (const q of groups) {
         const s = _wmToScreen(q.lat, q.lon, cv);
         const d = Math.hypot(s.x - p.x, s.y - p.y);
         if (d < bd) { bd = d; best = q; }
@@ -1381,26 +1414,32 @@ function _wmTap(p) {
 function _wmShowInfo() {
     const el = document.getElementById('wp-info');
     if (!el) return;
-    const p = _wm.sel;
-    if (!p && _wm.selPt) { _wmShowPointInfo(el, _wm.selPt); return; }
-    if (!p) { el.style.display = 'none'; return; }
-    const T = PORT_TYPES[p.type];
-    let dist = '';
-    let apBtn = '';
-    if (world.mode === 'world') {
-        const ll = worldShipLatLon();
-        dist = `　今の場所から ${(worldDistance(ll.lat, ll.lon, p.lat, p.lon) / 1852).toFixed(0)} 海里`;
-        if (typeof rhumbCourse === 'function') {
-            const rc = rhumbCourse(ll.lat, ll.lon, p.lat, p.lon);
-            dist += `（航程線の針路 ${Math.round(rc.course).toString().padStart(3, '0')}°・${(rc.dist / 1852).toFixed(0)} 海里）`;
-        }
-        if (typeof autopilotStart === 'function') apBtn = `<button onclick="autopilotStart(world.ports.find(q => q.id === '${p.id}'))">🧭 ここへ自動航行</button>`;
-    }
+    const G = _wm.sel;
+    if (!G && _wm.selPt) { _wmShowPointInfo(el, _wm.selPt); return; }
+    if (!G) { el.style.display = 'none'; return; }
+    const ll = world.mode === 'world' ? worldShipLatLon() : null;
+    const distOf = (p) => {
+        if (!ll) return '';
+        let t = `今の場所から ${(worldDistance(ll.lat, ll.lon, p.lat, p.lon) / 1852).toFixed(0)} 海里`;
+        if (typeof rhumbCourse === 'function') { const rc = rhumbCourse(ll.lat, ll.lon, p.lat, p.lon); t += `（航程線の針路 ${Math.round(rc.course).toString().padStart(3, '0')}°）`; }
+        return t;
+    };
+    const btns = (p) => `${(ll && typeof autopilotStart === 'function') ? `<button onclick="autopilotStart(world.ports.find(q => q.id === '${p.id}'))">🧭 ここへ自動航行</button>` : ''}<button onclick="worldStartAtPort(world.ports.find(q => q.id === '${p.id}')); toggleWorldMap(false);">⚓ ここから出航</button>`;
+    const T = PORT_TYPES[G.type];
     el.style.display = 'block';
-    el.innerHTML = `<div class="wp-pname"><i style="background:${T.color}"></i>${p.name}</div>
-        <div class="wp-pmeta">${T.label}・${worldFmtLatLon(p.lat, p.lon)}${dist}</div>
-        <div class="wp-pbtns">${apBtn}<button onclick="worldStartAtPort(world.ports.find(q => q.id === '${p.id}')); toggleWorldMap(false);">⚓ この港から出航</button>
-        <button onclick="_wm.sel=null;_wmShowInfo();worldMapRedraw(true)">閉じる</button></div>`;
+    if (G.ports.length === 1) {
+        const p = G.ports[0];
+        el.innerHTML = `<div class="wp-pname"><i style="background:${PORT_TYPES[p.type].color}"></i>${p.name}</div>
+            <div class="wp-pmeta">${PORT_TYPES[p.type].label}・${worldFmtLatLon(p.lat, p.lon)}　${distOf(p)}</div>
+            <div class="wp-pbtns">${btns(p)}<button onclick="_wm.sel=null;_wmShowInfo();worldMapRedraw(true)">閉じる</button></div>`;
+        return;
+    }
+    // 埠頭が複数：埠頭を選ぶ
+    el.innerHTML = `<div class="wp-pname"><i style="background:${T.color}"></i>${G.name}</div>
+        <div class="wp-pmeta">埠頭 ${G.ports.length} か所・${worldFmtLatLon(G.lat, G.lon)}　${distOf(G)}</div>
+        <div class="wp-berths">${G.ports.map(p => `<div class="wp-berth"><div class="wp-bname"><i style="background:${PORT_TYPES[p.type].color}"></i>${worldBerthLabel(p)}<span class="wp-btype">${PORT_TYPES[p.type].label}</span></div>
+            <div class="wp-pbtns">${btns(p)}</div></div>`).join('')}</div>
+        <div class="wp-pbtns"><button onclick="_wm.sel=null;_wmShowInfo();worldMapRedraw(true)">閉じる</button></div>`;
 }
 window._wmShowInfo = _wmShowInfo;
 // 選んだ海域の説明（水深・距離・針路）と「ここへ自動航行」
@@ -1539,7 +1578,7 @@ function worldMapRedraw(quick) {
     const lonStart = Math.floor((_wm.cx - W / 2 * dpd) / gridStep) * gridStep;
     for (let lon = lonStart; lon <= _wm.cx + W / 2 * dpd; lon += gridStep) { const x = W / 2 + (lon - _wm.cx) / dpd; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); }
     // 港
-    const ports = world.ports;
+    const ports = world.ports ? worldPortGroups() : null;
     if (ports) {
         g.font = '11px sans-serif'; g.textBaseline = 'middle';
         for (const p of ports) {
@@ -1549,6 +1588,15 @@ function worldMapRedraw(quick) {
             const r = 2.5 + T.size * 1.2 + (p === _wm.sel ? 3 : 0);
             g.fillStyle = T.color; g.strokeStyle = '#0a1932'; g.lineWidth = 1.5;
             g.beginPath(); g.arc(s.x, s.y, r, 0, Math.PI * 2); g.fill(); g.stroke();
+            // 大きく拡大したら、まとまった港の埠頭も小さな点で
+            if (p.ports.length > 1 && _wm.zoom >= 60) {
+                for (const q of p.ports) {
+                    const sq = _wmToScreen(q.lat, q.lon, cv);
+                    g.fillStyle = PORT_TYPES[q.type].color; g.strokeStyle = '#0a1932'; g.lineWidth = 1;
+                    g.beginPath(); g.arc(sq.x, sq.y, 2.5, 0, Math.PI * 2); g.fill(); g.stroke();
+                    if (_wm.zoom >= 200) { g.fillStyle = _wm.chart ? '#16283c' : '#fff'; g.fillText(worldBerthLabel(q), sq.x + 5, sq.y); }
+                }
+            }
             if (_wm.zoom >= 4 || T.size >= 3 || p === _wm.sel) {
                 if (_wm.chart) {
                     g.lineWidth = 3; g.strokeStyle = 'rgba(255,255,255,0.85)'; g.strokeText(p.name, s.x + r + 3, s.y);

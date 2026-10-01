@@ -172,7 +172,7 @@ function _mmDraw() {
             g.fillStyle = Tp.color; g.strokeStyle = '#0a1932'; g.lineWidth = 1;
             g.beginPath(); g.arc(q.x, q.y, 3.5, 0, Math.PI * 2); g.fill(); g.stroke();
             g.save(); g.translate(q.x, q.y); g.rotate(-rot);
-            g.fillStyle = _wm.chart ? '#16283c' : '#fff'; g.fillText(p.name, 6, 0);
+            g.fillStyle = _wm.chart ? '#16283c' : '#fff'; g.fillText(typeof worldBerthLabel === 'function' ? worldBerthLabel(p) : p.name, 6, 0);
             g.restore();
         }
     }

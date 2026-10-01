@@ -792,6 +792,12 @@
         #wp-info .wp-pname { font-weight: bold; font-size: 14px; }
         #wp-info .wp-pmeta { font-size: 11px; color: #a9c4d8; margin: 3px 0 6px; }
         #wp-info .wp-pbtns { display: flex; gap: 6px; flex-wrap: wrap; }
+        /* 埠頭の一覧（同じ港の埠頭をまとめた港をタップしたとき） */
+        #wp-info .wp-berths { max-height: 45vh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; margin: 2px 0 8px; }
+        #wp-info .wp-berth { border-top: 1px solid rgba(255,255,255,0.12); padding: 6px 0; }
+        #wp-info .wp-bname { font-size: 13px; margin-bottom: 4px; }
+        #wp-info .wp-bname i, #wp-info .wp-pname i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+        #wp-info .wp-btype { font-size: 10px; color: #a9c4d8; margin-left: 6px; }
         #wp-status { position: absolute; left: 50%; transform: translateX(-50%); bottom: 44px; font-size: 11px; color: #ffe38a;
             background: rgba(0,0,0,0.45); padding: 3px 8px; border-radius: 4px; pointer-events: none; }
         #wp-status:empty { display: none; }

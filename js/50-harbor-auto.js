@@ -86,12 +86,14 @@ function harborBerthPlan(port, prefHeading) {
         const out = port.dock.turnOut || Math.max(D.HL + 90, 200);
         const T = { x: E.x - ux * out, z: E.z - uz * out };
         // ドックの前（川など）で、この船を回せる広さがあるか（回す所のまわり、船の半分の長さ＋余裕の円が水の上か）
+        // （角の 1〜2 点が浅いくらいは、回しながら少しずらして避けられる。3 点以上かかれば無理）
         const ringOk = (rr) => {
+            let bad = 0;
             for (let k = 0; k < 24; k++) {
                 const a = k / 24 * Math.PI * 2;
-                if (worldSeabedAt(T.x + Math.sin(a) * rr, T.z + Math.cos(a) * rr) > -(worldShipDraft() + 0.5)) return false;
+                if (worldSeabedAt(T.x + Math.sin(a) * rr, T.z + Math.cos(a) * rr) > -(worldShipDraft() * 0.8)) bad++;
             }
-            return true;
+            return bad <= 2;
         };
         if (typeof worldSeabedAt === 'function' && !ringOk(D.HL + 12)) {
             let rMax = 0;

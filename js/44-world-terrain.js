@@ -40,7 +40,7 @@ window.terrain = terrain;
 function _portShape(p) {
     const T = PORT_TYPES[p.type];
     const quayLen = p.quay || T.quay;      // 現実の港は岸壁の長さを決めてあることがある（ドックの中の岸壁など）
-    const apron = { fishing: 45, town: 70, city: 130, cargo: 190, naval: 110 }[p.type];
+    const apron = { fishing: 45, town: 70, city: 130, cargo: 190, naval: 110, passenger: 190 }[p.type];
     const basin = T.basin;
     const loc = worldUnitToLocal(p.u);
     const br = p.seaBearing * Math.PI / 180;
@@ -398,7 +398,9 @@ function _buildPort(S) {
     // （作り込んだ港は、本物の岸壁の土地があるので、縁の帯だけ）
     const apronV = S.detail ? 16 : S.apron;
     addBox(concrete, -apronV / 2 + 4, 0, -3, apronV + 8, 12, S.quayLen);
-    colliders.push([-S.apron - 20, 6, -half, half]);
+    // （作り込んだ港は、本物の岸壁の地形で当たりが取れるので、作り物の岸壁の当たりは置かない。同じ岸沿いの
+    //  別の埠頭の岸壁と少し向きがずれていると、となりの埠頭の船に食い込んでしまう）
+    if (!S.detail) colliders.push([-S.apron - 20, 6, -half, half]);
     // 係船柱（ボラード）：岸壁の縁に 25m おき
     const bollards = [];
     for (let b = -half + 12; b <= half - 12; b += 25) {
