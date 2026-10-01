@@ -35,7 +35,10 @@
 //               客船ターミナルの種類を追加（サウサンプトンの QEII・オーシャン・ドック・クルーズ・ターミナル、リヴァプールの
 //               ピア・ヘッドなど）。リヴァプールにクルーズ・ターミナルとシーフォース（貨物）、ベルファストにクルーズ・ターミナル。
 //               作り込んだ港には作り物の岸壁の当たりを置かない（となりの埠頭の船に食い込んで座礁になった）
-var APP_VERSION = '0.03.002.000';
+// 0.03.003.000  名所の建物・像（緯度・経度で置き、船から 25km 以内で見える。足元の OSM の箱は出さない）：
+//               リヴァプールのロイヤル・リバー・ビルディング（時計塔・丸屋根・リバー・バード）、キュナード・ビルディング、
+//               ポート・オブ・リヴァプール・ビルディング、タイタニック・ベルファスト。将来のアメリカ用に自由の女神像も登録
+var APP_VERSION = '0.03.003.000';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

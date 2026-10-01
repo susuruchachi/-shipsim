@@ -54,6 +54,8 @@ function _hdBuildTile(d, list, org) {
         // 地面の高さ（建物の真ん中）。水の上には建てない
         const g0 = _rwDetailAt(d, d.lat0 + ny / mLat, d.lon0 + ex / mLon);
         if (!(g0 > 0.3)) continue;
+        // 名所（53-landmarks.js で形を作って置く建物）の足元の箱は出さない
+        if (typeof landmarkClears === 'function' && landmarkClears(d.lat0 + ny / mLat, d.lon0 + ex / mLon)) continue;
         const base = g0 - 0.8, top = g0 + H;
         const seed = Math.round(ex * 7 + ny * 13);
         const C = _HD_COLORS[kind] || _HD_COLORS[2];
