@@ -669,6 +669,7 @@ function animate() {
     if (typeof updateMinimap === 'function') updateMinimap(t);               // 小さな地図（48-minimap.js）
     if (typeof updateWorldTerrain === 'function') updateWorldTerrain(t, dt);
     if (typeof updateLandmarks === 'function') updateLandmarks(t);                // 名所の建物・像（53-landmarks.js）
+    if (typeof updateLighthouses === 'function') updateLighthouses(t);            // 実在の灯台の灯り（57-lighthouses.js）
     if (typeof updatePuffs === 'function') updatePuffs(t, dt);                   // タグの排煙・汽笛の蒸気・しぶき（52-puffs.js）
     if (typeof updateSubmarine === 'function') updateSubmarine(t, dt);           // 潜水艦の魚雷・ソナー・潜望鏡（54-submarine.js）
     if (typeof updateLightBake === 'function') updateLightBake(t);

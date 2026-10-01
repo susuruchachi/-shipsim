@@ -233,7 +233,14 @@ function updateLandmarks(t) {
         if (!o.userData.placed || moved || !o.userData.grounded) {
             const loc = worldUnitToLocal(worldLatLonToUnit(L.lat, L.lon));
             // 地面の高さ：港のまわりの細かい地形ができていれば、その高さ（まだなら後でもう一度）
-            const gh = typeof worldSeabedAt === 'function' ? worldSeabedAt(loc.x, loc.z) : 0;
+            let gh = typeof worldSeabedAt === 'function' ? worldSeabedAt(loc.x, loc.z) : 0;
+            // 岬の上の灯台など：緯度・経度が地形の陸から少しずれて海になっていたら、近くの陸（400m 以内）に寄せる
+            if (L.snapLand && gh < 1.5 && typeof worldSeabedAt === 'function' && terrain && (terrain.fine || terrain.near)) {
+                search: for (let r = 20; r <= 400; r += 20) for (let k = 0; k < 16; k++) {
+                    const a = k / 16 * Math.PI * 2, x = loc.x + Math.sin(a) * r, z = loc.z + Math.cos(a) * r, h = worldSeabedAt(x, z);
+                    if (h > 2) { loc.x = x; loc.z = z; gh = h; break search; }
+                }
+            }
             o.position.set(loc.x, Math.max(0, gh), loc.z);
             const br = L.bearing * Math.PI / 180;
             o.rotation.y = Math.atan2(-Math.sin(br), Math.cos(br));     // 物理の面：東は −x。+z を bearing の向きへ
