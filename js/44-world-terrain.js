@@ -214,6 +214,213 @@ function _trNearWater(H, n, i, j, r) {
     for (let b = -r; b <= r; b++) { const jj = j + b; if (jj < 0 || jj >= n) continue; for (let a = -r; a <= r; a++) { const ii = i + a; if (ii >= 0 && ii < n && H[jj * n + ii] < 0.5) return true; } }
     return false;
 }
+// ── 岸の線をなめらかに ──
+// 格子のままだと、陸と水の境目（岸・岸壁・桟橋の縁）が升目の階段のギザギザになる。
+// 境目を格子の辺の上で拾ってつなぎ（マーチング・スクエア。陸を左に見る向き）、小さな段を省いた
+// 折れ線にして（岸壁はまっすぐな線になる）、線の「反対側」にはみ出している点だけを線の上へ横に寄せる
+//（陸の点が水の側に出ていれば引っ込め、水の点が陸の側に入っていれば押し出す）。
+// 陸と水の点が同じ線に乗るので、岸壁は垂直な壁になる。線の内側の点は動かさないので、細い桟橋も潰れない。
+// 見た目だけ（座礁・水深の判定は元の高さのまま）
+function _trSmoothCoast(H, n, P, step) {
+    const N = n * n, isW = (k) => H[k] < 0.5;
+    const nx = new Int32Array(2 * N).fill(-1), pv = new Int32Array(2 * N).fill(-1);
+    const ex = new Float32Array(2 * N), ez = new Float32Array(2 * N);
+    // 辺 e の上の境目の点（e＝2k：k と右隣、e＝2k+1：k と下隣）
+    const edgePt = (e) => {
+        const k = e >> 1, k2 = (e & 1) ? k + n : k + 1;
+        let t = (0.5 - H[k]) / ((H[k2] - H[k]) || 1e-6);
+        t = t < 0.2 ? 0.2 : t > 0.8 ? 0.8 : t;
+        ex[e] = P[k * 3] + (P[k2 * 3] - P[k * 3]) * t; ez[e] = P[k * 3 + 2] + (P[k2 * 3 + 2] - P[k * 3 + 2]) * t;
+        return e;
+    };
+    const landEnd = (e) => { const k = e >> 1, k2 = (e & 1) ? k + n : k + 1; return isW(k) ? k2 : k; };
+    // e1→e2 を、陸が左になる向きでつなぐ
+    const link = (e1, e2) => {
+        const L = landEnd(e1);
+        const s = (ex[e2] - ex[e1]) * (P[L * 3 + 2] - ez[e1]) - (ez[e2] - ez[e1]) * (P[L * 3] - ex[e1]);
+        if (s < 0) { const t = e1; e1 = e2; e2 = t; }
+        if (nx[e1] < 0 && pv[e2] < 0) { nx[e1] = e2; pv[e2] = e1; }
+    };
+    let any = false;
+    for (let j = 0; j < n - 1; j++) for (let i = 0; i < n - 1; i++) {
+        const a = j * n + i, b = a + 1, c = a + n, d = c + 1;
+        const wa = isW(a), wb = isW(b), wc = isW(c), wd = isW(d);
+        if (wa === wb && wa === wc && wa === wd) continue;
+        any = true;
+        const E = [];
+        if (wa !== wb) E.push(edgePt(2 * a));          // 上
+        if (wb !== wd) E.push(edgePt(2 * b + 1));      // 右
+        if (wc !== wd) E.push(edgePt(2 * c));          // 下
+        if (wa !== wc) E.push(edgePt(2 * a + 1));      // 左
+        if (E.length === 2) link(E[0], E[1]);
+        else if (E.length === 4) {
+            // 鞍点：真ん中が a と同じなら、b と c の角を切り取る線に
+            const mid = (H[a] + H[b] + H[c] + H[d]) / 4 < 0.5;
+            if (mid === wa) { link(E[0], E[1]); link(E[2], E[3]); }
+            else { link(E[0], E[3]); link(E[1], E[2]); }
+        }
+    }
+    if (!any) return null;
+    // 鎖にして、小さな段を省く（Douglas-Peucker）
+    const tol = step * 0.6, seen = new Uint8Array(2 * N), segs = [], lines = [];
+    const simplify = (C) => {
+        const m = C.length / 2;
+        if (m < 2) return;
+        const keep = new Uint8Array(m); keep[0] = keep[m - 1] = 1;
+        const st = [0, m - 1];
+        while (st.length) {
+            const b = st.pop(), a = st.pop();
+            const ax = C[a * 2], az = C[a * 2 + 1], dx = C[b * 2] - ax, dz = C[b * 2 + 1] - az, L = Math.hypot(dx, dz) || 1e-6;
+            let best = -1, bd = tol;
+            for (let q = a + 1; q < b; q++) {
+                const dd = Math.abs((C[q * 2] - ax) * dz - (C[q * 2 + 1] - az) * dx) / L;
+                if (dd > bd) { bd = dd; best = q; }
+            }
+            if (best >= 0) { keep[best] = 1; st.push(a, best, best, b); }
+        }
+        let px = null, pz = null;
+        const line = [];
+        for (let q = 0; q < m; q++) if (keep[q]) {
+            if (px !== null) segs.push(px, pz, C[q * 2], C[q * 2 + 1]);
+            px = C[q * 2]; pz = C[q * 2 + 1]; line.push(px, pz);
+        }
+        lines.push(line);
+    };
+    const walk = (e0) => {
+        const C = [];
+        let e = e0;
+        while (e >= 0 && !seen[e]) { seen[e] = 1; C.push(ex[e], ez[e]); e = nx[e]; }
+        if (e === e0) C.push(ex[e0], ez[e0]);        // 輪
+        // 輪は 2 つに分けて省く（始めと終わりが同じ点だと線の向きが決まらない）
+        if (e === e0 && C.length > 8) { const h = (C.length / 4 | 0) * 2; simplify(C.slice(0, h + 2)); simplify(C.slice(h)); }
+        else simplify(C);
+    };
+    for (let e = 0; e < 2 * N; e++) if (nx[e] >= 0 && pv[e] < 0 && !seen[e]) walk(e);    // 端のある鎖
+    for (let e = 0; e < 2 * N; e++) if (nx[e] >= 0 && !seen[e]) walk(e);                  // 輪
+    if (!segs.length) return null;
+    // 線分の索引（2 升ごとの区画）
+    const cs = step * 2, x0 = P[0], z0 = P[2], gw = Math.ceil((n * step) / cs) + 2;
+    const grid = new Map();
+    const S = segs.length / 4;
+    for (let s = 0; s < S; s++) {
+        const x1 = segs[s * 4], z1 = segs[s * 4 + 1], x2 = segs[s * 4 + 2], z2 = segs[s * 4 + 3];
+        const ia = Math.floor((Math.min(x1, x2) - x0) / cs), ib = Math.floor((Math.max(x1, x2) - x0) / cs);
+        const ja = Math.floor((Math.min(z1, z2) - z0) / cs), jb = Math.floor((Math.max(z1, z2) - z0) / cs);
+        for (let jj = ja; jj <= jb; jj++) for (let ii = ia; ii <= ib; ii++) {
+            const key = jj * gw + ii; let A = grid.get(key); if (!A) grid.set(key, A = []); A.push(s);
+        }
+    }
+    // 境目の近くの点を、線の反対側にはみ出していれば線の上へ
+    const R = step * 1.6;
+    for (let j = 1; j < n - 1; j++) for (let i = 1; i < n - 1; i++) {
+        const k = j * n + i, w = isW(k);
+        let edge = false;
+        for (let b = -1; b <= 1 && !edge; b++) for (let a = -1; a <= 1; a++) if (isW(k + b * n + a) !== w) { edge = true; break; }
+        if (!edge) continue;
+        const vx = P[k * 3], vz = P[k * 3 + 2];
+        const gi = Math.floor((vx - x0) / cs), gj = Math.floor((vz - z0) / cs);
+        let bd = R, bx = 0, bz = 0, bs = 0;
+        for (let jj = gj - 1; jj <= gj + 1; jj++) for (let ii = gi - 1; ii <= gi + 1; ii++) {
+            const A = grid.get(jj * gw + ii);
+            if (A) for (const s of A) {
+                const x1 = segs[s * 4], z1 = segs[s * 4 + 1], dx = segs[s * 4 + 2] - x1, dz = segs[s * 4 + 3] - z1;
+                const L2 = dx * dx + dz * dz || 1e-9;
+                let u = ((vx - x1) * dx + (vz - z1) * dz) / L2; u = u < 0 ? 0 : u > 1 ? 1 : u;
+                const qx = x1 + dx * u, qz = z1 + dz * u, dd = Math.hypot(vx - qx, vz - qz);
+                if (dd < bd) { bd = dd; bx = qx; bz = qz; bs = dx * (vz - z1) - dz * (vx - x1); }
+            }
+        }
+        if (bd >= R) continue;
+        // 陸は左（bs > 0）。陸の点が右（水の側）、水の点が左（陸の側）にあれば寄せる。
+        // 陸の点が線のすぐ内側（2m 以内）なら線の上へ（そこから水へ下る斜面が線の外へ出ないように）
+        if ((!w && (bs < 0 || bd < 2)) || (w && bs > 0)) { P[k * 3] = bx; P[k * 3 + 2] = bz; }
+    }
+    return lines;
+}
+// 岸壁・桟橋の縁：なめらかにした岸の線に沿って、垂直な壁と、縁の舗装の帯（陸の側へ 12m）を置く。
+// 格子の網の斜面（升目の分だけ内側に下がっている所）を上から覆い、縁をまっすぐに見せる。
+// 陸がしっかり高く（0.6m 以上）、すぐ外が深い（-1.5m より深い）所だけ（砂浜・自然の岸には置かない）
+function _trQuayWalls(lines, H, n, step, cx, cz, detail) {
+    const x0 = cx - (n - 1) * step / 2, z0 = cz - (n - 1) * step / 2;
+    const hAt = (x, z) => {
+        let fi = (x - x0) / step, fj = (z - z0) / step;
+        if (!(fi >= 0 && fj >= 0 && fi < n - 1 && fj < n - 1)) return NaN;
+        const i = fi | 0, j = fj | 0, u = fi - i, v = fj - j, k = j * n + i;
+        return (H[k] * (1 - u) + H[k + 1] * u) * (1 - v) + (H[k + n] * (1 - u) + H[k + n + 1] * u) * v;
+    };
+    const drop = (x, z) => ((x - cx) * (x - cx) + (z - cz) * (z - cz)) / (2 * WORLD_R);
+    const W = 12, BOT = -8;
+    const pos = [], col = [];
+    const C_WALL_TOP = [0.47, 0.45, 0.41], C_WALL_BOT = [0.20, 0.21, 0.19];
+    const deckCol = (x, z) => {
+        if (detail) {
+            const ll = worldUnitToLatLon(worldLocalToUnit(x, z)), kd = _rwDetailKindAt(detail, ll.lat, ll.lon);
+            if (kd === 4) return [0.52, 0.52, 0.50];
+            if (kd === 3) return [0.60, 0.58, 0.54];
+        }
+        return [0.55, 0.54, 0.50];
+    };
+    const sq = (c) => [c[0] * c[0], c[1] * c[1], c[2] * c[2]];
+    // 三角形（表が want の向きになるよう並びを直す）
+    const tri = (a, b, c, ca, cb, cc, want) => {
+        const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+        const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+        if (nx * want[0] + ny * want[1] + nz * want[2] < 0) { const t = b; b = c; c = t; const tc = cb; cb = cc; cc = tc; }
+        pos.push(...a, ...b, ...c); col.push(...ca, ...cb, ...cc);
+    };
+    const UP = [0, 1, 0];
+    for (const L of lines) {
+        const m = L.length / 2;
+        if (m < 2) continue;
+        // 線の点ごとの、陸の側の向き（前後の線分の左の法線の平均）と岸壁の上の高さ
+        const segN = [];
+        for (let q = 0; q < m - 1; q++) {
+            const dx = L[q * 2 + 2] - L[q * 2], dz = L[q * 2 + 3] - L[q * 2 + 1], l = Math.hypot(dx, dz) || 1e-6;
+            segN.push([-dz / l, dx / l, l]);
+        }
+        for (let q = 0; q < m - 1; q++) {
+            const [nx, nz, len] = segN[q];
+            if (len < 0.5) continue;
+            const ax = L[q * 2], az = L[q * 2 + 1], bx = L[q * 2 + 2], bz = L[q * 2 + 3];
+            const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+            const hin = Math.max(hAt(mx + nx * 4, mz + nz * 4), hAt(mx + nx * 8, mz + nz * 8));
+            const hout = Math.min(hAt(mx - nx * 5, mz - nz * 5), hAt(mx - nx * 9, mz - nz * 9));
+            if (!(hin > 0.6 && hout < -1.5)) continue;
+            const topAt = (x, z) => {
+                const t = Math.max(hAt(x + nx * 3, z + nz * 3), hAt(x + nx * 7, z + nz * 7));
+                return (Number.isFinite(t) ? Math.min(8, Math.max(0.8, t)) : hin) + 0.08;
+            };
+            const ta = topAt(ax, az), tb = topAt(bx, bz);
+            const A1 = [ax, ta - drop(ax, az), az], B1 = [bx, tb - drop(bx, bz), bz];
+            const A0 = [ax, BOT, az], B0 = [bx, BOT, bz];
+            const ct = sq(C_WALL_TOP), cb = sq(C_WALL_BOT);
+            // 壁（水の側を向く）
+            const OUT = [-nx, 0, -nz];
+            tri(A1, A0, B1, ct, cb, ct, OUT); tri(B1, A0, B0, ct, cb, cb, OUT);
+            // 縁の舗装（陸の側へ W）
+            const A2 = [ax + nx * W, ta - drop(ax + nx * W, az + nz * W), az + nz * W], B2 = [bx + nx * W, tb - drop(bx + nx * W, bz + nz * W), bz + nz * W];
+            const cd = sq(deckCol(mx + nx * 5, mz + nz * 5));
+            tri(A1, B1, A2, cd, cd, cd, UP); tri(B1, B2, A2, cd, cd, cd, UP);
+            // 次の線分との角（出っ張った角）のすき間を埋める
+            if (q + 1 < m - 1) {
+                const [nx2, nz2] = segN[q + 1];
+                if (nx * nz2 - nz * nx2 < 0) {      // 右へ曲がる（陸の側が外へ広がる角）
+                    const C2 = [bx + nx2 * W, tb - drop(bx + nx2 * W, bz + nz2 * W), bz + nz2 * W];
+                    tri(B1, C2, B2, cd, cd, cd, UP);
+                }
+            }
+        }
+    }
+    if (!pos.length) return null;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    geo.computeVertexNormals();
+    geo.computeBoundingSphere();
+    const mesh = new THREE.Mesh(geo, _trMaterialFine());
+    mesh.receiveShadow = true; mesh.userData.noLightBake = true;
+    return mesh;
+}
 function _trBuildMesh(H, n, half, cx, cz, lowerInside, opts) {
     const geo = new THREE.BufferGeometry();
     const P = new Float32Array(n * n * 3), Cc = new Float32Array(n * n * 3);
@@ -240,6 +447,8 @@ function _trBuildMesh(H, n, half, cx, cz, lowerInside, opts) {
             }
         }
     }
+    // 岸・岸壁・桟橋の縁のギザギザをなめらかに（細かい網と、近くの網）
+    const coastLines = (opts && opts.smoothCoast) ? _trSmoothCoast(H, n, P, step) : null;
     // 陸を含むマスだけ三角形にする（水面下だけのマスは作らない）。
     // coastOnly（港のそばの細かい網）：水から coastOnly 升以内のマスだけ（内陸は粗い網にまかせて軽く）
     let nearW = null;
@@ -267,6 +476,8 @@ function _trBuildMesh(H, n, half, cx, cz, lowerInside, opts) {
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
     const m = new THREE.Mesh(geo, opts && opts.coastOnly ? _trMaterialFine() : _trMaterial());
+    // 岸壁・桟橋の縁（細かい網だけ）
+    if (coastLines && opts.quayWalls) { const qw = _trQuayWalls(coastLines, H, n, step, cx, cz, opts.detail); if (qw) m.add(qw); }
     m.receiveShadow = true;
     m.castShadow = false;
     m.userData.noLightBake = true;
@@ -277,6 +488,7 @@ function _trDispose(m) {
     if (!m) return;
     if (m.parent) m.parent.remove(m);
     m.geometry.dispose();
+    for (const c of m.children) if (c.geometry) c.geometry.dispose();
 }
 
 // 近くの港の形（手直し用）
@@ -333,12 +545,12 @@ function _trOnHeights(msg) {
         _brkBuild(terrain.nearH);
         _trSeabedTex(terrain.nearH);
         _trDispose(terrain.near);
-        terrain.near = _trBuildMesh(msg.H, TR_NEAR.n, TR_NEAR.half, cx, cz, terrain.fineOn ? { cx, cz, half: TR_FINE.half, waterOnly: true } : null);
+        terrain.near = _trBuildMesh(msg.H, TR_NEAR.n, TR_NEAR.half, cx, cz, terrain.fineOn ? { cx, cz, half: TR_FINE.half, waterOnly: true } : null, { smoothCoast: true });
         if (terrain.near) scene.add(terrain.near);
     } else if (msg.which === 'fine') {
         _trDispose(terrain.fine);
         const ll = worldUnitToLatLon(worldLocalToUnit(cx, cz));
-        terrain.fine = _trBuildMesh(msg.H, TR_FINE.n, TR_FINE.half, cx, cz, null, { coastOnly: 10, detail: _rwDetailOf(ll.lat, ll.lon) || (typeof _hdNearDetail === 'function' ? _hdNearDetail(cx, cz) : null) });
+        terrain.fine = _trBuildMesh(msg.H, TR_FINE.n, TR_FINE.half, cx, cz, null, { coastOnly: 10, smoothCoast: true, quayWalls: true, detail: _rwDetailOf(ll.lat, ll.lon) || (typeof _hdNearDetail === 'function' ? _hdNearDetail(cx, cz) : null) });
         if (terrain.fine) scene.add(terrain.fine);
     } else {
         _trDispose(terrain.far);

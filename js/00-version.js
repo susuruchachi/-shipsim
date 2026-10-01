@@ -46,7 +46,9 @@
 // 0.03.006.000  潜水艦（船体設定「🌊 潜水艦」で艦種を選ぶ）：バラストで潜航・浮上・緊急浮上、潜舵で深さを保つ（海底から 5m は離す）。
 //               深いほど波の揺れが届かない。潜望鏡（上げ下げ・覗く・倍率・照準線）、ソナー（パッシブ・アクティブのピン・測深）、
 //               魚雷（岸・海底・タグに当たるか射程の終わりで爆発、水柱と音）。潜航中は航跡・しぶき・排煙を出さない
-var APP_VERSION = '0.03.006.000';
+// 0.03.007.000  岸・岸壁・桟橋の縁のギザギザ（格子の階段）を直す：岸の線をまっすぐな折れ線にして格子の点を寄せ、
+//               岸壁には垂直な壁と縁の舗装を置く。夜の灯りのにじみが手前の建物・地形を突き抜けて見えたのを直す
+var APP_VERSION = '0.03.007.000';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

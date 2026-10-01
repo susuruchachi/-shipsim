@@ -588,6 +588,9 @@ function _haloDepthPass() {
         _haloDepth.frame = 0;
     }
     if (!_haloDepth.mat) _haloDepth.mat = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide });
+    // 陸の建物・名所・地形・港の施設・タグも、にじみを隠すものとしてレイヤーに入れる
+    //（以前は船だけで、夜に船の灯りのにじみが手前のビルを突き抜けて見えた）
+    if ((_haloDepth.frame % 60) === 0) _haloOccluders();
     if ((_haloDepth.frame++ & 1) === 0) {
         const prevTarget = renderer.getRenderTarget();
         const prevOverride = scene.overrideMaterial;
@@ -610,6 +613,20 @@ function _haloDepthPass() {
     return _haloDepth.rt.depthTexture;
 }
 
+function _haloOccluders() {
+    const roots = [];
+    if (window.terrain) { if (terrain.near) roots.push(terrain.near); if (terrain.fine) roots.push(terrain.fine); for (const [, P] of terrain.ports || []) if (P.group) roots.push(P.group); }
+    if (typeof hdState !== 'undefined' && hdState.group) roots.push(hdState.group);
+    if (typeof lmState !== 'undefined') for (const [, o] of lmState.built) roots.push(o);
+    if (window.tugs) for (const t of tugs) if (t.g) roots.push(t.g);
+    for (const r of roots) r.traverse(o => {
+        if (!o.isMesh || o.layers.isEnabled(HALO_DEPTH_LAYER)) return;
+        const m = o.material;
+        // 透けるもの・光るだけのもの（加算のにじみ・灯り）は隠すものにしない
+        if (!m || (m.transparent && (m.opacity < 0.6 || m.blending === THREE.AdditiveBlending))) return;
+        o.layers.enable(HALO_DEPTH_LAYER);
+    });
+}
 // 毎フレーム（描画の直前）。昼夜・窓の発光の強さ・天候に合わせる。
 function updateGlowHalos() {
     if (!glowHaloPoints) return;
