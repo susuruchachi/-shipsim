@@ -25,7 +25,9 @@
 //               浅い海の色が計算範囲の端で急に変わらないように。クレーンの脚が海へ出ないように。
 //               水深データ（EMODnet）を港の枠を広げたときに取り直す（ありえない深さの所があった）
 // 0.03.000.001  タグどうしが押し合って持ち場に着けず、離岸が止まることがあったのを直す（向かう途中は横へすり抜ける）
-var APP_VERSION = '0.03.000.001';
+// 0.03.000.002  貨物港のガントリークレーンの脚が岸壁の縁より海側に出ていたのを直す。作り込んだ実在の港には、
+//               作り物の倉庫・コンテナ・クレーン・広い岸壁を重ねない（本物の建物・岸壁と大きさが合わず縮尺がおかしく見えた）
+var APP_VERSION = '0.03.000.002';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

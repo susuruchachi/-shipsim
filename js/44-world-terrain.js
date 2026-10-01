@@ -395,7 +395,9 @@ function _buildPort(S) {
     const half = S.quayLen / 2;
 
     // 岸壁（海側の垂直な壁＋上の面）
-    addBox(concrete, -S.apron / 2 + 4, 0, -3, S.apron + 8, 12, S.quayLen);
+    // （作り込んだ港は、本物の岸壁の土地があるので、縁の帯だけ）
+    const apronV = S.detail ? 16 : S.apron;
+    addBox(concrete, -apronV / 2 + 4, 0, -3, apronV + 8, 12, S.quayLen);
     colliders.push([-S.apron - 20, 6, -half, half]);
     // 係船柱（ボラード）：岸壁の縁に 25m おき
     const bollards = [];
@@ -457,8 +459,9 @@ function _buildPort(S) {
             }
         }
     }
-    // 陸の建物
-    const nB = { fishing: 14, town: 40, city: 90, cargo: 18, naval: 16 }[S.type];
+    // 陸の建物（作り込んだ港は、本物の建物・クレーン（51-harbor-detail.js）があるので作らない：
+    //  大きさの決まった作り物を重ねると、本物の岸壁や建物と大きさが合わず、縮尺がおかしく見えた）
+    const nB = S.detail ? 0 : { fishing: 14, town: 40, city: 90, cargo: 18, naval: 16 }[S.type];
     for (let i = 0; i < nB; i++) {
         const a = -S.apron - 15 - r() * (S.type === 'city' ? 420 : 200);
         const b = (r() * 2 - 1) * (half + (S.type === 'city' ? 200 : 60));
@@ -480,7 +483,7 @@ function _buildPort(S) {
         }
     }
     // 貨物港：コンテナの山とガントリークレーン
-    if (S.type === 'cargo') {
+    if (S.type === 'cargo' && !S.detail) {
         const cols = [0xb3352a, 0x2e5d8a, 0x2f7d4a, 0xd98e2b, 0x777777, 0x5b3f8c];
         for (let row = 0; row < 8; row++) for (let k = 0; k < 16; k++) {
             if (r() < 0.2) continue;
@@ -490,10 +493,10 @@ function _buildPort(S) {
         }
         for (let i = 0; i < 6; i++) {
             const b = -half + 90 + i * (S.quayLen - 180) / 5;
-            // 脚4本・梁・海へ張り出すブーム
-            for (const la of [-6, 18]) for (const lb of [-9, 9]) addBox(cranes, la, b + lb, 3 + 22, 1.6, 44, 1.6);
-            addBox(cranes, 6, b, 3 + 45, 30, 3, 20);
-            addBox(cranes, 30, b, 3 + 50, 60, 2.2, 3);
+            // 脚4本（岸壁の上：海側の脚は縁から 3m 内側）・梁・海へ張り出すブーム
+            for (const la of [-33, -3]) for (const lb of [-9, 9]) addBox(cranes, la, b + lb, 3 + 22, 1.6, 44, 1.6);
+            addBox(cranes, -18, b, 3 + 45, 36, 3, 20);
+            addBox(cranes, 10, b, 3 + 50, 80, 2.2, 3);
         }
     }
     if (S.type === 'naval') {
