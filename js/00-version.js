@@ -43,7 +43,10 @@
 //               接舷する舷を選べる（自動・左舷・右舷：タグのメニューと自動航行のパネル）
 // 0.03.005.000  港への進入路の小さなずれ（行き過ぎて折り返す短い寄り道・升目のジグザグ）を、深さを確かめてまっすぐにする。
 //               座礁から抜け出したら、航路の続きへ戻る（進入路の最初からやり直さない）
-var APP_VERSION = '0.03.005.000';
+// 0.03.006.000  潜水艦（船体設定「🌊 潜水艦」で艦種を選ぶ）：バラストで潜航・浮上・緊急浮上、潜舵で深さを保つ（海底から 5m は離す）。
+//               深いほど波の揺れが届かない。潜望鏡（上げ下げ・覗く・倍率・照準線）、ソナー（パッシブ・アクティブのピン・測深）、
+//               魚雷（岸・海底・タグに当たるか射程の終わりで爆発、水柱と音）。潜航中は航跡・しぶき・排煙を出さない
+var APP_VERSION = '0.03.006.000';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

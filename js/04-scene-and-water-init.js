@@ -745,7 +745,8 @@ function createWater() {
     window.updateHullWaterlinePolygon = function(t) {
         const hp = window.hullProfile;
         const shape = hp && hp.shape;
-        if (!hp || !hp.ready || !shape || !shape.ready) {
+        // 潜水艦が船体の上まで潜っていれば、水面に船体の形の穴を開けない（54-submarine.js）
+        if (!hp || !hp.ready || !shape || !shape.ready || (typeof subHullUnder === 'function' && subHullUnder())) {
             waterUniforms.wlPtCount.value = 0;
             waterUniforms.hullBoundRadius.value = 0;
             if (window._hullWaterlineDyn) window._hullWaterlineDyn.ready = false;

@@ -883,7 +883,8 @@ function _trHullScore(x, z, h, off, out) {
         const b = worldSeabedAt(px, pz);
         // 縦揺れ・横揺れでこの点が上下する分（行列の y 行の、横・前後の成分）
         const lx = p.s / scl, lz = p.a / scl;
-        const keelY = sea + M[1] * lx + M[9] * lz - p.d;
+        // 潜水艦は潜っている分だけ深い（54-submarine.js：sub.applied＝深さ＋届かない波の分）
+        const keelY = sea + M[1] * lx + M[9] * lz - p.d - ((window.sub && sub.applied) || 0);
         const c = b - keelY;                             // 正：底（岸壁）が船底より上
         if (c > 0) { score += Math.min(12, c); if (out) out.push(Object.assign({ c }, p)); }
         if (b > 0) hard++;                               // 岸壁・桟橋・陸（水面より上）の中

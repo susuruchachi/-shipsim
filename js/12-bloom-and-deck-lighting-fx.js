@@ -680,7 +680,7 @@ function updateSmokeSettings() {
 
 function animateSmoke(t, dt) {
     if (!globalSmokeGeo) return;
-    const active = smokeSettings.speedLinked ? Math.abs(physics.speed) > 0.3 : true;
+    const active = (smokeSettings.speedLinked ? Math.abs(physics.speed) > 0.3 : true) && !(typeof subSurfaceFxOff === 'function' && subSurfaceFxOff());
     const spd = smokeSettings.speed;
 
     // Wind force

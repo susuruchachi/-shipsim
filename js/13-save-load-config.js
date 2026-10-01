@@ -162,6 +162,8 @@ function collectShipConfig() {
         bridge: (typeof getBridgeConfig === 'function') ? getBridgeConfig() : null,
         // 係船設備（46-mooring.js）
         mooring: (typeof getMooringConfig === 'function') ? getMooringConfig() : null,
+        // 艦種（潜水艦）・潜望鏡・魚雷（54-submarine.js）
+        submarine: (typeof getSubmarineConfig === 'function') ? getSubmarineConfig() : null,
         // 位置・向き・月齢
         shipPos: { x: physics.cgWorldX, z: physics.cgWorldZ, heading: physics.heading },
         dayProgress: physics.dayProgress,
@@ -363,6 +365,7 @@ function applyShipConfig(cfg) {
     if (typeof applyShipSoundConfig === 'function') applyShipSoundConfig(cfg.sound || null);
     if (typeof applyBridgeConfig === 'function') applyBridgeConfig(cfg.bridge || null);
     if (typeof applyMooringConfig === 'function') applyMooringConfig(cfg.mooring || null);
+    if (typeof applySubmarineConfig === 'function') applySubmarineConfig(cfg.submarine || null);
     // ── 天候（24-weather.js）──────────────────────────────────────────
     // 天候がONだと風・波はそちらが毎フレーム上書きするので、この設定が
     // 保存していた風速・波の値は効かなくなる。天候機能より前に保存された

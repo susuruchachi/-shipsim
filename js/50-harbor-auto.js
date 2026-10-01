@@ -315,6 +315,8 @@ Object.assign(window, { tugEscortStart, tugEscortStop, tugEscortReady, tugEscort
 function _haMsg(s) { harborAuto.msg = s; if (typeof renderTugPanel === 'function') renderTugPanel(); if (typeof renderAutopilotPanel === 'function') renderAutopilotPanel(); }
 function harborAutoStart(mode, plan, then) {
     if (!plan || !plan.ok) { _haMsg(plan ? plan.why : '港の近くではありません'); return false; }
+    // 潜水艦（54-submarine.js）は潜ったままでは離着岸しない
+    if (window.sub && typeof isSubmarine === 'function' && isSubmarine() && (sub.depth > 1 || sub.mode === 'dive')) { _haMsg('潜航中は離着岸できません。浮上してからにしてください'); return false; }
     if (typeof autopilot !== 'undefined' && autopilot.active) autopilotStop('', true);
     Object.assign(harborAuto, { mode, plan, then: then || null, phase: 'tugs', t: 0, phaseT: 0, lastOrderT: -99, tugIds: [], resume: null, holdH: null, turning: false });
     _haClearLines();

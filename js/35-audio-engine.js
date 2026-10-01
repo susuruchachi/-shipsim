@@ -589,7 +589,7 @@ function _audioUpdateEnv(t, dt) {
         E.sternEm.update(audioShipPoint(0, 0, -half * 0.95, audio._tmpB || (audio._tmpB = new THREE.Vector3())));
         E.sternGain.gain.setTargetAtTime(0.3 * rpm * (0.5 + 0.5 * s) + 0.15 * Math.pow(s, 1.5), now, 0.3);
         // 大波がぶつかる音（船首・船尾が波に叩きつけられた・大きな波が舷側に当たる）
-        _audioWaveImpacts(t, half);
+        if (!(typeof subSurfaceFxOff === 'function' && subSurfaceFxOff())) _audioWaveImpacts(t, half);   // 潜航中は鳴らさない
     }
 
     // ── 雨 ──

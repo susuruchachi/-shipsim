@@ -1048,6 +1048,8 @@ function applyBridgeLayout() {
     if (sig) sig.style.bottom = `calc(${useTg ? S + 41 : 221}px + env(safe-area-inset-bottom))`;
     const tugB = document.getElementById('btn-tug');
     if (tugB) tugB.style.bottom = `calc(${useTg ? S + 41 : 221}px + env(safe-area-inset-bottom))`;
+    const subB = document.getElementById('btn-sub');
+    if (subB) subB.style.bottom = `calc(${useTg ? S + 41 : 221}px + env(safe-area-inset-bottom))`;
     _br.dirtyT = _br.dirtyW = true;
 }
 window.applyBridgeLayout = applyBridgeLayout;

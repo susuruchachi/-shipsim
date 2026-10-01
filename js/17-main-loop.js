@@ -127,6 +127,8 @@ function animate() {
 
     let rotY = (physics.heading * Math.PI) / 180;
 
+    // 潜水艦（54-submarine.js）：深さの分だけ下げて描いていた高さを、水上の船としての高さへ戻してから計算する
+    if (typeof subPreStep === 'function') subPreStep();
     for (let _sub = 0; _sub < numSubsteps; _sub++) {
         // --- 舵 ---
         if (!isDesignMode) {
@@ -529,6 +531,8 @@ function animate() {
             physics.roll    = THREE.MathUtils.clamp(physics.roll, -0.78, 0.78);
         }
     }
+    // 潜水艦：潜航・浮上の上下を計算し、深さの分だけ下げる（深いほど波の上下も届かない）
+    if (typeof subPostStep === 'function') subPostStep(t, physicsDt, isDesignMode);
 
     sanitizePhysics();
     
@@ -593,7 +597,9 @@ function animate() {
     // v121: さらに長持ちさせたいとの要望で0.24s→0.4sに拡大。
     // 32枠のカバー時間は約7.7s→約12.8sに伸びる（dt>15.0の上限にはまだ余裕がある）。
     if (t - window.lastHistoryTime > 0.4) {
-        shipHistory.push({ x: physics.cgWorldX, z: physics.cgWorldZ, t, speed: physics.speed, headingRad: rotY, turnRate: physics.turnRate });
+        // 潜航中は水面に引き波を立てない
+        const _wkSpd = (typeof subSurfaceFxOff === 'function' && subSurfaceFxOff()) ? 0 : physics.speed;
+        shipHistory.push({ x: physics.cgWorldX, z: physics.cgWorldZ, t, speed: _wkSpd, headingRad: rotY, turnRate: physics.turnRate });
         window.lastHistoryTime = t;
         if (shipHistory.length > perf.historyMax) shipHistory.shift();
     }
@@ -608,14 +614,17 @@ function animate() {
     animatePropellers(t, dt);
     animateBubbles(t, dt);
     animateWakeParticles(t, dt);
-    if (typeof emitHullWakeParticles === 'function') emitHullWakeParticles(t, dt);
+    if (typeof emitHullWakeParticles === 'function' && !(typeof subSurfaceFxOff === 'function' && subSurfaceFxOff())) emitHullWakeParticles(t, dt);
     updateNavLightsVisibility();
     updateDeckLightPool();
     updateFunnelUplights();
 
     // 座礁して乗り上げているときの傾き（44-world-terrain.js の _trGroundAttitude）を描く姿勢に足す
     const gAtt = (window.world && world.mode === 'world') ? 1 : 0;
-    const finalEuler = new THREE.Euler(physics.pitch + gAtt * (physics.groundPitch || 0), rotY, physics.roll + gAtt * (physics.groundRoll || 0), 'YXZ');
+    // 潜水艦（54-submarine.js）：潜っているほど波の揺れが小さく、潜航・浮上で艦首が上下する
+    const _sa = (typeof subAttitude === 'function') ? subAttitude() : null;
+    const _pV = _sa ? physics.pitch * _sa.k + _sa.pitch : physics.pitch, _rV = _sa ? physics.roll * _sa.k : physics.roll;
+    const finalEuler = new THREE.Euler(_pV + gAtt * (physics.groundPitch || 0), rotY, _rV + gAtt * (physics.groundRoll || 0), 'YXZ');
     shipGroup.quaternion.setFromEuler(finalEuler);
 
     // モデルを配置する際の「ワールド座標に固定する基準点」はCGではなく喫水線基準点(waterlineOffsetY)。
@@ -658,6 +667,7 @@ function animate() {
     if (typeof updateWorldTerrain === 'function') updateWorldTerrain(t, dt);
     if (typeof updateLandmarks === 'function') updateLandmarks(t);                // 名所の建物・像（53-landmarks.js）
     if (typeof updatePuffs === 'function') updatePuffs(t, dt);                   // タグの排煙・汽笛の蒸気・しぶき（52-puffs.js）
+    if (typeof updateSubmarine === 'function') updateSubmarine(t, dt);           // 潜水艦の魚雷・ソナー・潜望鏡（54-submarine.js）
     if (typeof updateLightBake === 'function') updateLightBake(t);
     if (typeof updateAreaLights === 'function') updateAreaLights(t);
     if (typeof updateGlowHalos === 'function') updateGlowHalos();   // 遠景用の光のにじみ（26）

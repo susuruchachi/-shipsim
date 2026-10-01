@@ -198,7 +198,8 @@ function sanitizePhysics() {
         window.lastHistoryTime = 0;
     }
 
-    physics.y = THREE.MathUtils.clamp(physics.y, -80, 80);
+    // 潜水艦（54-submarine.js）が潜っている分は、下げてよい
+    physics.y = THREE.MathUtils.clamp(physics.y, -80 - ((window.sub && sub.applied) || 0), 80);
     physics.vy = THREE.MathUtils.clamp(physics.vy, -12, 12);
     physics.speed = THREE.MathUtils.clamp(physics.speed, -physics.maxSpeed * 0.5, physics.maxSpeed);
     physics.turnRate = THREE.MathUtils.clamp(physics.turnRate, -15, 15);
