@@ -541,23 +541,8 @@ function _subUpdateHudButton() {
 function _subSetup() {
     const tug = document.getElementById('btn-tug') || document.getElementById('btn-horn-sig');
     if (!tug || document.getElementById('btn-sub')) { if (!tug) setTimeout(_subSetup, 200); return; }
-    const b = document.createElement('div');
-    b.id = 'btn-sub'; b.className = 'control-btn'; b.title = '潜水艦'; b.textContent = '潜水';
-    tug.after(b);
-    const panel = document.createElement('div');
-    panel.id = 'sub-panel';
-    document.body.appendChild(panel);
-    const place = () => (typeof placePopupPanel === 'function') && placePopupPanel(panel, b);
-    const setOpen = (on) => { panel.classList.toggle('open', on); b.classList.toggle('on', on); if (on) { renderSubPanel(); place(); } };
-    b.addEventListener('click', (e) => { e.stopPropagation(); setOpen(!panel.classList.contains('open')); });
-    panel.addEventListener('pointerdown', (e) => e.stopPropagation());
-    document.addEventListener('pointerdown', (e) => {
-        if (!panel.classList.contains('open') || panel.contains(e.target) || b.contains(e.target)) return;
-        setOpen(false);
-    });
-    window.addEventListener('resize', () => { if (panel.classList.contains('open')) place(); });
-    _subSetup.place = place;
-    if (typeof applyBridgeLayout === 'function') applyBridgeLayout();
+    const P = hudPopup({ id: 'btn-sub', panelId: 'sub-panel', label: '潜水', title: '潜水艦', after: tug, render: renderSubPanel });
+    _subSetup.place = P.place;
     _subUpdateHudButton();
 }
 function _subStateWord() {

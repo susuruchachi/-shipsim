@@ -104,3 +104,27 @@ function _uiFlush(el) {
     el.scrollTop = keep;
 }
 window.uiSetHTML = uiSetHTML;
+
+// ── 画面のボタンから開く小さなパネル（タグ・潜水／兵装など）の共通の仕組み ──
+//  ボタン（control-btn）を after の後ろに作り、パネルを開け閉めする。パネルの外を触ると閉じる。
+//  返す { btn, panel, place, setOpen }。render：開いたときに中身を作る関数
+function hudPopup({ id, panelId, label, title, after, render }) {
+    const b = document.createElement('div');
+    b.id = id; b.className = 'control-btn'; b.title = title || label; b.textContent = label;
+    after.after(b);
+    const panel = document.createElement('div');
+    panel.id = panelId;
+    document.body.appendChild(panel);
+    const place = () => (typeof placePopupPanel === 'function') && placePopupPanel(panel, b);
+    const setOpen = (on) => { panel.classList.toggle('open', on); b.classList.toggle('on', on); if (on) { if (render) render(); place(); } };
+    b.addEventListener('click', (e) => { e.stopPropagation(); setOpen(!panel.classList.contains('open')); });
+    panel.addEventListener('pointerdown', (e) => e.stopPropagation());
+    document.addEventListener('pointerdown', (e) => {
+        if (!panel.classList.contains('open') || panel.contains(e.target) || b.contains(e.target)) return;
+        setOpen(false);
+    });
+    window.addEventListener('resize', () => { if (panel.classList.contains('open')) place(); });
+    if (typeof applyBridgeLayout === 'function') applyBridgeLayout();     // 汽笛の右の列に並べる
+    return { btn: b, panel, place, setOpen };
+}
+window.hudPopup = hudPopup;

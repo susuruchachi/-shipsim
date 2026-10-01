@@ -812,23 +812,8 @@ window.updateTugs = updateTugs;
 function _tugSetup() {
     const sig = document.getElementById('btn-horn-sig') || document.getElementById('btn-horn');
     if (!sig || document.getElementById('btn-tug')) return;
-    const b = document.createElement('div');
-    b.id = 'btn-tug'; b.className = 'control-btn'; b.title = 'タグボート'; b.textContent = 'タグ';
-    sig.after(b);
-    if (typeof applyBridgeLayout === 'function') applyBridgeLayout();   // テレグラフの上に並べる
-    const panel = document.createElement('div');
-    panel.id = 'tug-panel';
-    document.body.appendChild(panel);
-    const place = () => placePopupPanel(panel, b);
-    const setOpen = (on) => { panel.classList.toggle('open', on); b.classList.toggle('on', on); if (on) { renderTugPanel(); place(); } };
-    b.addEventListener('click', (e) => { e.stopPropagation(); setOpen(!panel.classList.contains('open')); });
-    panel.addEventListener('pointerdown', (e) => e.stopPropagation());
-    document.addEventListener('pointerdown', (e) => {
-        if (!panel.classList.contains('open') || panel.contains(e.target) || b.contains(e.target)) return;
-        setOpen(false);
-    });
-    window.addEventListener('resize', () => { if (panel.classList.contains('open')) place(); });
-    _tugSetup.place = place;
+    const P = hudPopup({ id: 'btn-tug', panelId: 'tug-panel', label: 'タグ', title: 'タグボート', after: sig, render: renderTugPanel });
+    _tugSetup.place = P.place;
 }
 function renderTugPanel() {
     const panel = document.getElementById('tug-panel');
