@@ -179,8 +179,11 @@ function _hdCrane(d, cr, org) {
     for (let s = 0; s <= 60; s += 1) if (_rwDetailAt(d, lat + ca * s / mLat, lon + sa * s / mLon) < 0.3) { edge = s; break; }
     const LEG = 9, shift = edge >= 0 && edge < 40 ? edge - LEG - 2 : 0;
     const clat = lat + ca * shift / mLat, clon = lon + sa * shift / mLon;
-    // 陸側の脚が水に落ちる（細い桟橋など）なら置かない
-    if (_rwDetailAt(d, clat - ca * LEG / mLat, clon - sa * LEG / mLon) < 0.3) return null;
+    // 4 本の脚のどれかが水に落ちる（細い桟橋・岸の角など）なら置かない
+    for (const [fa, fs] of [[LEG, 8], [LEG, -8], [-LEG, 8], [-LEG, -8]]) {
+        const n = ca * fa - sa * fs, e = sa * fa + ca * fs;
+        if (_rwDetailAt(d, clat + n / mLat, clon + e / mLon) < 0.3) return null;
+    }
     const g = new THREE.Group();
     g.position.set(org.x - x - sa * shift, _rwDetailAt(d, clat, clon), org.z + y + ca * shift);
     g.rotation.y = Math.atan2(-Math.sin(best), Math.cos(best));      // 物理の面：東は −x

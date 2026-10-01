@@ -83,7 +83,7 @@ function _portAdjust(h, x, z, shapes) {
             // 地形に合わせる：陸は削らず・平らにもしない（本物の岸の線のまま）。岸壁の前の、もともと水
             // （か干潟ほどの低い所）だけを、船が付けられる深さに掘る。船を寄せる位置は本物の岸の線から測る
             //（50-harbor-auto.js の harborBerthPlan）
-            if (a > -10 && a < 45 && Math.abs(b) < half && h < 1.5) { h = Math.min(h, -S.depth - 2); continue; }
+            if (a > -10 && a < 45 && Math.abs(b) < half && h < 0.3) { h = Math.min(h, -S.depth - 2); continue; }   // 陸（低い岸壁も）は掘らない：掘ると岸の線がでこぼこになり、クレーンが水の上に立った
             if (a > 0 && a < Math.min(S.basin, 450) && Math.abs(b) < half + 40 && h < -0.5) {
                 const want = -S.depth - 2, k = Math.min(1, (half + 40 - Math.abs(b)) / 40) * Math.min(1, (Math.min(S.basin, 450) - a) / 150);
                 if (h > want) h = h + (want - h) * k;
@@ -263,7 +263,7 @@ function _trSmoothCoast(H, n, P, step) {
     }
     if (!any) return null;
     // 鎖にして、小さな段を省く（Douglas-Peucker）
-    const tol = step * 0.6, seen = new Uint8Array(2 * N), segs = [], lines = [];
+    const tol = step * 0.9, seen = new Uint8Array(2 * N), segs = [], lines = [];
     const simplify = (C) => {
         const m = C.length / 2;
         if (m < 2) return;
