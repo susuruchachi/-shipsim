@@ -124,10 +124,21 @@ const _bloomList = { list: [], frame: 0 };
 function _bloomTargets() {
     if ((_bloomList.frame++ % 60) === 0) {
         const L = [];
-        scene.traverse(o => { if ((o.isMesh || o.isPoints) && o.userData.noBloom) L.push(o); });
+        scene.traverse(o => {
+            // 光らない物（陸の地形・建物・港の施設・タグの船体など、発光の無い陰影付きの材質）は、
+            // 決まっていなければブルームから外す。外さないと、昼の明るい地面が光ってにじみ、
+            // カメラの近く（抽出のときは霧が黒いので、遠くは暗い）だけが白っぽく明るく見えた
+            if (o.isMesh && o.userData.noBloom === undefined) o.userData.noBloom = _bloomAutoNo(o.material);
+            if ((o.isMesh || o.isPoints) && o.userData.noBloom) L.push(o);
+        });
         _bloomList.list = L;
     }
     return _bloomList.list;
+}
+function _bloomAutoNo(m) {
+    const one = (q) => !!q && (q.isMeshStandardMaterial || q.isMeshLambertMaterial || q.isMeshPhongMaterial)
+        && !q.emissiveMap && (!q.emissive || q.emissive.getHex() === 0);   // 夜だけ光る物（強さを後で上げる）は色が付いているので外さない
+    return Array.isArray(m) ? m.length > 0 && m.every(one) : one(m);
 }
 function _renderBloomExtract() {
     const targets = _bloomTargets();

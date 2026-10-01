@@ -67,7 +67,7 @@ function _hdBuildTile(d, list, org) {
             const nx = q[1] - a[1], nz = -(q[0] - a[0]), nl = Math.hypot(nx, nz) || 1;
             const shade = 0.72 + 0.28 * (0.5 + 0.5 * (nx * 0.6 + nz * 0.8) / nl);
             const i0 = push(a[0], base, a[1], wall, shade), i1 = push(q[0], base, q[1], wall, shade), i2 = push(q[0], top, q[1], wall, shade), i3 = push(a[0], top, a[1], wall, shade);
-            idx.push(i0, i2, i1, i0, i3, i2);
+            idx.push(i0, i1, i2, i0, i2, i3);      // 外向き（物理の面は x が西向きで裏返るので、この並び）
         }
         // 屋根
         const contour = P.map(([x, y]) => new THREE.Vector2(x, y));
@@ -75,7 +75,7 @@ function _hdBuildTile(d, list, org) {
         try { tris = THREE.ShapeUtils.triangulateShape(contour, []); } catch (e) { tris = []; }
         const r0 = pos.length / 3;
         for (const [x, z] of L) push(x, top, z, roof, 1.0);
-        for (const t of tris) idx.push(r0 + t[0], r0 + t[2], r0 + t[1]);
+        for (const t of tris) idx.push(r0 + t[0], r0 + t[1], r0 + t[2]);   // 上向き
     }
     if (!idx.length) return null;
     const geo = new THREE.BufferGeometry();

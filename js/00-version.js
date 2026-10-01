@@ -55,7 +55,9 @@
 // 0.03.009.000  船の種類（オーシャンライナー・クルーズ船・フェリー・貨物船・コンテナ船・タンカー・駆逐艦・巡洋艦・戦艦・空母・潜水艦）。
 //               地図の埠頭の一覧で、その船に合う埠頭に★。軍艦は主砲（方位・距離を決めて撃つ。水柱・爆発・音）、空母は艦載機の発艦・着艦。
 //               岸壁の縁の舗装の高さを直す（地形の下に隠れていた）。ブルームの対象を毎フレームたどらない（軽量化）
-var APP_VERSION = '0.03.009.000';
+// 0.03.009.001  街の建物（作り込んだ港の区画）の壁・屋根が裏返っていて、裏側の面しか見えなかったのを直す。
+//               光らない物（地形・建物・港の施設など）をブルームから外す（昼の地面がにじんで白っぽく光っていた）
+var APP_VERSION = '0.03.009.001';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
