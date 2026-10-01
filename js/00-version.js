@@ -78,7 +78,8 @@
 //               後進できない機関は、後進の目盛りの上に「後進なし」の真鍮の目隠し板
 // 0.03.012.000  サイドスラスター（位置・出力を決めて何基でも。トンネルの口と噴き出す水）と、アジポッドの作り込み
 //               （360° 旋回・舵輪に連動／個別／ジョイスティック、方位保持・位置保持、モデルのポッド部品も回る）。
-var APP_VERSION = '0.03.012.000';
+// 0.03.012.001  アジポッドの船では、機関ごとのテレグラフの名前を「左舷ポッド」などに。
+var APP_VERSION = '0.03.012.001';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

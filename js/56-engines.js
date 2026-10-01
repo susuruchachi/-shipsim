@@ -74,7 +74,11 @@ function engineList() {
     return _eng.list;
 }
 window.engineList = engineList;
-function engineName(E) { return (E.conf && E.conf.name) || (_eng.list.length === 1 ? '機関' : (E.side > 0.15 ? '左舷' : E.side < -0.15 ? '右舷' : '中央') + '機関'); }
+function engineName(E) {
+    if (E.conf && E.conf.name) return E.conf.name;
+    const w = (typeof azipodActive === 'function' && azipodActive()) ? 'ポッド' : '機関';     // アジポッドの船（58-maneuvering.js）
+    return _eng.list.length === 1 ? w : (E.side > 0.15 ? '左舷' : E.side < -0.15 ? '右舷' : '中央') + w;
+}
 // 機関ごとの馬力（空なら見積もりを等分）
 function engineHp(E) { const L = engineList(); return E.conf && E.conf.hp > 0 ? E.conf.hp : engineEstimateHp() / Math.max(1, L.length); }
 function _engWeights() {

@@ -93,7 +93,7 @@ function _mnvEnginePos(E) {
     return E._mnvPos;
 }
 function _mnvPodCapN(E) { return Math.max(1, (typeof engineHp === 'function' ? engineHp(E) : 10000)) * POD_N_PER_HP; }
-function _mnvPodName(E) { return (typeof engineName === 'function' ? engineName(E) : '機関').replace('機関', 'ポッド'); }
+function _mnvPodName(E) { return (typeof engineName === 'function' ? engineName(E) : 'ポッド').replace('機関', 'ポッド'); }
 
 // ── 56-engines.js から ──
 // ポッドの推力のうち前向きの割合（推進の速さに入る）
