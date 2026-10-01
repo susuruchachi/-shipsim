@@ -1464,14 +1464,14 @@ function renderAutopilotPanel() {
         else if (autopilot.planning) line = '🧭 航路を計算しています…';
         else if (autopilot.resume || (ha && ha.resume)) line = '⏸ 止まっています';
         else line = autopilot.msg || (ha && ha.msg) || '';
-        el.innerHTML = `<div class="ap-line">${fold}<span>${line}</span></div>`;
+        uiSetHTML(el, `<div class="ap-line">${fold}<span>${line}</span></div>`);
         return;
     }
     if (ha && ha.mode) {
         const ph = { tugs: 'タグを待っています', turn: '回しています', side: '岸壁へ寄せています', off: '岸壁から離しています' }[ha.phase] || '';
-        el.innerHTML = `<div class="ap-title">${fold}⚓ ${ha.mode === 'berth' ? '自動着岸' : '自動離岸'}：${ha.plan.port.name}</div>
+        uiSetHTML(el, `<div class="ap-title">${fold}⚓ ${ha.mode === 'berth' ? '自動着岸' : '自動離岸'}：${ha.plan.port.name}</div>
             <div class="ap-row">${ph}${ha.phase === 'side' && ha.remain !== undefined ? `（あと ${ha.remain.toFixed(1)} m）` : ''}</div>
-            <div class="ap-row"><button class="ap-off" onclick="harborAutoStop('自動の離着岸を止めました')">止める</button></div>`;
+            <div class="ap-row"><button class="ap-off" onclick="harborAutoStop('自動の離着岸を止めました')">止める</button></div>`);
         return;
     }
     if (!autopilot.active) {
@@ -1483,7 +1483,7 @@ function renderAutopilotPanel() {
             if (ha && ha.resume) btns.push(`<button class="on" onclick="harborAutoResume()">▶ ${ha.resume.mode === 'berth' ? '着岸' : '離岸'}を再開</button>`);
             btns.push('<button onclick="autopilotDismiss()">閉じる</button>');
         }
-        el.innerHTML = `<div class="ap-title">${fold}🧭 自動航行</div><div class="ap-msg">${msg}</div><div class="ap-row">${btns.join('')}</div>`;
+        uiSetHTML(el, `<div class="ap-title">${fold}🧭 自動航行</div><div class="ap-msg">${msg}</div><div class="ap-row">${btns.join('')}</div>`);
         return;
     }
     const R = autopilot.route, wp = R[autopilot.leg];
@@ -1491,7 +1491,7 @@ function renderAutopilotPanel() {
     const v = Math.abs(physics.speed || 0) * (typeof physicsSpeed !== 'undefined' ? physicsSpeed : 1);
     const eta = v > 0.3 ? autopilot.remain / v / 3600 : null;
     const etaS = eta === null ? '—' : eta < 1 ? Math.round(eta * 60) + '分' : Math.floor(eta) + '時間' + Math.round((eta % 1) * 60) + '分';
-    el.innerHTML = `
+    uiSetHTML(el, `
         <div class="ap-title">${fold}🧭 自動航行 → ${autopilot.dest ? autopilot.dest.name : ''}</div>
         <div class="ap-row">針路 <b>${Math.round(autopilot.course || 0).toString().padStart(3, '0')}°</b>（航程線）</div>
         <div class="ap-row">次：${wp.label} ${_apFmtDist(autopilot.wpDist || 0)}</div>
@@ -1501,7 +1501,7 @@ function renderAutopilotPanel() {
         <div class="ap-row">${Object.entries({ full: '全速', half: '半速', slow: '微速' }).map(([k, l]) => `<button class="${autopilot.cruise === k ? 'on' : ''}" onclick="autopilotSetCruise('${k}')">${l}</button>`).join('')}
             <button class="ap-off" onclick="autopilotStop('自動航行を切りました')">解除</button></div>
         ${autopilot.dest && autopilot.dest.point ? '' : `<div class="ap-row"><label><input type="checkbox" ${autopilot.berth ? 'checked' : ''} onchange="autopilotSetBerth(this.checked)"> 着いたらタグで岸壁に着岸</label> <select onchange="harborSetSidePref(this.value)" title="岸壁に付ける舷">${[['auto', '舷：自動'], ['port', '左舷付け'], ['starboard', '右舷付け']].map(([k, l]) => `<option value="${k}"${(harborAuto.sidePref || 'auto') === k ? ' selected' : ''}>${l}</option>`).join('')}</select>${autopilot.berthPlan ? '' : (autopilot.berth && autopilot.berthWhy ? `<div class="ap-msg">${autopilot.berthWhy}</div>` : '')}</div>`}
-        ${autopilot.msg ? `<div class="ap-msg">${autopilot.msg}</div>` : ''}`;
+        ${autopilot.msg ? `<div class="ap-msg">${autopilot.msg}</div>` : ''}`);
 }
 window.renderAutopilotPanel = renderAutopilotPanel;
 setInterval(() => {

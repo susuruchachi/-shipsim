@@ -48,31 +48,65 @@ function _haQ(S) {
 function harborBerthPlan(port, prefHeading) {
     if (!port) return { ok: false, why: '港がありません' };
     if (port.type === 'fishing') return { ok: false, why: `${port.name}には大きな船が横付けできる岸壁がありません` };
-    const S = _portShape(port), Q = _haQ(S), D = _haDims();
+    let S = _portShape(port), Q = _haQ(S);
+    const S0 = S, D = _haDims();
     // 横付けに使える岸壁の区間（軍港は桟橋の無い側）
     const PL = _portPierLayout(port.type, S.quayLen);
     const segLen = PL.free[1] - PL.free[0];
-    if (segLen < D.L + 20) return { ok: false, why: `${port.name}の空いている岸壁（${Math.round(segLen)}m）は船（${Math.round(D.L)}m）より短いので付けられません` };
+    if (!S.detail && segLen < D.L + 20) return { ok: false, why: `${port.name}の空いている岸壁（${Math.round(segLen)}m）は船（${Math.round(D.L)}m）より短いので付けられません` };
     const T = PORT_TYPES[port.type];
     const draft = worldShipDraft();
     if (draft + 1 > T.depth + 2) return { ok: false, why: `${port.name}の岸壁は船に対して浅いので付けられません` };
     let aB = 6 + D.hw + 1.5;
     // 作り込んだ港：本物の岸の線から測る（船の長さの範囲で、岸から沖へ見て、喫水より深くなる所のいちばん沖の方）
-    let aQ = 6;
+    let aQ = 6, quayExt = null, bCq = null;
     if (S.detail && typeof worldSeabedAt === 'function') {
         const PLb = (PL.free[0] + PL.free[1]) / 2;
         // （この港の岸壁の前の掘り込みは、港の形がまだ読み込まれていなくても足して見る）
         const loaded = typeof terrain !== 'undefined' && terrain.ports && terrain.ports.has(port.id);
-        const depthAt = (a, b) => { const w = Q.toW(a, b); let h = worldSeabedAt(w.x, w.z); if (!loaded && typeof _portAdjust === 'function') h = _portAdjust(h, w.x, w.z, [S]); return -h; };
+        const depthAt = (a, b) => { const w = Q.toW(a, b); let h = worldSeabedAt(w.x, w.z); if (!loaded && typeof _portAdjust === 'function') h = _portAdjust(h, w.x, w.z, [S0]); return -h; };
         // 船の幅（＋余裕）の分だけ続けて深い所の、いちばん岸寄りの始まり（岸の先の桟橋などの浅い所の外側）
-        const needW = 2 * D.hw + 6;
-        let worst = -Infinity;
-        for (let b = PLb - D.HL; b <= PLb + D.HL + 0.1; b += 15) {
-            let found = null, run0 = null;
-            for (let a = -30; a <= 200; a += 2) {
-                if (depthAt(a, b) > draft + 0.5) { if (run0 === null) run0 = a; if (a - run0 >= needW) { found = run0; break; } }
+        // その深い所は、沖の水へ続いていること（リヴァプールの浮き桟橋と岸の間のすき間のような、
+        // 船の幅ほどしかない水に付けない）：船の幅＋40m（80m まで）続けて深い所の始まり
+        const needW = 2 * D.hw + 6, needRun = Math.max(needW, Math.min(80, needW + 40));
+        const shoreAt = (b) => {
+            let run0 = null;
+            for (let a = -30; a <= 260; a += 2) {
+                if (depthAt(a, b) > draft + 0.5) { if (run0 === null) run0 = a; if (a - run0 >= needRun) return run0; }
                 else run0 = null;
             }
+            return null;
+        };
+        // 本物の岸壁の長さを測る：真ん中から左右へ、岸の線が続いていて（ずれが 15m 以内）、
+        // その後ろが陸（岸壁）の間。地図の設定の長さ（port.quay）ではなく、地形から
+        // 岸壁の向き：地図の設定の向きが本物の岸の線と少しずれていることがある（メイフラワーなど）ので、
+        // 真ん中の前後 120m の岸の線に合わせて回す（2 回）
+        for (let it = 0; it < 2; it++) {
+            let n = 0, sb = 0, sa = 0, sbb = 0, sab = 0;
+            for (let b = PLb - 120; b <= PLb + 120; b += 20) { const a = shoreAt(b); if (a === null) continue; n++; sb += b; sa += a; sbb += b * b; sab += a * b; }
+            if (n < 5) break;
+            const m = (n * sab - sb * sa) / ((n * sbb - sb * sb) || 1);
+            if (!(Math.abs(m) > 0.015 && Math.abs(m) < 0.4)) break;
+            const l = Math.hypot(1, m);
+            S = Object.assign({}, S, { sx: (S.sx - m * S.sz) / l, sz: (S.sz + m * S.sx) / l });
+            Q = _haQ(S);
+        }
+        const s0 = shoreAt(PLb);
+        if (s0 === null) return { ok: false, why: `${port.name}の岸壁の前は、この船（喫水 ${draft.toFixed(1)}m）には浅すぎます` };
+        // 岸の線が続いている間（隣とのずれ 8m・真ん中とのずれ 25m まで）
+        const quayHere = (b, prev) => { const sa = shoreAt(b); return sa !== null && Math.abs(sa - prev) <= 8 && Math.abs(sa - s0) <= 25 && depthAt(sa - 10, b) < 3 ? sa : null; };
+        let bMin = PLb, bMax = PLb;
+        for (let b = PLb + 5, pr = s0; b <= PLb + 1200; b += 5) { const q = quayHere(b, pr); if (q === null) break; bMax = b; pr = q; }
+        for (let b = PLb - 5, pr = s0; b >= PLb - 1200; b -= 5) { const q = quayHere(b, pr); if (q === null) break; bMin = b; pr = q; }
+        // 船は岸壁の端から少しはみ出してもよい（両端それぞれ 船の長さの 1 割・30m まで）
+        const ovh = Math.min(30, D.L * 0.1);
+        quayExt = [bMin, bMax];
+        if (bMax - bMin + 2 * ovh < D.L) return { ok: false, why: `${port.name}の岸壁（${Math.round(bMax - bMin)}m）は船（${Math.round(D.L)}m）より短いので付けられません` };
+        // 船を置く所：設定の真ん中に近い所で、岸壁に収まる所
+        bCq = Math.max(bMin - ovh + D.HL, Math.min(bMax + ovh - D.HL, PLb));
+        let worst = -Infinity;
+        for (let b = bCq - D.HL; b <= bCq + D.HL + 0.1; b += 15) {
+            const found = shoreAt(b);
             if (found === null) return { ok: false, why: `${port.name}の岸壁の前は、この船（喫水 ${draft.toFixed(1)}m）には浅すぎます` };
             worst = Math.max(worst, found);
         }
@@ -88,6 +122,7 @@ function harborBerthPlan(port, prefHeading) {
     let bLo = PL.free[0] + D.HL + 10, bHi = PL.free[1] - D.HL - 10;
     if (PL.keepOut) bLo = Math.max(bLo, PL.keepOut[1] + D.HL + 15);
     if (!port.real && port.type !== 'cargo') bHi = Math.min(bHi, S.quayLen / 2 + 40 - 8 - D.HL - 15);   // 防波堤の腕
+    if (quayExt) { bLo = bHi = bCq; }                 // 作り込んだ港：測った岸壁の上の位置
     if (bLo > bHi) return { ok: false, why: `${port.name}には、この船（${Math.round(D.L)}m）を回して横付けできる広さがありません` };
     const bC = Math.max(bLo, Math.min(bHi, (PL.free[0] + PL.free[1]) / 2));
     // 岸壁と平行な 2 つの向きのうち、今の向きに近い方
@@ -116,22 +151,32 @@ function harborBerthPlan(port, prefHeading) {
         const qE = Q.toQ(E.x, E.z);
         const aMid = Math.max(aB + 4, qE.a);                                             // ドックの真ん中の線（岸壁から）
         if (aMid - aB < 10) return { ok: false, why: `${port.name}のドックは、この船（幅${Math.round(D.B)}m）には狭すぎます` };
-        const out = port.dock.turnOut || Math.max(D.HL + 90, 200);
-        const T = { x: E.x - ux * out, z: E.z - uz * out };
+        let out = port.dock.turnOut || Math.max(D.HL + 90, 200);
+        let T = { x: E.x - ux * out, z: E.z - uz * out };
         // ドックの前（川など）で、この船を回せる広さがあるか（回す所のまわり、船の半分の長さ＋余裕の円が水の上か）
         // （角の 1〜2 点が浅いくらいは、回しながら少しずらして避けられる。3 点以上かかれば無理）
-        const ringOk = (rr) => {
+        //（船の両端は喫水が浅いので、喫水の 6 割の深さで見る。タグで回すので、回す所は船の真ん中より少し寄せられる：半径は船の半分の 9 割＋余裕）
+        const ringOk = (rr, Tq) => {
+            Tq = Tq || T;
             let bad = 0;
             for (let k = 0; k < 24; k++) {
                 const a = k / 24 * Math.PI * 2;
-                if (worldSeabedAt(T.x + Math.sin(a) * rr, T.z + Math.cos(a) * rr) > -(worldShipDraft() * 0.8)) bad++;
+                if (worldSeabedAt(Tq.x + Math.sin(a) * rr, Tq.z + Math.cos(a) * rr) > -(worldShipDraft() * 0.6)) bad++;
             }
             return bad <= 2;
         };
-        if (typeof worldSeabedAt === 'function' && !ringOk(D.HL + 12)) {
+        const rNeed = D.HL * 0.9 + 8;
+        // 回す所は、ドックの真ん中の線の上で入口から 150〜700m の間の、回せる所（決めた所が駄目なら探す）
+        if (typeof worldSeabedAt === 'function' && !ringOk(rNeed)) {
+            for (let o = 150; o <= 700; o += 25) {
+                const Tq = { x: E.x - ux * o, z: E.z - uz * o };
+                if (ringOk(rNeed, Tq)) { out = o; T = Tq; break; }
+            }
+        }
+        if (typeof worldSeabedAt === 'function' && !ringOk(rNeed)) {
             let rMax = 0;
-            for (let rr = 20; rr < D.HL + 12; rr += 10) { if (!ringOk(rr)) break; rMax = rr; }
-            return { ok: false, why: `${port.name}のドックの前は、この船（${Math.round(D.L)}m）を回すには狭すぎます（回せるのは長さおよそ ${Math.max(0, Math.round(2 * (rMax - 12) / 10) * 10)}m までの船）` };
+            for (let rr = 20; rr < rNeed; rr += 10) { if (!ringOk(rr)) break; rMax = rr; }
+            return { ok: false, why: `${port.name}のドックの前は、この船（${Math.round(D.L)}m）を回すには狭すぎます（回せるのは長さおよそ ${Math.max(0, Math.round(2 * (rMax - 8) / 0.9 / 10) * 10)}m までの船）` };
         }
         const pBd = Q.toW(aB, bC), pCd = Q.toW(aMid, bC);
         // 沖側の舷（船の中の +x ＝ 左舷 が、岸壁から離れた方を向いているなら +1）
@@ -142,7 +187,7 @@ function harborBerthPlan(port, prefHeading) {
             if (Math.hypot(B.x - A.x, B.z - A.z) > 1) hOutD = Math.atan2(B.x - A.x, B.z - A.z) / _haRad;
         }
         return {
-            ok: true, port, S, aB, aE: aMid, bC, open, dock: true, aQ,
+            ok: true, port, S, aB, aE: aMid, bC, open, dock: true, aQ, quayExt,
             berth: { x: pBd.x, z: pBd.z, h: hDock },
             mid: { x: pCd.x, z: pCd.z },                 // ドックの真ん中の線の上の、岸壁の前
             turn: { x: T.x, z: T.z },                    // ドックの外で向きを合わせる所
@@ -150,7 +195,7 @@ function harborBerthPlan(port, prefHeading) {
         };
     }
     return {
-        ok: true, port, S, aB, aE, bC, open, aQ,
+        ok: true, port, S, aB, aE, bC, open, aQ, quayExt,
         berth: { x: pB.x, z: pB.z, h: hB },
         turn: { x: pE.x, z: pE.z },
         hIn: Math.atan2(-S.sx, -S.sz) / _haRad,     // 岸壁の方を向く
@@ -171,7 +216,8 @@ function harborBerthedAt() {
         if (!plan.ok) continue;
         const Q = _haQ(plan.S), q = Q.toQ(physics.cgWorldX, physics.cgWorldZ);
         const parallel = Math.min(Math.abs(_haWrap(physics.heading - plan.berth.h)), Math.abs(_haWrap(physics.heading - plan.berth.h - 180)));
-        if (q.a < plan.aB + 25 && q.a > 0 && Math.abs(q.b) < plan.S.quayLen / 2 + 20 && parallel < 25) {
+        const ext = plan.quayExt || [-plan.S.quayLen / 2, plan.S.quayLen / 2];
+        if (q.a < plan.aB + 25 && q.a > 0 && q.b > ext[0] - 20 && q.b < ext[1] + 20 && parallel < 25) {
             // 今の向きで計画し直す
             return harborBerthPlan(np.port, physics.heading);
         }
@@ -496,6 +542,7 @@ function _haMakeLines(plan) {
     _haClearLines();
     if (typeof mooringPoints !== 'function') return;
     const S = plan.S, Q = _haQ(S), half = S.quayLen / 2;
+    const ext = plan.quayExt || [-half, half];          // 岸壁の端（作り込んだ港は測った長さ）
     const mat = new THREE.LineBasicMaterial({ color: 0xd8c9a0 });
     const pts = mooringPoints().filter(m => m.side === -plan.open);
     for (const m of pts) {
@@ -504,8 +551,8 @@ function _haMakeLines(plan) {
         // 船首側は前へ、船尾側は後ろへ（ヘッドライン・スターンライン）
         const hB = plan.berth.h * _haRad, dirB = Math.sign((Math.sin(hB) * S.sz - Math.cos(hB) * S.sx)) || 1;   // 船首が b の＋向きか
         let bb = q.b + lead * dirB * 20;
-        bb = Math.round((bb + half - 12) / 25) * 25 - half + 12;
-        bb = Math.max(-half + 12, Math.min(half - 12, bb));
+        bb = Math.round((bb - ext[0] - 12) / 25) * 25 + ext[0] + 12;
+        bb = Math.max(ext[0] + 12, Math.min(ext[1] - 12, bb));
         // 岸壁の縁（作り込んだ港は本物の岸の線：船の横から陸の方へ見て、最初に陸になる所の少し陸側）
         let aL = 4.5;
         if (S.detail && typeof worldSeabedAt === 'function') {

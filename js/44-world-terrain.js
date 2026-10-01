@@ -159,8 +159,9 @@ function _trWorker() {
     return terrain.worker;
 }
 
-// 浅い海は海底も網にする（この深さ[m]まで。波の谷や水中から海底が見え、座礁した船が海底に載って見える）
-const TR_SEABED = -15;
+// 海は海底も網にする（この深さ[m]まで。波の谷や水中から海底が見え、座礁した船が海底に載って見える。
+// 潜水艦で潜っても海底が見えるように 100m まで）
+const TR_SEABED = -100;
 // ── 地面の材質：海底の網より深い所は描かない ──
 let _trMat = null;
 function _trMaterial() {
@@ -192,7 +193,7 @@ function _trColor(h, slope, x, z, out, o) {
     let r, g, b;
     if (h < -0.5) {
         // 浅い海の海底（TR_SEABED まで網を作る）：急な所は岩、ほかは砂・泥（深いほど暗く）
-        const mott = (Math.sin(x * 0.013 + z * 0.007) * Math.sin(x * 0.005 - z * 0.011) + 1) * 0.5, k = 1 - Math.min(0.45, -h / 40);
+        const mott = (Math.sin(x * 0.013 + z * 0.007) * Math.sin(x * 0.005 - z * 0.011) + 1) * 0.5, k = 1 - Math.min(0.55, -h / 60);
         if (slope > 0.12 || mott > 0.8) { r = 0.40 * k; g = 0.39 * k; b = 0.35 * k; }
         else { r = (0.66 - 0.1 * mott) * k; g = (0.61 - 0.08 * mott) * k; b = (0.46 - 0.05 * mott) * k; }
     }
@@ -432,7 +433,7 @@ function _trBuildMesh(H, n, half, cx, cz, lowerInside, opts) {
             let h = H[k];
             // 粗い格子の、細かい格子と重なる所は沈めて隠す（waterOnly：細かい網は水の近くだけなので、水の近くの点だけ）
             if (lowerInside && Math.abs(x - lowerInside.cx) < lowerInside.half - step && Math.abs(z - lowerInside.cz) < lowerInside.half - step
-                && (!lowerInside.waterOnly || _trNearWater(H, n, i, j, 1))) h = Math.min(h, -30);
+                && (!lowerInside.waterOnly || _trNearWater(H, n, i, j, 1))) h = Math.min(h - 25, -30);   // 細かい網の海底より下へ
             // 惑星の丸み：中心から離れるほど下がる
             const d2 = (x - cx) * (x - cx) + (z - cz) * (z - cz);
             P[k * 3] = x; P[k * 3 + 1] = h - d2 / (2 * WORLD_R); P[k * 3 + 2] = z;

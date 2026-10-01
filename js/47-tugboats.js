@@ -836,8 +836,7 @@ function renderTugPanel() {
     const st = (typeof shipGroup !== 'undefined' && shipGroup) ? tugStations() : [];
     const stateLabel = (t) => t.state === 'coming' ? (t.blockedTarget ? '近づけません（岸・浅瀬）' : t.stuck ? '入れません（すき間が狭い）' : '向かっています') : t.state === 'leaving' ? '帰ります' : (t.action === 'standby' ? '待機中' : t.action === 'push' ? '押しています' : '引いています');
     const active = tugs.filter(t => t.state !== 'leaving');
-    const keepScroll = panel.scrollTop;   // 書き換えてもスクロール位置はそのまま
-    panel.innerHTML = `<div class="tg-head"><span class="tg-title">タグボート</span>
+    uiSetHTML(panel, `<div class="tg-head"><span class="tg-title">タグボート</span>
         <button class="tg-call" onclick="tugCall()" ${active.length >= TUG_MAX ? 'disabled' : ''}>＋ 呼ぶ</button>
         ${active.length ? '<button onclick="tugReleaseAll()">全部帰す</button>' : ''}</div>` +
         (window.world && world.mode === 'world' && typeof harborAuto !== 'undefined' ? `<div class="tg-row tg-auto">
@@ -857,9 +856,8 @@ function renderTugPanel() {
             <div class="tg-row">${Object.entries(TUG_ACTIONS).map(([k, l]) => { const no = k === 'pull' && !tugPullHook(st.find(s => s.key === t.station), st); return `<button class="${t.action === k ? 'on' : ''}" ${no ? 'disabled title="この近くに索を取れる金物（クリート・索をかけてよいビット）がありません"' : ''} onclick="tugSet(${t.id}, 'action', '${k}')">${l}</button>`; }).join('')}</div>
             <div class="tg-row">${Object.entries({ low: '微', half: '半', full: '全' }).map(([k, l]) => `<button class="pw${t.power === k ? ' on' : ''}" onclick="tugSet(${t.id}, 'power', '${k}')">${l}</button>`).join('')}
                 <span class="tg-sep"></span>${t.action === 'pull' ? Object.entries(TUG_DIRS).map(([k, l]) => `<button class="dir${t.dir === k ? ' on' : ''}" onclick="tugSet(${t.id}, 'dir', '${k}')">${l}</button>`).join('') : ''}</div>` : ''}
-        </div>`).join('') : '<div class="tg-empty">「＋ 呼ぶ」でタグボートが来ます。持ち場（係船設備の金物・舷側）を選んで、押す・引くを指示します。<br>速さが5ノットを超えると力が弱まり、8ノットでは効きません。</div>');
+        </div>`).join('') : '<div class="tg-empty">「＋ 呼ぶ」でタグボートが来ます。持ち場（係船設備の金物・舷側）を選んで、押す・引くを指示します。<br>速さが5ノットを超えると力が弱まり、8ノットでは効きません。</div>'));
     if (panel.classList.contains('open') && _tugSetup.place) _tugSetup.place();
-    panel.scrollTop = keepScroll;
 }
 window.renderTugPanel = renderTugPanel;
 document.addEventListener('DOMContentLoaded', () => { setTimeout(_tugSetup, 0); });

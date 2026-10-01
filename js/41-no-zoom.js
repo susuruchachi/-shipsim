@@ -60,3 +60,47 @@
     // 入力欄から離れたとき（キーボードが閉じたとき）にも確かめる
     document.addEventListener('focusout', () => setTimeout(reset, 300));
 })();
+
+// ── パネルの書き換え ──
+// 自動航行・タグなどのパネルは、状態が変わるたび（数百ミリ秒ごと）に中身を作り直している。
+// 作り直すと、開いているプルダウンが勝手に閉じ、押している途中のボタンが消えて効かないことがあった。
+//  ・中身が同じなら書き換えない
+//  ・パネルの中のプルダウン・入力欄を触っている間、指・マウスを押している間は書き換えを待ち、
+//    離したあと（プルダウンを閉じたあと）に最新の中身にする
+function uiSetHTML(el, html) {
+    if (!el) return;
+    if (!el._uiInit) {
+        el._uiInit = true;
+        const down = () => { el._uiDown = true; };
+        el.addEventListener('pointerdown', down, true);
+        el.addEventListener('touchstart', down, { passive: true, capture: true });
+        el.addEventListener('mousedown', down, true);
+        const later = (ms) => setTimeout(() => _uiFlush(el), ms);
+        const up = () => { if (el._uiDown) { el._uiDown = false; later(400); } };
+        document.addEventListener('pointerup', up, true);
+        document.addEventListener('pointercancel', up, true);
+        document.addEventListener('touchend', up, true);
+        document.addEventListener('touchcancel', up, true);
+        document.addEventListener('mouseup', up, true);
+        el.addEventListener('change', () => later(300));
+        el.addEventListener('focusout', () => later(300));
+    }
+    if (el._uiHtml === html && !el._uiPending) return;
+    el._uiPending = html;
+    _uiFlush(el);
+}
+function _uiBusy(el) {
+    const ae = document.activeElement;
+    return !!el._uiDown || !!(ae && ae !== document.body && el.contains(ae) && /^(SELECT|INPUT|TEXTAREA)$/.test(ae.tagName) && !/^(checkbox|radio|button)$/i.test(ae.type || ''));
+}
+function _uiFlush(el) {
+    const html = el._uiPending;
+    if (html == null || _uiBusy(el)) return;
+    el._uiPending = null;
+    if (el._uiHtml === html) return;
+    el._uiHtml = html;
+    const keep = el.scrollTop;
+    el.innerHTML = html;
+    el.scrollTop = keep;
+}
+window.uiSetHTML = uiSetHTML;

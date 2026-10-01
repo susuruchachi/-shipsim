@@ -571,9 +571,8 @@ function _subRenderStatus() {
 function renderSubPanel() {
     const panel = document.getElementById('sub-panel');
     if (!panel) return;
-    const keep = panel.scrollTop;
     const pd = subPeriscopeDepth();
-    panel.innerHTML = `<div class="sb-head"><span class="sb-title">潜水艦</span></div>
+    uiSetHTML(panel, `<div class="sb-head"><span class="sb-title">潜水艦</span></div>
         <div id="sub-status" class="sb-status"></div>
         <div class="sb-row">
             <button onclick="subDive()" ${sub.mode === 'dive' ? 'class="on"' : ''}>⬇ 潜航</button>
@@ -595,11 +594,10 @@ function renderSubPanel() {
             <div class="sb-note">線：聞こえる音の方位（タグ・魚雷）<br>点：ピンの反響（緑＝岸・海底、黄＝船）</div>
             <button class="sb-fire" onclick="subFire()" ${sub.loaded ? '' : 'disabled'}>🚀 魚雷発射</button>
             <div class="sb-note">${sub.view ? '潜望鏡の向きへ撃ちます' : '艦首の向きへ撃ちます（潜望鏡を覗けばその向きへ）'}</div></div>
-        </div>`;
+        </div>`);
     _subRenderStatus();
     sub.sonar.lastDraw = 0;
     if (panel.classList.contains('open') && _subSetup.place) _subSetup.place();
-    panel.scrollTop = keep;
 }
 window.renderSubPanel = renderSubPanel;
 
