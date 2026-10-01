@@ -671,7 +671,16 @@ function _tugStep(t, dt, last) {
                     const dx = a.x - q.x, dz = a.z - q.z, d = Math.hypot(dx, dz), p = 2 * R - d;
                     if (p > pen) { pen = p; const k = d > 1e-3 ? 1 / d : 0; px = d > 1e-3 ? dx * k : (nx >= o.pos.x ? 1 : -1); pz = dz * k; }
                 }
-                if (pen > 0) { const m = Math.min(pen * 0.6, 4 * dt + pen * 0.3); nx += px * m; nz += pz * m; tg.tugNear = true; }
+                if (pen > 0) {
+                    // 向かっている途中なら、自分の進む向きの成分を除いて横へずれる（押し返し合って行き詰まらず、すり抜ける）
+                    if (tg.state === 'coming' && tg.steerAng !== null && tg.steerAng !== undefined) {
+                        const dx = Math.sin(tg.steerAng), dz = Math.cos(tg.steerAng), along = px * dx + pz * dz;
+                        let qx = px - along * dx, qz = pz - along * dz, ql = Math.hypot(qx, qz);
+                        if (ql < 0.3) { const sg = ((tg.id + o.id) % 2 ? 1 : -1) * (tg.id < o.id ? 1 : -1); qx = dz * sg; qz = -dx * sg; ql = 1; }
+                        px = qx / ql; pz = qz / ql;
+                    }
+                    const m = Math.min(pen * 0.6, 4 * dt + pen * 0.3); nx += px * m; nz += pz * m; tg.tugNear = true;
+                }
             }
         }
         // 自分の船と重ならないように（押しているときの船首は触れてよい）

@@ -24,7 +24,8 @@
 //               荒天の晴れた夜に船の灯りが大きな光の玉になり、ブルームが切れていたのを直す（オリンピック）。
 //               浅い海の色が計算範囲の端で急に変わらないように。クレーンの脚が海へ出ないように。
 //               水深データ（EMODnet）を港の枠を広げたときに取り直す（ありえない深さの所があった）
-var APP_VERSION = '0.03.000.000';
+// 0.03.000.001  タグどうしが押し合って持ち場に着けず、離岸が止まることがあったのを直す（向かう途中は横へすり抜ける）
+var APP_VERSION = '0.03.000.001';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
