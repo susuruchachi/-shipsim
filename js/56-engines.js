@@ -205,32 +205,27 @@ function _engLayoutUI() {
         });
     }
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    U.canvases.forEach(cv => { cv.width = Math.round(each * dpr); cv.height = Math.round(each * 1.18 * dpr); cv.style.width = each + 'px'; cv.style.height = Math.round(each * 1.18) + 'px'; cv._s = each; });
+    U.canvases.forEach(cv => { cv._key = null; cv.width = Math.round(each * dpr); cv.height = Math.round(each * 1.18 * dpr); cv.style.width = each + 'px'; cv.style.height = Math.round(each * 1.18) + 'px'; cv._s = each; });
     _engDrawAll();
 }
 window.engineLayoutUI = _engLayoutUI;
-// 目盛り：前進は左、後進は右（後進できない機関は、停止から前進だけの扇）
-function _engDial(E) {
-    const astern = E.conf.astern !== false;
-    const orders = astern ? [3, 2, 1, 0, -1, -2, -3] : [3, 2, 1, 0];
-    const span = astern ? 210 : 150;             // 扇の開き[度]
-    const a0 = -span / 2;
-    const ang = (o) => (a0 + (orders.indexOf(Math.max(orders[orders.length - 1], Math.min(3, o))) / (orders.length - 1)) * span) * Math.PI / 180;
-    return { orders, ang, astern };
+// 指の位置 → 指令（ふつうのテレグラフ（37-bridge-controls.js）と同じ形ごとの決め方）
+function _engPointerOrder(E, cv, e) {
+    const r = cv.getBoundingClientRect(), S = cv._s || r.width, d = _engDesign();
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    let v;
+    if (d === 'fore' && typeof _tgForeGeom === 'function') { const g = _tgForeGeom(S); v = (g.yc - y) / g.step; }
+    else if (d === 'modern') { const y0 = S * 0.05 + S * 0.03, bh = S * 0.9 / 8.6; v = 3 - (Math.floor((y - y0) / bh) - 1); }
+    else if (typeof _tgFromAngleCont === 'function') {
+        const piv = d === 'tilt' ? { x: S / 2, y: S * 0.86 } : { x: S / 2, y: S * 0.54 };
+        v = _tgFromAngleCont(d, Math.atan2(x - piv.x, -(y - piv.y)));
+    } else v = 0;
+    v = Math.max(E.conf.astern === false ? 0 : -3, Math.min(3, Math.round(v)));
+    return v;
 }
-function _engAngleToOrder(E, a) {
-    const D = _engDial(E); let best = 0, bd = 1e9;
-    for (const o of D.orders) { const d = Math.abs(D.ang(o) - a); if (d < bd) { bd = d; best = o; } }
-    return best;
-}
+function _engDesign() { const d = (window.bridgeUI && bridgeUI.telegraph) || 'olympic'; return d === 'buttons' ? 'olympic' : d; }
 function _engSetupInput(cv, i) {
-    const pick = (e) => {
-        const E = engineList()[i]; if (!E) return;
-        const r = cv.getBoundingClientRect(), s = cv._s || r.width;
-        const cx = r.left + s / 2, cy = r.top + s * 0.55;
-        const a = Math.atan2(e.clientX - cx, -(e.clientY - cy));
-        engineSetOrder(i, _engAngleToOrder(E, a));
-    };
+    const pick = (e) => { const E = engineList()[i]; if (!E) return; engineSetOrder(i, _engPointerOrder(E, cv, e)); };
     cv.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); try { cv.setPointerCapture(e.pointerId); } catch (er) { /* */ } cv._drag = true; pick(e); });
     cv.addEventListener('pointermove', (e) => { if (cv._drag) { e.preventDefault(); pick(e); } });
     const up = () => { cv._drag = false; };
@@ -239,51 +234,83 @@ function _engSetupInput(cv, i) {
 function _engDrawAll() {
     const U = _eng.ui; if (!U || !shipEngines.split) return;
     const L = engineList();
-    U.canvases.forEach((cv, i) => { const E = L[i]; if (E) _engDraw(cv, E); });
+    const nk = Math.round(((typeof _tgNight === 'function') ? _tgNight() : 0) * 20);
+    U.canvases.forEach((cv, i) => {
+        const E = L[i]; if (!E) return;
+        // 変わったときだけ描き直す（ハンドル・針が動いている間、回転数の表示が変わったとき）
+        const key = [E.order, E.answer, Math.round(E.rpm * 100), E.conf.astern, nk, _engDesign(), cv._s].join('|');
+        const moving = (Number.isFinite(E.hv) && E.hv !== E.order) || (Number.isFinite(E.av) && E.av !== E.answer) || !Number.isFinite(E.hv);
+        if (!moving && cv._key === key) return;
+        cv._key = key;
+        _engDraw(cv, E);
+    });
 }
 function _engDraw(cv, E) {
     const s = cv._s || 100, dpr = cv.width / s;
     const ctx = cv.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, s, s * 1.18);
-    const cx = s / 2, cy = s * 0.55, R = s * 0.46;
-    const night = (typeof _tgNight === 'function') ? _tgNight() : 0;
-    // 真鍮の縁と盤面
-    const g = ctx.createLinearGradient(0, cy - R, 0, cy + R);
-    g.addColorStop(0, '#f3d88a'); g.addColorStop(0.5, '#b88a2e'); g.addColorStop(1, '#6e4f17');
-    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = night > 0.5 ? '#1e1a12' : '#f4efe2'; ctx.beginPath(); ctx.arc(cx, cy, R * 0.86, 0, Math.PI * 2); ctx.fill();
-    const D = _engDial(E);
-    // 目盛り（前進：緑寄り、後進：赤寄り、停止：黒）
-    ctx.font = `bold ${Math.max(6, s * (D.astern ? 0.068 : 0.08))}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const lab = { 3: 'FULL', 2: 'HALF', 1: 'SLOW', 0: 'STOP', '-1': 'SLOW', '-2': 'HALF', '-3': 'FULL' };
-    for (const o of D.orders) {
-        const a = D.ang(o), x = cx + Math.sin(a) * R * 0.62, y = cy - Math.cos(a) * R * 0.62;
-        ctx.fillStyle = o > 0 ? '#1e6b38' : o < 0 ? '#9a2a1e' : (night > 0.5 ? '#ddd' : '#222');
-        ctx.save(); ctx.translate(x, y); ctx.rotate(a); ctx.fillText(lab[o], 0, 0); ctx.restore();
-        ctx.strokeStyle = night > 0.5 ? '#998' : '#555'; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(cx + Math.sin(a) * R * 0.78, cy - Math.cos(a) * R * 0.78); ctx.lineTo(cx + Math.sin(a) * R * 0.86, cy - Math.cos(a) * R * 0.86); ctx.stroke();
+    const d = _engDesign();
+    // ハンドルは指令へなめらかに、針（機関室の応答）は応答へ
+    E.hv = Number.isFinite(E.hv) ? E.hv + (E.order - E.hv) * 0.5 : E.order;
+    E.av = Number.isFinite(E.av) ? E.av + (E.answer - E.av) * 0.35 : E.answer;
+    if (Math.abs(E.order - E.hv) < 0.01) E.hv = E.order;
+    if (Math.abs(E.answer - E.av) < 0.01) E.av = E.answer;
+    if (typeof _drawTelegraph === 'function') {
+        ctx.save();
+        _drawTelegraph(ctx, s, d, E.hv, E.av, E.order, '', '');
+        ctx.restore();
+        if (E.conf.astern === false) _engCoverAstern(ctx, s, d);
     }
-    ctx.fillStyle = night > 0.5 ? '#8fd' : '#333'; ctx.font = `${Math.max(6, s * 0.07)}px sans-serif`;
-    ctx.fillText('AHEAD', cx - R * 0.42, cy + R * 0.42);
-    if (D.astern) ctx.fillText('ASTERN', cx + R * 0.42, cy + R * 0.42);
-    else { ctx.fillStyle = '#9a2a1e'; ctx.fillText('後進なし', cx + R * 0.4, cy + R * 0.42); }
-    // 機関室の応答（赤い細い針）と、指令のハンドル（真鍮の太い針）
-    const needle = (a, len, w, col) => { ctx.strokeStyle = col; ctx.lineWidth = w; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.sin(a) * len, cy - Math.cos(a) * len); ctx.stroke(); };
-    needle(D.ang(E.answer), R * 0.55, Math.max(1.5, s * 0.02), '#c0392b');
-    needle(D.ang(E.order), R * 0.8, Math.max(3, s * 0.05), '#7a5a1a');
-    ctx.fillStyle = '#5a3f10'; ctx.beginPath(); ctx.arc(cx, cy, s * 0.05, 0, Math.PI * 2); ctx.fill();
     // 名前・回転数・出力
     const hp = engineHp(E), out = hp * Math.pow(Math.abs(E.rpm), 3);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillStyle = '#e8f6ff'; ctx.font = `bold ${Math.max(8, s * 0.1)}px sans-serif`;
     ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 3;
-    ctx.fillText(engineName(E), cx, s * 1.04);
+    ctx.fillText(engineName(E), s / 2, s * 1.04);
     ctx.font = `${Math.max(7, s * 0.08)}px sans-serif`;
-    ctx.fillText(`${Math.round(E.rpm * 100)}%・${Math.round(out).toLocaleString()}馬力`, cx, s * 1.13);
+    ctx.fillText(`${Math.round(E.rpm * 100)}%・${Math.round(out).toLocaleString()}馬力`, s / 2, s * 1.13);
     ctx.shadowBlur = 0;
 }
+// 後進できない機関：後進の目盛りの上に「後進なし」の目隠し板（真鍮）をかぶせる
+function _engCoverAstern(ctx, S, d) {
+    const night = (typeof _tgNight === 'function') ? _tgNight() : 0;
+    const plate = () => {
+        const g = ctx.createLinearGradient(0, 0, S, S);
+        g.addColorStop(0, night > 0.5 ? '#3a2e14' : '#d9b85f'); g.addColorStop(1, night > 0.5 ? '#21190a' : '#8a6420');
+        return g;
+    };
+    const label = (x, y, rot) => {
+        ctx.save(); ctx.translate(x, y); if (rot) ctx.rotate(rot);
+        ctx.fillStyle = night > 0.5 ? '#e9c46a' : '#3a2608'; ctx.font = `bold ${Math.max(7, S * 0.075)}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('後進なし', 0, 0); ctx.restore();
+    };
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = S * 0.02;
+    if (d === 'fore' && typeof _tgForeGeom === 'function') {
+        const g = _tgForeGeom(S), y0 = g.yOf(-0.5), y1 = g.yOf(-3.5);
+        ctx.fillStyle = plate(); ctx.fillRect(S * 0.12, y0, S * 0.76, y1 - y0);
+        ctx.shadowBlur = 0; label(S / 2, (y0 + y1) / 2);
+    } else if (d === 'modern') {
+        const y0 = S * 0.05 + S * 0.03, bh = S * 0.9 / 8.6;
+        ctx.fillStyle = plate(); ctx.fillRect(S * 0.14, y0 + bh * 5, S * 0.72, bh * 3);
+        ctx.shadowBlur = 0; label(S / 2, y0 + bh * 6.5);
+    } else if (typeof _tgAngle === 'function') {
+        // 文字盤の後進側の扇
+        const piv = d === 'tilt' ? { x: S / 2, y: S * 0.86 } : { x: S / 2, y: S * 0.54 };
+        const R = d === 'tilt' ? S * 0.8 : S * 0.44 * 0.84;
+        const a0 = _tgAngle(d, -0.5), a1 = _tgAngle(d, -3.7);
+        const t0 = Math.min(a0, a1) - Math.PI / 2, t1 = Math.max(a0, a1) - Math.PI / 2;
+        ctx.fillStyle = plate();
+        ctx.beginPath(); ctx.moveTo(piv.x, piv.y); ctx.arc(piv.x, piv.y, R, t0, t1); ctx.closePath(); ctx.fill();
+        ctx.shadowBlur = 0;
+        const am = (a0 + a1) / 2;
+        label(piv.x + Math.sin(am) * R * 0.6, piv.y - Math.cos(am) * R * 0.6, am);
+    }
+    ctx.restore();
+}
 // 回転数の表示はときどき描き直す
-setInterval(() => { if (shipEngines.split && _eng.ui && _eng.ui.box.style.display !== 'none') _engDrawAll(); }, 300);
+setInterval(() => { if (shipEngines.split && _eng.ui && _eng.ui.box.style.display !== 'none') _engDrawAll(); }, 80);
 
 // ════════════════════════════════════════════════════════════
 //  船体設定「⚙ 推進器」の機関の欄

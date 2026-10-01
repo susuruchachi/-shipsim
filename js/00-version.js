@@ -74,7 +74,9 @@
 //               塔の形と色（白・赤白・黒白の帯・御影石）、岩の上か岬の上か、灯質（閃光・明暗・等明暗と周期）。
 //               夜は灯り、閃光の灯台は光の帯が回ってこちらを向いた瞬間に光る。陸の灯台は地形の陸に寄せて置く
 // 0.03.011.001  整理：タグ・潜水／兵装のボタンとパネルの仕組みを 1 つにまとめる（41-no-zoom.js の hudPopup）
-var APP_VERSION = '0.03.011.001';
+// 0.03.011.002  機関ごとのテレグラフを、ふつうのテレグラフと同じデザインに（選んだ形・白黒の盤面・夜の照明もそのまま）。
+//               後進できない機関は、後進の目盛りの上に「後進なし」の真鍮の目隠し板
+var APP_VERSION = '0.03.011.002';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
