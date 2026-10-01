@@ -129,7 +129,8 @@ function updateMooring() {
         e.mirror.visible = show && !!it.sym && Math.abs(e.g.position.x) > 1e-3;
     });
 }
-// タグの索を取れる金物か：クリートはいつも、ビット・ボラードは「索を直接かける」を選んだものだけ
+// 索を取れる金物か：クリートはいつも、ビット・ボラードは「索を直接かける」を選んだものだけ。
+// タグの索だけでなく、着岸したときに岸壁のボラードへ取るもやい綱（50-harbor-auto.js）も同じ
 function mooringTowOk(it) { return !!it && (it.type === 'cleat' || !!it.tow); }
 window.mooringTowOk = mooringTowOk;
 function mooringRotate(i, d) {
@@ -370,7 +371,7 @@ function renderMooringPanel() {
                 <select class="moor-sel" onchange="mooringSet(${i}, 'type', this.value)">${opt(MOOR_TYPES, it.type)}</select>
                 <select class="moor-sel" onchange="mooringSet(${i}, 'color', this.value)">${opt(MOOR_COLORS, it.color)}</select>
                 <label class="sp-toggle"><input type="checkbox" ${it.sym ? 'checked' : ''} onchange="mooringSet(${i}, 'sym', this.checked)"> 左右対称</label>
-                ${it.type === 'cleat' ? '<span style="font-size:10px;color:#8ab;">索は舷の外から取る</span>' : `<label class="sp-toggle" title="タグボートの索をこの金物に直接かけてよい（クリートはいつもかけられる）"><input type="checkbox" ${it.tow ? 'checked' : ''} onchange="mooringSet(${i}, 'tow', this.checked)"> タグの索を直接かける</label>`}
+                ${it.type === 'cleat' ? '<span style="font-size:10px;color:#8ab;">索は舷の外から取る</span>' : `<label class="sp-toggle" title="タグボートの索・岸壁のボラードへのもやい綱をこの金物に直接かけてよい（クリートはいつもかけられる）"><input type="checkbox" ${it.tow ? 'checked' : ''} onchange="mooringSet(${i}, 'tow', this.checked)"> タグの索・もやい綱を直接かける</label>`}
             </div>
             <div class="sp-row sp-xyz-row">
                 <span class="sp-axis-label">X:</span>${num(i, 'x', it.x, 0.05)}
