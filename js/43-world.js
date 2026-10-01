@@ -1074,6 +1074,49 @@ function worldHullAt(zLocal) {
     if (lever && d > 0) d = Math.max(0, d + lever);
     return { hw, d };
 }
+// ── 船体の外形の半幅（模型の頂点から）──
+// 輪切り（hullProfile.slices）の幅は喫水線のあたりの外板だけを測るので、張り出した砲郭・スポンソン・
+// 上へ行くほど広がる舷（フレア）などは入らない。岸壁に付ける間隔やタグ・岸壁との当たりには、
+// 船底から水面の上 6m までで、いちばん張り出した所を使う（それより上のマスト・ヤードは除く）。
+// 前後に 64 区切りで、模型が変わったら測り直す。戻り値は模型の座標（×physics.scale でメートル）
+const _hullExt = { key: '', bins: null, z0: 0, dz: 1, checkT: -1e9 };
+function worldHullExtentAt(zLocal) {
+    const hp = window.hullProfile;
+    if (!hp || !hp.ready || typeof importedModelGroup === 'undefined' || !importedModelGroup || typeof shipGroup === 'undefined' || !shipGroup) return 0;
+    const now = performance.now();
+    if (now - _hullExt.checkT > 1000 || !_hullExt.key) { _hullExt.checkT = now; _hullExtCheck(hp); }
+    const B = _hullExt.bins; if (!B) return 0;
+    // 隣の区切りも見る（区切りの境目で細くならないように）
+    const k = Math.floor((zLocal - _hullExt.z0) / _hullExt.dz);
+    let w = 0; for (let j = k - 1; j <= k + 1; j++) if (j >= 0 && j < B.length) w = Math.max(w, B[j]);
+    return w;
+}
+function _hullExtCheck(hp) {
+    const m0 = importedModelGroup.children[0];
+    const key = [importedModelGroup.uuid, m0 ? m0.uuid : '', hp.halfLen, hp.designWaterlineY, hp.keelY, physics.scale,
+        m0 ? m0.position.toArray().concat(m0.rotation.toArray().slice(0, 3), m0.scale.toArray()).map(v => Math.round(v * 1e4)).join(',') : ''].join('|');
+    if (key !== _hullExt.key) {
+        _hullExt.key = key; _hullExt.bins = null;
+        shipGroup.updateMatrixWorld(true);
+        const inv = new THREE.Matrix4().copy(shipGroup.matrixWorld).invert(), M = new THREE.Matrix4(), v = new THREE.Vector3();
+        const sc = physics.scale || 1, yLo = (hp.keelY || 0) - 2 / sc, yHi = (hp.designWaterlineY || 0) + 6 / sc;
+        const N = 64, z0 = -hp.halfLen * 1.15, dz = hp.halfLen * 2.3 / N, bins = new Float32Array(N);
+        let any = false;
+        importedModelGroup.traverse(o => {
+            if (!o.isMesh || !o.geometry || !o.geometry.attributes.position || !o.visible) return;
+            const P = o.geometry.attributes.position;
+            M.multiplyMatrices(inv, o.matrixWorld);
+            for (let i = 0; i < P.count; i++) {
+                v.fromBufferAttribute(P, i).applyMatrix4(M);
+                if (v.y < yLo || v.y > yHi) continue;
+                const k = Math.floor((v.z - z0) / dz); if (k < 0 || k >= N) continue;
+                const x = Math.abs(v.x); if (x > bins[k]) { bins[k] = x; any = true; }
+            }
+        });
+        if (any) { _hullExt.bins = bins; _hullExt.z0 = z0; _hullExt.dz = dz; }
+    }
+}
+window.worldHullExtentAt = worldHullExtentAt;
 function setShipDraft(v) {
     physics.draftOverride = Math.max(0, parseFloat(v) || 0);
     _draftAutoLabel();

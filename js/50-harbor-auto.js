@@ -34,7 +34,8 @@ function _haDims() {
     const sc = physics.scale || 1;
     const HL = ((hp && hp.ready) ? hp.halfLen : 6) * sc;
     let hw = 0;
-    for (let k = -10; k <= 10; k++) hw = Math.max(hw, worldHullAt(k / 10 * HL / sc).hw);
+    // 喫水線の幅と、張り出した所（砲郭・スポンソン・フレア）も入れた外形の幅の大きい方（43-world.js）
+    for (let k = -20; k <= 20; k++) { const z = k / 20 * HL / sc; hw = Math.max(hw, worldHullAt(z).hw, (typeof worldHullExtentAt === 'function' ? worldHullExtentAt(z) : 0) * sc); }
     return { HL, hw, B: hw * 2, L: HL * 2 };
 }
 function _haWrap(d) { return ((d + 540) % 360) - 180; }

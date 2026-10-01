@@ -80,7 +80,9 @@
 //               （360° 旋回・舵輪に連動／個別／ジョイスティック、方位保持・位置保持、モデルのポッド部品も回る）。
 // 0.03.012.001  アジポッドの船では、機関ごとのテレグラフの名前を「左舷ポッド」などに。
 // 0.03.012.002  着岸のもやい綱も、「索・もやい綱を直接かける」を選んでいないビット・ボラードからは岸壁のボラードへ取らない。
-var APP_VERSION = '0.03.012.002';
+// 0.03.012.003  岸壁にめり込む船を直す：着岸の間隔・タグの持ち場・岸壁との当たりに、喫水線の幅だけでなく
+//               張り出した所（砲郭・スポンソン・フレア）も入れた船体の外形の幅を使う（43-world.js worldHullExtentAt）。
+var APP_VERSION = '0.03.012.003';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

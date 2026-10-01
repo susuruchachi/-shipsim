@@ -489,7 +489,7 @@ function worldPlanRoute(from, to, opt) {
         // 必要な水深：喫水＋余裕（3m）＋波で上下する分。船の幅＋横ずれの分の帯の中で調べる
         const hs = Math.max(0, window._seaHs || 0);
         const need = draft + 2 + Math.max(0.5, hs * 0.4);
-        const hwM = (typeof worldHullAt === 'function' && window.hullProfile && hullProfile.ready) ? (() => { let m = 0; for (let k = -10; k <= 10; k++) m = Math.max(m, worldHullAt(k / 10 * hullProfile.halfLen).hw); return m; })() : 15;
+        const hwM = (typeof worldHullAt === 'function' && window.hullProfile && hullProfile.ready) ? (() => { let m = 0; for (let k = -10; k <= 10; k++) { const z = k / 10 * hullProfile.halfLen; m = Math.max(m, worldHullAt(z).hw, (typeof worldHullExtentAt === 'function' ? worldHullExtentAt(z) : 0) * (physics.scale || 1)); } return m; })() : 15;
         // 出発点・目的地のそばの港の、掘ってある航路・泊地
         const ports = [];
         for (const P of worldBuildPorts()) {

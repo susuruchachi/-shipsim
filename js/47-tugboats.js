@@ -170,7 +170,9 @@ function _tugHalfWidth(zLocal) {
     const a = zLocal / hp.halfLen * (hp.bowSign || 1);
     let best = sl[0];
     for (const q of sl) if (Math.abs(q.alongNorm - a) < Math.abs(best.alongNorm - a)) best = q;
-    return best.halfWidth || hp.halfBeam;
+    // 張り出した所（砲郭・スポンソン・フレア）も入れた外形の幅（43-world.js）
+    const ext = typeof worldHullExtentAt === 'function' ? worldHullExtentAt(zLocal) : 0;
+    return Math.max(best.halfWidth || hp.halfBeam, ext);
 }
 function tugStations() {
     const out = [];
