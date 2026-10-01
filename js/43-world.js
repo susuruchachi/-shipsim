@@ -122,12 +122,20 @@ const REAL_WORLDS = {
     britain: {
         name: 'ブリテン諸島・アイルランド', url: 'data/britain', center: { lat: 54.3, lon: -4.5 }, start: 'サウサンプトン港',
         // 作り込んだ港（data/harbors/<key>：10m おきの地形。OpenStreetMap の海岸線・ドック＋EMODnet の水深）
-        harbors: ['southampton', 'liverpool'],
+        harbors: ['southampton', 'liverpool', 'belfast'],
         // 実在の港（おおよその位置。実際の海岸に合わせて数km以内で置き直す）
         ports: [
             // イングランド南岸
             // （5番目：航路が通る所。サウサンプトンは東の口：カルショット沖 → カウズ沖 → スピットヘッド → ナブ）
-            ['サウサンプトン港', 'cargo', 50.895, -1.405, [[50.805, -1.300], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.9034, -1.4252], bearing: 207 }], ['ポーツマス軍港', 'naval', 50.800, -1.110], ['プリマス軍港', 'naval', 50.375, -4.180],
+            ['サウサンプトン港', 'cargo', 50.895, -1.405, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.9034, -1.4252], bearing: 207 }],
+            // サウサンプトンのほかの埠頭（東ドック）：オーシャン・ドックは幅 135m ほどの細長いドックなので、
+            // ドックの外で向きを合わせてからまっすぐ入り、中で横へ寄せる（dock：入口の真ん中と、入っていく向き）
+            ['サウサンプトン港 オーシャン・ドック（43/44番）', 'cargo', 50.8915, -1.3985, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.89152, -1.39851], bearing: 285, quay: 360, dock: { entrance: [50.89025, -1.40008], inBearing: 15 } }],
+            ['サウサンプトン港 オーシャン・クルーズ・ターミナル（46番）', 'cargo', 50.8922, -1.4002, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.89218, -1.4002], bearing: 105, quay: 360, dock: { entrance: [50.89025, -1.40008], inBearing: 15 } }],
+            ['サウサンプトン港 QEIIターミナル（38/39番）', 'cargo', 50.8848, -1.3964, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.88481, -1.39643], bearing: 249, quay: 400 }],
+            ['サウサンプトン港 シティ・クルーズ・ターミナル（101番）', 'cargo', 50.8999, -1.4146, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.89992, -1.4146], bearing: 201, quay: 500 }],
+            ['サウサンプトン港 メイフラワー・クルーズ・ターミナル（106番）', 'cargo', 50.9047, -1.4290, [[50.7830, -1.2450], [50.775, -1.180], [50.735, -1.050], [50.670, -0.950]], { at: [50.90466, -1.42897], bearing: 201, quay: 500 }],
+            ['ポーツマス軍港', 'naval', 50.800, -1.110], ['プリマス軍港', 'naval', 50.375, -4.180],
             ['プール港', 'town', 50.705, -1.990], ['ポートランド港', 'town', 50.570, -2.440], ['ファルマス港', 'town', 50.155, -5.055],
             ['ニューリン漁港', 'fishing', 50.102, -5.548], ['ブリクサム漁港', 'fishing', 50.398, -3.510], ['ドーヴァー港', 'city', 51.120, 1.330],
             // テムズ・東海岸
@@ -140,7 +148,7 @@ const REAL_WORLDS = {
             ['カークウォール港', 'town', 58.985, -2.960], ['ストーノウェイ港', 'town', 58.207, -6.385], ['ウラプール漁港', 'fishing', 57.895, -5.160],
             ['オーバン港', 'town', 56.415, -5.475], ['ファスレーン軍港', 'naval', 56.065, -4.820], ['グリーノック港', 'city', 55.950, -4.765],
             // アイリッシュ海・ウェールズ・ブリストル海峡
-            ['ベルファスト港', 'city', 54.620, -5.890], ['リヴァプール港', 'city', 53.450, -3.020, [[53.5325, -3.2210]], { at: [53.40454, -2.99848], bearing: 252 }], ['ホーリーヘッド港', 'town', 53.315, -4.625],
+            ['ベルファスト港', 'city', 54.620, -5.890, [[54.7170, -5.6050]], { at: [54.63449, -5.87459], bearing: 303 }], ['リヴァプール港', 'city', 53.450, -3.020, [[53.5325, -3.2210]], { at: [53.40454, -2.99848], bearing: 252 }], ['ホーリーヘッド港', 'town', 53.315, -4.625],
             ['ダグラス港', 'town', 54.148, -4.475], ['ミルフォード・ヘイヴン港', 'cargo', 51.705, -5.050], ['ブリストル港', 'cargo', 51.505, -2.715],
             ['カーディフ港', 'town', 51.460, -3.165], ['スウォンジー港', 'town', 51.615, -3.925],
             // アイルランド
@@ -436,7 +444,7 @@ function _rwPlacePort(def, idx) {
     const seedOf = () => { let seed = 7; for (const ch of name) seed = (seed * 31 + ch.charCodeAt(0)) % 1000000007; return seed; };
     if (opt && opt.at && Number.isFinite(opt.bearing)) {
         const [la, lo] = opt.at;
-        return { id: 'r' + idx, type, name, lat: la, lon: lo, u: worldLatLonToUnit(la, lo), real: true, via: via || null, seaBearing: opt.bearing, seed: seedOf(), fixed: true };
+        return { id: 'r' + idx, type, name, lat: la, lon: lo, u: worldLatLonToUnit(la, lo), real: true, via: via || null, seaBearing: opt.bearing, seed: seedOf(), fixed: true, quay: opt.quay || null, dock: opt.dock || null };
     }
     const SR = 6000, STEP = 150;
     let best = null;
@@ -478,8 +486,18 @@ function _rwPlacePort(def, idx) {
 // ウォーターやテムズ川の航路など）がならされて浅くなってしまう。そこで港の泊地から、なるべく深い所を
 // 通って外洋の深い所までの道（自然の澪筋）を格子の上で探し、その道を港の航路の深さまで掘る。
 // 格子そのものを掘るので、3D の地形・座礁・地図・航路探しのどれにも同じ航路が見える。
+// ドックの入口の外の点（入口の真ん中から、入っていく向きと反対へ DOCK_TURN_OUT m）。大きな船はここで向きを合わせる
+const DOCK_TURN_OUT = 320;
+function _rwDockOut(p, dist) {
+    if (!p || !p.dock) return null;
+    const [la, lo] = p.dock.entrance, br = (p.dock.inBearing + 180) * Math.PI / 180, d = dist || DOCK_TURN_OUT;
+    const mLat = WORLD_R * Math.PI / 180, mLon = mLat * Math.cos(la * Math.PI / 180);
+    return { lat: la + Math.cos(br) * d / mLat, lon: lo + Math.sin(br) * d / mLon };
+}
+window._rwDockOut = _rwDockOut;
 function _rwFairway(p) {
-    const R = _RW, T = PORT_TYPES[p.type], D = T.depth + 2;
+    // 作り込んだ港（大きな客船の港）は、喫水 15〜20m の超大型客船でも通れるよう深く掘る
+    const R = _RW, T = PORT_TYPES[p.type], D = (_rwDetailOf(p.lat, p.lon) ? 24 : T.depth + 2);
     const RAD = Math.PI / 180;
     const cellOf = (lat, lon) => ({ i: Math.round((lon - R.lon0) / R.cell), j: Math.round((R.lat1 - lat) / R.cell) });
     const llOf = (i, j) => ({ lat: R.lat1 - j * R.cell, lon: R.lon0 + i * R.cell });
@@ -545,9 +563,11 @@ function _rwFairway(p) {
         const inBox = (v) => v[0] > Dt.lat0 && v[0] < Dt.lat1 && v[1] > Dt.lon0 && v[1] < Dt.lon1;
         let tgt = null;
         while (vias.length && inBox(vias[0])) tgt = vias.shift();
-        const st = { lat: p.lat + Math.cos(br) * 150 / mLat, lon: p.lon + Math.sin(br) * 150 / mLon };
+        // ドックの中の岸壁：ドックの入口の外（入口から DOCK_TURN_OUT m）から。航路の最初の点（自動航行が止まる所）もそこ
+        const dk = _rwDockOut(p);
+        const st = dk || { lat: p.lat + Math.cos(br) * 150 / mLat, lon: p.lon + Math.sin(br) * 150 / mLon };
         const r = _rwDetailRoute(Dt, st, tgt ? { lat: tgt[0], lon: tgt[1] } : null);
-        if (r) { pre = r.pts; cur = cellOf(r.end.lat, r.end.lon); }
+        if (r) { pre = dk ? [dk, ...r.pts] : r.pts; cur = cellOf(r.end.lat, r.end.lon); }
     }
     // 通る所（実際の航路の目印。港ごとの via）を順に通ってから、外洋の深い所へ
     let cells = [];

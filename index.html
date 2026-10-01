@@ -1035,6 +1035,12 @@
           <button class="sp-gizmo-btn" onclick="mooringAutoLayout()">✨ おすすめの配置</button>
           <button class="sp-gizmo-btn" onclick="mooringClear()">🗑 すべて消す</button>
         </div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+          <label class="sp-toggle"><input type="checkbox" class="moor-show" checked onchange="shipMooring.show=this.checked"> 設定画面の外（航海中）でも金物を表示する</label>
+        </div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">
+          タグボートが索を取って引くのは、クリートと「タグの索を直接かける」を選んだビット・ボラードだけです（押すのは舷側のどこでも）。
+        </div>
         <div class="sp-funnel-list" id="moor-list"></div>
         <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
           <button class="sp-gizmo-btn" onclick="mooringAdd('bitt')">＋ ビット（双係柱）</button>
@@ -1331,6 +1337,7 @@
 <script src="js/49-autopilot.js"></script>
 <script src="js/50-harbor-auto.js"></script>
 <script src="js/51-harbor-detail.js"></script>
+<script src="js/52-puffs.js"></script>
 <script src="js/17-main-loop.js"></script>
 <script src="js/18-hull-wake-physics.js"></script>
 <script src="js/19-swe-fluid.js"></script>

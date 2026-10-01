@@ -415,6 +415,36 @@ function setHornAuto(key, on) {
 }
 
 // 毎フレーム（35 の updateAudio から）
+// 汽笛が蒸気を吐くか：蒸気汽笛は吐く（切ることもできる）。空気式のホーンは選んだときだけ
+const _HORN_STEAM_OPT = { tyfon: 1, airhorn: 1, diaphone: 1, nautophone: 1, electric: 1, siren: 1 };
+function hornSteams(h) {
+    if (!h) return false;
+    if (/^steam_/.test(h.type)) return h.steam !== false;
+    return !!(_HORN_STEAM_OPT[h.type] && h.steam);
+}
+// 湯気：蒸気汽笛は上へ吹き上がり、空気式ホーンは先端（ラッパの口：船首の向き）から前へ
+const _hsV = new THREE.Vector3();
+function _hornSteam(h, R, dt, k) {
+    if (!hornSteams(h) || typeof puffEmit !== 'function' || !dt) return;
+    const P = audioShipPoint(h.x, h.y, h.z, _hsV);
+    if (typeof camera !== 'undefined' && camera && camera.position.distanceTo(P) > 4000) return;
+    const hr = (physics.heading || 0) * Math.PI / 180, fx = Math.sin(hr), fz = Math.cos(hr);
+    const v = (physics.speed || 0) * 0.514;
+    const steamWhistle = /^steam_/.test(h.type);
+    R.steamAcc = (R.steamAcc || 0) + dt * (steamWhistle ? 45 : 30) * k;
+    let n = 0;
+    while (R.steamAcc >= 1 && n++ < 12) {
+        R.steamAcc -= 1;
+        const j = () => (Math.random() - 0.5);
+        let vx = fx * v, vy, vz = fz * v;
+        if (steamWhistle) { vy = 9 + Math.random() * 5; vx += j() * 2.5; vz += j() * 2.5; }
+        else { vy = 1.5 + Math.random(); vx += fx * (9 + Math.random() * 4) + j() * 2; vz += fz * (9 + Math.random() * 4) + j() * 2; }
+        const c = 0.92 + Math.random() * 0.06;
+        puffEmit({ x: P.x + j() * 0.3, y: P.y + (steamWhistle ? 0.4 : 0), z: P.z + j() * 0.3, vx, vy, vz,
+            life: 2.2 + Math.random() * 1.6, s0: 0.8, s1: 7 + Math.random() * 4, r: c, g: c, b: c, a: 0.55 * (0.5 + 0.5 * k), rise: 0.6, drag: 1.1 });
+    }
+}
+window.hornSteams = hornSteams;
 function updateHorns(t, dt) {
     const now = audio.ctx.currentTime;
     shipSound.horns.forEach((h, i) => {
@@ -422,6 +452,9 @@ function updateHorns(t, dt) {
         if (!R) return;
         // 船と一緒に動く音源
         R.em.update(audioShipPoint(h.x, h.y, h.z, audio._tmpH || (audio._tmpH = new THREE.Vector3())));
+        // 蒸気：鳴っている間（と止めた直後の少しの間）、汽笛の位置から湯気を吐く（_hornSteam）
+        if (R.presses > 0) R.steamTail = 0.7; else if (R.steamTail > 0) R.steamTail -= dt;
+        if (R.presses > 0 || R.steamTail > 0) _hornSteam(h, R, dt, R.presses > 0 ? 1 : Math.max(0, R.steamTail / 0.7));
         // 号鐘・ゴングは押している間くり返し打つ
         if (_isStrikeType(h.type) && R.presses > 0 && now >= R.strikeNext) {
             const per = Math.max(0, h.volume != null ? h.volume : 1) / Math.sqrt(Math.max(1, h.notes.length));
@@ -546,6 +579,7 @@ function renderSoundPanel() {
                 <div class="sp-row" style="gap:8px;flex-wrap:wrap;">
                     <label class="sp-toggle"><input type="checkbox" ${h.main ? 'checked' : ''} onchange="shipSound.horns[${i}].main=this.checked"> 📯ボタン・操船信号用</label>
                     <label class="sp-toggle"><input type="checkbox" ${h.fog ? 'checked' : ''} onchange="shipSound.horns[${i}].fog=this.checked"> 霧中信号用（霧笛）</label>
+                    ${(/^steam_/.test(h.type) || _HORN_STEAM_OPT[h.type]) ? `<label class="sp-toggle" title="${/^steam_/.test(h.type) ? '蒸気汽笛：その位置から上へ湯気を吐く' : '空気式：先端から前へ湯気を吐く'}"><input type="checkbox" ${hornSteams(h) ? 'checked' : ''} onchange="shipSound.horns[${i}].steam=this.checked"> 蒸気を吐く</label>` : ''}
                     <button class="sp-gizmo-btn" id="gizmo-horn-${i}" onclick="toggleGizmo('horn', ${i})">📍 ギズモ</button>
                     <button class="sp-gizmo-btn" onclick="hornCopy(${i}, false)" title="同じ設定の汽笛をもう1つ作る">⧉ 複製</button>
                     <button class="sp-gizmo-btn" onclick="hornCopy(${i}, true)" title="左右反対側（Xを反転）に同じ汽笛を作る">⇆ 反対舷に複製</button>

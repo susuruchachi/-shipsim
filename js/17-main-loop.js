@@ -613,7 +613,9 @@ function animate() {
     updateDeckLightPool();
     updateFunnelUplights();
 
-    const finalEuler = new THREE.Euler(physics.pitch, rotY, physics.roll, 'YXZ');
+    // 座礁して乗り上げているときの傾き（44-world-terrain.js の _trGroundAttitude）を描く姿勢に足す
+    const gAtt = (window.world && world.mode === 'world') ? 1 : 0;
+    const finalEuler = new THREE.Euler(physics.pitch + gAtt * (physics.groundPitch || 0), rotY, physics.roll + gAtt * (physics.groundRoll || 0), 'YXZ');
     shipGroup.quaternion.setFromEuler(finalEuler);
 
     // モデルを配置する際の「ワールド座標に固定する基準点」はCGではなく喫水線基準点(waterlineOffsetY)。
@@ -654,6 +656,7 @@ function animate() {
     if (typeof updateTugs === 'function') updateTugs(t, physicsDt);          // タグボート（47-tugboats.js。物理の早送りに合わせる）
     if (typeof updateMinimap === 'function') updateMinimap(t);               // 小さな地図（48-minimap.js）
     if (typeof updateWorldTerrain === 'function') updateWorldTerrain(t, dt);
+    if (typeof updatePuffs === 'function') updatePuffs(t, dt);                   // タグの排煙・汽笛の蒸気・しぶき（52-puffs.js）
     if (typeof updateLightBake === 'function') updateLightBake(t);
     if (typeof updateAreaLights === 'function') updateAreaLights(t);
     if (typeof updateGlowHalos === 'function') updateGlowHalos();   // 遠景用の光のにじみ（26）

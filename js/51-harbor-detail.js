@@ -82,7 +82,7 @@ function _hdBuildTile(d, list, org) {
     geo.setIndex(pos.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(idx, 1) : new THREE.Uint16BufferAttribute(idx, 1));
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
-    if (!_hdBuildTile.mat) _hdBuildTile.mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0.0 });
+    if (!_hdBuildTile.mat) _hdBuildTile.mat = noShipLightProbe(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0.0 }));
     const m = new THREE.Mesh(geo, _hdBuildTile.mat);
     m.receiveShadow = true; m.castShadow = false;
     m.userData.noLightBake = true;
@@ -95,7 +95,7 @@ function _hdG(key, make) { if (!_hdGeo[key]) _hdGeo[key] = make(); return _hdGeo
 function _hdMat(hex, opts) {
     const k = hex + JSON.stringify(opts || {});
     if (!_hdMat.c) _hdMat.c = {};
-    if (!_hdMat.c[k]) { const m = new THREE.MeshStandardMaterial(Object.assign({ roughness: 0.6, metalness: 0.1 }, opts || {})); m.color.setHex(hex).convertSRGBToLinear(); _hdMat.c[k] = m; }
+    if (!_hdMat.c[k]) { const m = new THREE.MeshStandardMaterial(Object.assign({ roughness: 0.6, metalness: 0.1 }, opts || {})); m.color.setHex(hex).convertSRGBToLinear(); _hdMat.c[k] = noShipLightProbe(m); }
     return _hdMat.c[k];
 }
 function _hdColourHex(s) {
@@ -169,8 +169,17 @@ function _hdCrane(d, cr, org) {
         const h = _rwDetailAt(d, lat + n / mLat, lon + e / mLon);
         if (-h > bd) { bd = -h; best = a; }
     }
+    // 岸壁の縁（水の方へ進んで最初に水になる所）を探し、海側の脚が縁の 2m 内側に来るよう置き直す
+    //（地図のクレーンの点は岸壁の縁から少しずれていることが多く、そのままだと脚が海へ張り出す）
+    const ca = Math.cos(best), sa = Math.sin(best);
+    let edge = -1;
+    for (let s = 0; s <= 60; s += 1) if (_rwDetailAt(d, lat + ca * s / mLat, lon + sa * s / mLon) < 0.3) { edge = s; break; }
+    const LEG = 9, shift = edge >= 0 && edge < 40 ? edge - LEG - 2 : 0;
+    const clat = lat + ca * shift / mLat, clon = lon + sa * shift / mLon;
+    // 陸側の脚が水に落ちる（細い桟橋など）なら置かない
+    if (_rwDetailAt(d, clat - ca * LEG / mLat, clon - sa * LEG / mLon) < 0.3) return null;
     const g = new THREE.Group();
-    g.position.set(org.x - x, _rwDetailAt(d, lat, lon), org.z + y);
+    g.position.set(org.x - x - sa * shift, _rwDetailAt(d, clat, clon), org.z + y + ca * shift);
     g.rotation.y = Math.atan2(-Math.sin(best), Math.cos(best));      // 物理の面：東は −x
     const mat = _hdMat(0xd8742a), dark = _hdMat(0x3a3a3a);
     const box = _hdG('unitBox', () => new THREE.BoxGeometry(1, 1, 1));
@@ -179,6 +188,63 @@ function _hdCrane(d, cr, org) {
     add(18, 3, 2, 0, 34, -9, mat); add(18, 3, 2, 0, 34, 9, mat);
     add(3, 3, 80, 0, 38, 22, mat);                                   // 腕（水の方 +z）
     add(10, 6, 8, 0, 41, -8, dark);                                  // 機械室
+    return g;
+}
+
+// ── 港ごとの名所 ──
+//  ベルファストのハーランド＆ウルフ造船所：
+//   ・アロール・ガントリー：オリンピック号・タイタニック号を造った、2 本の船台（2 番・3 番）にまたがる
+//     鉄骨の大きな足場（長さ 256m・幅 82m・高さ 69m）。いまのタイタニック・スリップウェイの上に
+//   ・サムソンとゴライアス：建造ドックをまたぐ、黄色い 2 基の門形クレーン（ゴライアス 96m・サムソン 106m、
+//     脚の間 140m）。OpenStreetMap のクレーンのレールの位置に
+//  位置は緯度・経度、向き（bearing）は長い方の軸の方位
+const HD_LANDMARKS = {
+    belfast: [
+        { kind: 'arrol', lat: 54.61040, lon: -5.90925, bearing: 21, len: 256, wid: 82, hgt: 69 },
+        { kind: 'portal', name: 'ゴライアス', lat: 54.60459, lon: -5.90471, bearing: 130, span: 140, hgt: 96 },
+        { kind: 'portal', name: 'サムソン', lat: 54.60951, lon: -5.89774, bearing: 128, span: 140, hgt: 106 },
+    ],
+};
+function _hdLandmark(d, L, org) {
+    const mLat = d.cell / d.dLat, mLon = d.cell / d.dLon;
+    const x = (L.lon - d.lon0) * mLon, y = (L.lat - d.lat0) * mLat;
+    const g = new THREE.Group();
+    g.position.set(org.x - x, Math.max(0, _rwDetailAt(d, L.lat, L.lon)), org.z + y);
+    const br = L.bearing * Math.PI / 180;
+    g.rotation.y = Math.atan2(-Math.sin(br), Math.cos(br));            // 物理の面：東は −x。+z が長い方の軸
+    const box = _hdG('unitBox', () => new THREE.BoxGeometry(1, 1, 1));
+    const add = (w, h, dd, px, py, pz, m) => { const o = new THREE.Mesh(box, m); o.scale.set(w, h, dd); o.position.set(px, py, pz); o.userData.sharedGeo = true; o.castShadow = true; g.add(o); return o; };
+    if (L.kind === 'arrol') {
+        // 鉄骨（黒っぽい灰色）：両側と真ん中に柱の列、上に縦横の梁、柱の間に斜めの筋かい、上を走る小さなクレーン
+        const steel = _hdMat(0x3d3a37, { roughness: 0.8, metalness: 0.3 }), crane = _hdMat(0x2e2c2a);
+        const n = 11, bay = L.len / n, hw = L.wid / 2;
+        for (const sx of [-hw, 0, hw]) {
+            for (let i = 0; i <= n; i++) add(1.6, L.hgt, 1.6, sx, L.hgt / 2, -L.len / 2 + i * bay, steel);
+            for (const hy of [L.hgt * 0.35, L.hgt * 0.62, L.hgt - 1]) add(1.2, 1.4, L.len, sx, hy, 0, steel);   // 縦の梁（何段か）
+            for (let i = 0; i < n; i++) {                                                                      // 筋かい
+                const o = add(0.6, Math.hypot(bay, L.hgt * 0.62), 0.6, sx, L.hgt * 0.31, -L.len / 2 + (i + 0.5) * bay, steel);
+                o.rotation.x = (i % 2 ? 1 : -1) * Math.atan2(bay, L.hgt * 0.62);
+            }
+        }
+        for (let i = 0; i <= n; i++) add(L.wid, 1.8, 1.4, 0, L.hgt - 1, -L.len / 2 + i * bay, steel);          // 横の梁
+        for (const sx of [-hw / 2, hw / 2]) for (let i = 0; i < 3; i++) add(5, 4, 8, sx, L.hgt + 2, -L.len / 3 + i * L.len / 3, crane);   // 上のクレーン
+    } else if (L.kind === 'portal') {
+        // 門形クレーン（黄色）：両側の脚（A 字に開く 2 本ずつ）と、上の太い箱形の梁、梁の上の機械室
+        const yel = _hdMat(0xf0c010, { roughness: 0.55, metalness: 0.2 }), dark = _hdMat(0x333333);
+        const hs = L.span / 2, top = L.hgt - 8;
+        // （+z：脚の間＝ドックを横切る向き。脚は ±z の両側に、ドックの向き（x）へ A 字に開く）
+        for (const sz of [-hs, hs]) {
+            for (const sx of [-1, 1]) {
+                const o = add(4, Math.hypot(top, 14), 4, sx * 7, top / 2, sz, yel);
+                o.rotation.z = sx * Math.atan2(7, top);
+            }
+            add(34, 3, 6, 0, 2, sz, dark);                                          // レールの上の台車
+        }
+        add(9, 9, L.span + 20, 0, top + 4.5, 0, yel);                               // 主梁
+        add(12, 7, 14, 0, top + 12.5, hs * 0.3, yel);                              // トロリー（巻き上げ機）
+    }
+    g.traverse(o => { if (o.isMesh) o.userData.noLightBake = true; });
+    g.name = 'Landmark:' + (L.name || L.kind);
     return g;
 }
 
@@ -240,6 +306,8 @@ function updateHarborDetail(t, dt) {
         for (const m of F.s) { const o = _hdMark(m, org); if (o) { hdState.group.add(o.g); hdState.marks.push(o); } }
         hdState.cranes = [];
         for (const c of F.c) { const o = _hdCrane(d, c, org); if (o) { hdState.group.add(o); hdState.cranes.push(o); } }
+        // 港ごとの名所（ベルファストのハーランド＆ウルフなど）
+        for (const L of (HD_LANDMARKS[d.key] || [])) { const o = _hdLandmark(d, L, org); if (o) { hdState.group.add(o); hdState.cranes.push(o); } }
     }
     // ブイは波で上下、灯りは夜だけ点滅（遠くのは動かさない）
     const nf = (typeof lightingNightFactor !== 'undefined') ? lightingNightFactor : 0;

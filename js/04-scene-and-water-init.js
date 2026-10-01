@@ -1762,6 +1762,8 @@ function createWater() {
                         vec4 sb = texture2D(seabedTex, suv + wob);
                         float sd = sb.a * 200.0;
                         float vis = pow(clamp(1.0 - sd / 200.0, 0.0, 1.0), 1.8) * 0.9;
+                        // 絵の端（計算した範囲の外側）へ向かって、少しずつ普通の海の色へ戻す（44-world-terrain.js の遠くの水面と同じ）
+                        vis *= smoothstep(0.0, 0.18, min(min(suv.x, suv.y), min(1.0 - suv.x, 1.0 - suv.y)));
                         // 深くなるほど赤が先に吸われて青緑になる。明るさは水の色（昼夜で変わる）に合わせる
                         vec3 trans = exp(-sd * vec3(0.060, 0.022, 0.016));
                         float lum = dot(shallowColor, vec3(0.3, 0.5, 0.2));

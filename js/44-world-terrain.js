@@ -39,7 +39,7 @@ window.terrain = terrain;
 //  船の近くの港の「形」を、物理の面の座標で持っておく（ワーカーにも渡す）
 function _portShape(p) {
     const T = PORT_TYPES[p.type];
-    const quayLen = T.quay;
+    const quayLen = p.quay || T.quay;      // 現実の港は岸壁の長さを決めてあることがある（ドックの中の岸壁など）
     const apron = { fishing: 45, town: 70, city: 130, cargo: 190, naval: 110 }[p.type];
     const basin = T.basin;
     const loc = worldUnitToLocal(p.u);
@@ -80,8 +80,8 @@ function _portAdjust(h, x, z, shapes) {
         const half = S.quayLen / 2;
         // 作り込んだ港：岸壁の後ろの陸を平らにし、前の水面を掘るだけ（陸は削らない・沖への航路は掘らない）
         if (S.detail) {
-            // 岸壁のすぐ前（12m）は必ず水（本物の岸の線と、置いた岸壁の線の数 m のずれで船腹が陸に当たらないよう）
-            if (a > 0 && a < 12 && Math.abs(b) < half) { h = Math.min(h, -S.depth - 2); continue; }
+            // 岸壁の前（45m：大きな船の幅と余裕）は必ず水（本物の岸の線と置いた岸壁の線のずれや、岸壁の端の角で船が陸に当たらないよう）
+            if (a > 0 && a < 45 && Math.abs(b) < half) { h = Math.min(h, -S.depth - 2); continue; }
             if (a <= 0 && a > -S.apron && Math.abs(b) < half && h > -1) h = 3;
             else if (a > 0 && a < Math.min(S.basin, 450) && Math.abs(b) < half + 40 && h < -0.5) {
                 const want = -S.depth - 2, k = Math.min(1, (half + 40 - Math.abs(b)) / 40) * Math.min(1, (Math.min(S.basin, 450) - a) / 150);
@@ -158,7 +158,9 @@ function _trWorker() {
     return terrain.worker;
 }
 
-// ── 地面の材質：水面より下は描かない ──
+// 浅い海は海底も網にする（この深さ[m]まで。波の谷や水中から海底が見え、座礁した船が海底に載って見える）
+const TR_SEABED = -15;
+// ── 地面の材質：海底の網より深い所は描かない ──
 let _trMat = null;
 function _trMaterial() {
     if (_trMat) return _trMat;
@@ -167,9 +169,10 @@ function _trMaterial() {
         sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vTrY;')
             .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\n    vTrY = (modelMatrix * vec4(transformed, 1.0)).y;');
         sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vTrY;')
-            .replace('void main() {', 'void main() {\n    if (vTrY < -0.6) discard;');
+            .replace('void main() {', 'void main() {\n    if (vTrY < ' + TR_SEABED.toFixed(1) + ') discard;');
     };
     _trMat.customProgramCacheKey = () => 'worldTerrain';
+    noShipLightProbe(_trMat);
     return _trMat;
 }
 // 港のそばの細かい網の材質：重なる所では手前に描く（粗い網と同じ高さの陸で、ちらつかないように）
@@ -179,13 +182,20 @@ function _trMaterialFine() {
     _trMatFine = _trMaterial().clone();
     _trMatFine.onBeforeCompile = _trMaterial().onBeforeCompile;
     _trMatFine.customProgramCacheKey = () => 'worldTerrain';
+    _trMatFine.userData = {}; noShipLightProbe(_trMatFine);
     _trMatFine.polygonOffset = true; _trMatFine.polygonOffsetFactor = -2; _trMatFine.polygonOffsetUnits = -4;
     return _trMatFine;
 }
 // 高さ・傾き → 色
 function _trColor(h, slope, x, z, out, o) {
     let r, g, b;
-    if (h < 1.2) { if (_RW) { r = 0.52; g = 0.55; b = 0.40; } else { r = 0.78; g = 0.72; b = 0.54; } }   // 砂浜（現実世界は干潟・湿地の色）
+    if (h < -0.5) {
+        // 浅い海の海底（TR_SEABED まで網を作る）：急な所は岩、ほかは砂・泥（深いほど暗く）
+        const mott = (Math.sin(x * 0.013 + z * 0.007) * Math.sin(x * 0.005 - z * 0.011) + 1) * 0.5, k = 1 - Math.min(0.45, -h / 40);
+        if (slope > 0.12 || mott > 0.8) { r = 0.40 * k; g = 0.39 * k; b = 0.35 * k; }
+        else { r = (0.66 - 0.1 * mott) * k; g = (0.61 - 0.08 * mott) * k; b = (0.46 - 0.05 * mott) * k; }
+    }
+    else if (h < 1.2) { if (_RW) { r = 0.52; g = 0.55; b = 0.40; } else { r = 0.78; g = 0.72; b = 0.54; } }   // 砂浜（現実世界は干潟・湿地の色）
     else if (slope > 0.75) { r = 0.42; g = 0.40; b = 0.37; }             // 岩肌
     else if (h > 1800) { r = 0.93; g = 0.94; b = 0.96; }                 // 雪
     else if (h > 1100) { r = 0.50; g = 0.48; b = 0.42; }                  // 高地
@@ -244,7 +254,7 @@ function _trBuildMesh(H, n, half, cx, cz, lowerInside, opts) {
     for (let j = 0; j < n - 1; j++) {
         for (let i = 0; i < n - 1; i++) {
             const a = j * n + i, b = a + 1, c = a + n, d = c + 1;
-            if (Math.max(P[a * 3 + 1], P[b * 3 + 1], P[c * 3 + 1], P[d * 3 + 1]) < -0.6) continue;
+            if (Math.max(P[a * 3 + 1], P[b * 3 + 1], P[c * 3 + 1], P[d * 3 + 1]) < TR_SEABED) continue;
             if (nearW && !(nearW[a] || nearW[b] || nearW[c] || nearW[d])) continue;
             idx.push(a, c, b, b, c, d);
         }
@@ -346,6 +356,7 @@ function _pMat(key, color, opts) {
         // 色は見た目の色（sRGB）で書いてあるので、明るさの計算用（リニア）に直す
         const m = new THREE.MeshStandardMaterial(Object.assign({ roughness: 0.85, metalness: 0.05 }, opts || {}));
         m.color.setHex(color).convertSRGBToLinear();
+        noShipLightProbe(m);
         if (key !== 'lamp') m.color.multiplyScalar(0.6);      // 海の上の強い光に合わせて少し暗く
         if (opts && opts.emissive !== undefined) m.emissive.setHex(opts.emissive).convertSRGBToLinear();
         _pMats[key] = m;
@@ -593,6 +604,8 @@ function _trFarWaterMesh() {
                         vec4 sb = texture2D(seabedTex, suv);
                         float sd = sb.a * 200.0;
                         float vis = pow(clamp(1.0 - sd / 200.0, 0.0, 1.0), 1.8) * 0.9;
+                        // 絵の端（計算した範囲の外側）へ向かって、少しずつ普通の海の色へ戻す（急に色が変わらないように）
+                        vis *= smoothstep(0.0, 0.18, min(min(suv.x, suv.y), min(1.0 - suv.x, 1.0 - suv.y)));
                         vec3 trans = exp(-sd * vec3(0.060, 0.022, 0.016));
                         float lum = dot(shallowColor, vec3(0.3, 0.5, 0.2));
                         base = mix(base, sb.rgb * lum * 4.0 * trans + shallowColor * (1.0 - trans) * 0.8, vis);
@@ -782,6 +795,45 @@ function worldSeabedAt(x, z) {
 }
 window.worldSeabedAt = worldSeabedAt;
 
+// ── 港内・川の中の穏やかな波 ──
+// 船のまわりの「吹送距離」（風上側へ、陸・防波堤に当たるまでの水の広がり）を 24 方向で測り、
+// 狭いほど波を低く・波長を短くする（防波堤の内や川の中では、荒天でも細かい穏やかな波になる）。
+// 2 秒ごとに測って、ゆっくり変える。返す amp：波高の倍率、width：波長の倍率、swell：うねりの倍率
+const WAVE_FETCH_FULL = 6000;      // これだけ開けていれば外洋と同じ[m]
+const _wvShelter = { t: -1e9, amp: 1, width: 1, swell: 1, tAmp: 1, tWidth: 1, tSwell: 1 };
+function worldWaveShelter(t, dt) {
+    const S = _wvShelter;
+    if (!window.world || world.mode !== 'world' || typeof physics === 'undefined') { S.amp = S.width = S.swell = 1; return S; }
+    if (!(t - S.t < 2) || t < S.t) {
+        S.t = t;
+        const x0 = physics.cgWorldX || 0, z0 = physics.cgWorldZ || 0;
+        // 風上の向き（physics.windDir は風の吹いていく向き：煙は (sin, cos) へ流れる。03 / 12）
+        const wr = (physics.windDir || 0) * Math.PI / 180, aUp = Math.atan2(-Math.sin(wr), -Math.cos(wr));
+        let sumW = 0, sumF = 0, sumAll = 0, nAll = 0;
+        for (let k = 0; k < 24; k++) {
+            const a = k / 24 * Math.PI * 2, dx = Math.sin(a), dz = Math.cos(a);
+            let d = 0;
+            for (let r = 120; r <= WAVE_FETCH_FULL; r += r < 1500 ? 120 : 300) {
+                if (worldSeabedAt(x0 + dx * r, z0 + dz * r) > -0.5) break;
+                d = r;
+            }
+            if (d >= WAVE_FETCH_FULL - 300) d = WAVE_FETCH_FULL;
+            // 風上ほど重く（風下の広がりは波を育てない）。うねりはどの向きからでも入る
+            const up = Math.cos(a - aUp);
+            const w = Math.max(0.05, up) ** 2;
+            sumW += w; sumF += w * d; sumAll += d; nAll++;
+        }
+        const fWind = sumF / Math.max(1e-6, sumW) / WAVE_FETCH_FULL, fAll = sumAll / nAll / WAVE_FETCH_FULL;
+        S.tAmp = Math.max(0.12, Math.pow(Math.min(1, fWind), 0.6));
+        S.tWidth = 0.3 + 0.7 * Math.sqrt(Math.min(1, fWind));
+        S.tSwell = Math.max(0.05, Math.pow(Math.min(1, fAll), 1.2));
+    }
+    const k = Math.min(1, (dt || 0) / 8);
+    S.amp += (S.tAmp - S.amp) * k; S.width += (S.tWidth - S.width) * k; S.swell += (S.tSwell - S.swell) * k;
+    return S;
+}
+window.worldWaveShelter = worldWaveShelter;
+
 // 船体の当たりを見る点（船の中の座標[m]：a＝前後、s＝横（+x 側）、d＝その点の喫水）
 //  前後 9 か所 × （キール・左右の舷）＋ 船首・船尾の先。舷は喫水の 7 割（丸い船底の分）で見る。
 let _trHullCache = null;
@@ -828,7 +880,7 @@ function _trHullScore(x, z, h, off, out) {
         const lx = p.s / scl, lz = p.a / scl;
         const keelY = sea + M[1] * lx + M[9] * lz - p.d;
         const c = b - keelY;                             // 正：底（岸壁）が船底より上
-        if (c > 0) { score += Math.min(12, c); if (out) out.push(p); }
+        if (c > 0) { score += Math.min(12, c); if (out) out.push(Object.assign({ c }, p)); }
         if (b > 0) hard++;                               // 岸壁・桟橋・陸（水面より上）の中
     }
     if (terrain.ports.size && _trHullCache) for (const p of _trHullCache.dense) {
@@ -850,6 +902,22 @@ function worldGroundTry(dA, dS, dH) {
 window.worldGroundTry = worldGroundTry;
 // 前の姿勢より悪くなったか（固い所に入る点が増えた、または深く乗り上げた）
 function _trWorse(score, hard, good) { return hard > good.hard || score > good.score + 0.02; }
+// 乗り上げたときの船の姿勢：海底に当たっている所（c：海底が船底より上に出ている高さ[m]）を持ち上げるように、
+// 前後の傾き（縦）と横の傾きを、当たっている点の位置で最小二乗に合わせる。船は水にも支えられているので 6 割ほど。
+// 描く姿勢にだけ足す（17-main-loop.js：physics.groundPitch / groundRoll）。離れたら数秒で戻す
+function _trGroundAttitude(hits, dt) {
+    const pts = _trHullPoints();
+    let sa = 0, ss = 0, ca = 0, cs = 0;
+    for (const p of pts) { sa += p.a * p.a; ss += p.s * p.s; }
+    if (terrain.grounded) for (const p of hits) if (p.c > 0 && !p.dense) { ca += Math.min(8, p.c) * p.a; cs += Math.min(8, p.c) * p.s; }
+    const lim = (v, m) => Math.max(-m, Math.min(m, v));
+    // 船首（+a）が持ち上がる＝ピッチは負（17：Euler の x 回転は正で船首が下がる）。左舷（+s）が持ち上がる＝ロールは正
+    const tp = terrain.grounded ? lim(-Math.atan(0.6 * ca / Math.max(1, sa)), 0.1) : 0;
+    const tr = terrain.grounded ? lim(Math.atan(0.6 * cs / Math.max(1, ss)), 0.14) : 0;
+    const k = Math.min(1, (dt || 0) / (terrain.grounded ? 2.5 : 4));
+    physics.groundPitch = (physics.groundPitch || 0) + (tp - (physics.groundPitch || 0)) * k;
+    physics.groundRoll = (physics.groundRoll || 0) + (tr - (physics.groundRoll || 0)) * k;
+}
 function _trCheckGrounding(t, dt) {
     const hp = window.hullProfile;
     if (typeof shipGroup === 'undefined' || !shipGroup) return;
@@ -868,7 +936,7 @@ function _trCheckGrounding(t, dt) {
         terrain._sternWarn = worldSeabedAt(x - fx * HL * 0.9, z - fz * HL * 0.9) > -sternD - 3;
     }
     // 外洋のまん中（近くに陸も港も無い）では調べない
-    if (!terrain.near && !terrain.ports.size && terrain.depth > worldShipDraft() + 80) { terrain.grounded = false; terrain.good = { x, z, h, score: 0, hard: 0 }; return; }
+    if (!terrain.near && !terrain.ports.size && terrain.depth > worldShipDraft() + 80) { terrain.grounded = false; terrain.good = { x, z, h, score: 0, hard: 0 }; _trGroundAttitude([], dt); return; }
     const hits = [];
     const score = _trHullScore(x, z, h, off, hits), hard = _trHullScore.hard;
     const wasGrounded = terrain.grounded;
@@ -914,6 +982,7 @@ function _trCheckGrounding(t, dt) {
         if (terrain.grounded) physics.speed *= Math.exp(-dt * 0.8);
     }
     terrain.hullHits = hits.length;
+    _trGroundAttitude(hits, dt);
     if (terrain.grounded && !wasGrounded && Math.abs(physics.speed || 0) > 0.6 && typeof audioWaveImpact === 'function') {
         audioWaveImpact(shipGroup.position.clone(), Math.min(2, 0.5 + Math.abs(physics.speed) / 6), true);
     }

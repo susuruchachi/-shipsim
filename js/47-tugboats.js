@@ -29,7 +29,7 @@ window.tugs = tugs;
 let _tugMats = null;
 function _tugMat() {
     if (_tugMats) return _tugMats;
-    const mk = (hex, o) => { const m = new THREE.MeshStandardMaterial(Object.assign({ roughness: 0.6, metalness: 0.1 }, o || {})); m.color.setHex(hex).convertSRGBToLinear(); return m; };
+    const mk = (hex, o) => { const m = new THREE.MeshStandardMaterial(Object.assign({ roughness: 0.6, metalness: 0.1 }, o || {})); m.color.setHex(hex).convertSRGBToLinear(); return noShipLightProbe(m); };
     _tugMats = {
         hull: mk(0x1e2226), bottom: mk(0x8a2c20), house: mk(0xece9e0), win: mk(0x1a2530, { roughness: 0.2, metalness: 0.4 }),
         funnel: mk(0xd9651e), black: mk(0x141414), fender: mk(0x222222, { roughness: 0.95 }), deck: mk(0x6b5a48),
@@ -87,7 +87,78 @@ function _tugBuild() {
     box(2.2, 1.2, 1.6, 0, 2.6, -hl + 3.2, M.black);
     g.userData.hookZ = -hl + 3.2;
     g.traverse(o => { if (o.isMesh) o.userData.noLightBake = true; });
+    // 航行灯：マスト灯（白・引いているときは縦に2つ）、舷灯（左舷 +x が赤・右舷が緑）、船尾灯（白）、引き船灯（黄）
+    //（灯具の小さな玉と、遠くからも見える画面上で一定の大きさの光。夜だけ点ける：_tugLights）
+    const L = [];
+    const lamp = (hex, x, y, z, dir, half, key) => {
+        const c = new THREE.Color(hex);
+        const bulb = new THREE.Mesh(_tugLampGeo(), new THREE.MeshBasicMaterial({ color: c, toneMapped: false }));
+        bulb.position.set(x, y, z); g.add(bulb);
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: _tugGlowTex(), color: c, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, sizeAttenuation: false, toneMapped: false }));
+        sp.position.set(x, y, z); sp.scale.setScalar(0.018); sp.renderOrder = 6; sp.userData.noBloom = true; g.add(sp);
+        L.push({ bulb, sp, dir, half, key });
+    };
+    lamp(0xfff4e0, 0, 11.5, 3.6, [0, 0, 1], 112.5, 'mast');
+    lamp(0xfff4e0, 0, 10.4, 3.6, [0, 0, 1], 112.5, 'tow1');
+    lamp(0xff2a1a, hb * 0.62, 6.0, 5.6, [1, 0, 0.0001], 112.5, 'side');   // 前から横の少し後ろまで（正横後 22.5°）
+    lamp(0x1aff6a, -hb * 0.62, 6.0, 5.6, [-1, 0, 0.0001], 112.5, 'side');
+    lamp(0xfff4e0, 0, 3.2, -hl + 0.8, [0, 0, -1], 67.5, 'stern');
+    lamp(0xffc030, 0, 4.0, -hl + 0.8, [0, 0, -1], 67.5, 'tow2');
+    g.userData.lights = L;
+    for (const q of L) if (q.key === 'side') { const fw = new THREE.Vector3(0, 0, 1), sd = new THREE.Vector3(...q.dir).normalize(); q.dir = sd.clone().multiplyScalar(Math.sin(THREE.MathUtils.degToRad(56.25))).add(fw.multiplyScalar(Math.cos(THREE.MathUtils.degToRad(56.25)))).normalize().toArray(); q.half = 56.25 + 0.5; }
+    g.userData.funnels = [new THREE.Vector3(1.7, 7.9, -1.8), new THREE.Vector3(-1.7, 7.9, -1.8)];
     return g;
+}
+function _tugLampGeo() { return _tugLampGeo.g || (_tugLampGeo.g = new THREE.SphereGeometry(0.28, 8, 6)); }
+function _tugGlowTex() {
+    if (_tugGlowTex.t) return _tugGlowTex.t;
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const x = c.getContext('2d'), gr = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.15, 'rgba(255,255,255,0.8)'); gr.addColorStop(0.4, 'rgba(255,255,255,0.15)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    x.fillStyle = gr; x.fillRect(0, 0, 64, 64);
+    return (_tugGlowTex.t = new THREE.CanvasTexture(c));
+}
+// 航行灯の点灯と、見える向き（灯の光の届く角度の外からは見えない）
+const _tugV = new THREE.Vector3(), _tugD = new THREE.Vector3();
+function _tugLights(tg) {
+    const L = tg.g.userData.lights;
+    if (!L) return;
+    const night = typeof lightingNightFactor === 'number' ? lightingNightFactor : 0;
+    const fogDay = (window.weather && weather.enabled && (weather.fog || 0) > 0.4) ? 1 : 0;   // 霧のときは昼も点ける
+    const on = Math.max(night, fogDay);
+    const towing = tg.action === 'pull' && tg.state !== 'leaving';
+    for (const q of L) {
+        const lit = on > 0.05 && (q.key !== 'tow1' && q.key !== 'tow2' || towing);
+        q.bulb.visible = lit; q.sp.visible = lit;
+        if (!lit) continue;
+        // カメラが灯の光の届く角度の中にいるか（灯の向きをワールドへ）
+        q.bulb.getWorldPosition(_tugV);
+        _tugD.set(q.dir[0], q.dir[1], q.dir[2]).applyQuaternion(tg.g.quaternion);
+        const toCam = camera.position.clone().sub(_tugV); toCam.y = 0;
+        const d = toCam.length() || 1, cosA = (toCam.x * _tugD.x + toCam.z * _tugD.z) / d;
+        const lim = Math.cos(THREE.MathUtils.degToRad(q.half));
+        const vis = THREE.MathUtils.smoothstep(cosA, lim - 0.05, lim + 0.05);
+        q.sp.material.opacity = on * vis;
+        q.sp.scale.setScalar(0.012 + 0.012 * Math.min(1, d / 600));
+    }
+}
+// 排煙：出力に応じて2本の煙突から
+function _tugSmoke(tg, t) {
+    if (typeof puffEmit !== 'function') return;
+    const last = tg.smokeT === undefined ? t : tg.smokeT;
+    const dtS = Math.min(0.5, Math.max(0, t - last)); tg.smokeT = t;
+    const p = Math.max(tg.force || 0, tg.state === 'coming' || tg.state === 'leaving' ? 0.5 : 0.1);
+    tg.smokeAcc = (tg.smokeAcc || 0) + dtS * (1.2 + 5 * p);
+    if (tg.smokeAcc < 1) return;
+    if (camera.position.distanceTo(tg.g.position) > 3000) { tg.smokeAcc = 0; return; }
+    while (tg.smokeAcc >= 1) {
+        tg.smokeAcc -= 1;
+        const f = tg.g.userData.funnels[Math.random() < 0.5 ? 0 : 1];
+        const w = tg.g.localToWorld(_tugV.copy(f));
+        const c = 0.22 + Math.random() * 0.08;
+        puffEmit({ x: w.x + (Math.random() - 0.5) * 0.4, y: w.y, z: w.z + (Math.random() - 0.5) * 0.4, vx: tg.vel.x * 0.6, vy: 2 + 3 * p, vz: tg.vel.z * 0.6,
+            life: 6 + Math.random() * 4, s0: 1.3, s1: 10 + 6 * p, r: c, g: c, b: c * 1.03, a: 0.35 + 0.3 * p, rise: 0.4, drag: 0.5 });
+    }
 }
 
 // ── 持ち場（船の中の座標で）──
@@ -113,7 +184,7 @@ function tugStations() {
                 const x = it.x * m;
                 const center = Math.abs(x) < 0.15 * _tugHalfWidth(it.z);
                 const sideLabel = center ? '' : (x > 0 ? '・左舷' : '・右舷');     // 船首を向いて右（右舷）は −x
-                out.push({ key: `m${i}:${m}`, label: `${it.name || ('金物' + (i + 1))}${sideLabel}`, x, y: it.y, z: it.z, fitting: true, side: center ? 0 : Math.sign(x) });
+                out.push({ key: `m${i}:${m}`, label: `${it.name || ('金物' + (i + 1))}${sideLabel}`, x, y: it.y, z: it.z, fitting: true, side: center ? 0 : Math.sign(x), tow: typeof mooringTowOk === 'function' ? mooringTowOk(it) : true });
             }
         });
     }
@@ -125,6 +196,22 @@ function tugStations() {
     return out;
 }
 window.tugStations = tugStations;
+// 引くときに索を取る金物：クリートか「タグの索を直接かける」を選んだビット・ボラードだけ
+//（持ち場がそれ以外なら、同じ舷で前後の近い金物から。船の長さの 3 割より遠ければ引けない）
+function tugPullHook(st, stations) {
+    if (!st) return null;
+    if (st.fitting && st.tow) return st;
+    const hp = window.hullProfile, hl = (hp && hp.ready) ? hp.halfLen : 6;
+    let best = null, bd = 0.3 * hl;
+    for (const q of stations || tugStations()) {
+        if (!q.fitting || !q.tow) continue;
+        if (st.side && q.side && q.side !== st.side) continue;
+        const d = Math.abs(q.z - st.z);
+        if (d < bd) { bd = d; best = q; }
+    }
+    return best;
+}
+window.tugPullHook = tugPullHook;
 
 // ── 船の向き・位置（ワールド）──
 function _shipFrame() {
@@ -276,8 +363,15 @@ function _tugSteer(C, tg, gx, gz, look) {
     const base = Math.atan2(gx - tg.pos.x, gz - tg.pos.z);
     const dist = Math.hypot(gx - tg.pos.x, gz - tg.pos.z);
     const L = Math.min(look, dist);
+    // ほかのタグも障害物（持ち場のすぐ手前では見ない：となりの持ち場のタグに寄り添って止まれるように）
+    const others = dist > 30 ? tugs.filter(o => o !== tg && o.state !== 'leaving' && Math.hypot(o.pos.x - tg.pos.x, o.pos.z - tg.pos.z) < L + 20) : [];
     const ok = (ang) => {
-        const x1 = tg.pos.x + Math.sin(ang) * L, z1 = tg.pos.z + Math.cos(ang) * L;
+        const dx = Math.sin(ang), dz = Math.cos(ang), x1 = tg.pos.x + dx * L, z1 = tg.pos.z + dz * L;
+        for (const o of others) {
+            const rx = o.pos.x - tg.pos.x, rz = o.pos.z - tg.pos.z, along = rx * dx + rz * dz;
+            if (along < 4 || along > L + 8) continue;
+            if (Math.abs(rx * dz - rz * dx) < TUG_BEAM + 4) return false;
+        }
         return _tugPathClear(C, tg.pos.x, tg.pos.z, x1, z1);
     };
     if (L < 3 || ok(base)) { tg.avoid = 0; return base; }
@@ -462,8 +556,17 @@ function _tugStep(t, dt, last) {
             }
             const out = { x: F.sx * side, z: F.sz * side };           // 舷の外向き
             const edge = _tugFromShip(C, st.z * sc, st.side ? side * hw : 0);
-            if (tg.action === 'pull') {
-                hook = _localToWorldFlat(st.x, st.y, st.z);
+            const hs = tugPullHook(st, stations);
+            tg.canPull = !!hs;
+            // 索：一度取ったら、待機・押すときも繋いだまま（帰すときに放す）
+            if (hs && tg.state === 'on') tg.lineOn = hs.key;
+            if (!hs) tg.lineOn = null;
+            if (tg.lineOn && hs) tg.lineHook = _localToWorldFlat(hs.x, hs.y, hs.z);
+            // 索は舷の縁から外へ出る（甲板の内側の金物から、舷の外へまっすぐ抜けないように）
+            if (hs) { const sd = Math.sign(hs.x) || side; tg.lineEdge = _localToWorldFlat(sd * Math.max(_tugHalfWidth(hs.z), Math.abs(hs.x)) * 1.01, hs.y, hs.z); }
+            else tg.lineEdge = null;
+            if (tg.action === 'pull' && hs) {
+                hook = _localToWorldFlat(hs.x, hs.y, hs.z);
                 const d = tg.dir === 'fwd' ? { x: F.fx, z: F.fz } : tg.dir === 'aft' ? { x: -F.fx, z: -F.fz } : (st.side ? out : { x: F.fx * Math.sign(st.z || 1), z: F.fz * Math.sign(st.z || 1) });
                 // 横へ：金物から 45m 先。前へ・後ろへ：船首（船尾）の先 40m まで出る
                 const r = (tg.dir === 'fwd' ? Math.max(0, C.HL - st.z * sc) + 40 : tg.dir === 'aft' ? Math.max(0, C.HL + st.z * sc) + 40 : 45) + TUG_LEN / 2;
@@ -555,6 +658,22 @@ function _tugStep(t, dt, last) {
             tg.vel.multiplyScalar(0.3);
         }
         tg.yaw = hitStatic(nx, nz, newYaw) ? tg.yaw : newYaw;
+        // ほかのタグと重ならないように（船体を3つの円で表し、重なった分だけ離れる。
+        // 両方のタグが毎回少しずつよけるので、持ち場が近くても横に並んで止まる）
+        tg.tugNear = false;
+        if (tg.state !== 'leaving') {
+            const R = TUG_BEAM / 2 + 1;
+            for (const o of tugs) {
+                if (o === tg || o.state === 'leaving' || Math.hypot(o.pos.x - nx, o.pos.z - nz) > TUG_LEN + 2 * R) continue;
+                const A = _tugPts(nx, nz, tg.yaw), B = _tugPts(o.pos.x, o.pos.z, o.yaw);
+                let px = 0, pz = 0, pen = 0;
+                for (const a of A) for (const q of B) {
+                    const dx = a.x - q.x, dz = a.z - q.z, d = Math.hypot(dx, dz), p = 2 * R - d;
+                    if (p > pen) { pen = p; const k = d > 1e-3 ? 1 / d : 0; px = d > 1e-3 ? dx * k : (nx >= o.pos.x ? 1 : -1); pz = dz * k; }
+                }
+                if (pen > 0) { const m = Math.min(pen * 0.6, 4 * dt + pen * 0.3); nx += px * m; nz += pz * m; tg.tugNear = true; }
+            }
+        }
         // 自分の船と重ならないように（押しているときの船首は触れてよい）
         for (let it = 0; it < 2; it++) {
             let worst = 0, push = null;
@@ -568,7 +687,7 @@ function _tugStep(t, dt, last) {
             nx += F.sx * sgn * worst; nz += F.sz * sgn * worst;
         }
         tg.pos.x = nx; tg.pos.z = nz;
-        if (tg.state === 'coming' && dist < 4 && Math.abs(dy) < 0.15) { tg.state = 'on'; tg.arrivedAt = t; tg.engaged = true; renderTugPanel(); }
+        if (tg.state === 'coming' && dist < (tg.tugNear ? 16 : 4) && Math.abs(dy) < 0.15) { tg.state = 'on'; tg.arrivedAt = t; tg.engaged = true; renderTugPanel(); }
         if (tg.state === 'on' && dist > 25) tg.state = 'coming';
         // 近づけないタグ（持ち場が岸・浅瀬に塞がれている、または 20 秒たっても近づけない：船と岸・船と船のすき間が狭いなど）
         //（自動の離着岸・付き添いは、動けるタグだけで先に始める。このタグは近づき続け、着いたら加わる）
@@ -644,21 +763,30 @@ function _tugVisual(tg, t, hook, dist) {
     const roll = Math.atan2(H(tg.pos.x + fwdZ * 4, tg.pos.z - fwdX * 4) - H(tg.pos.x - fwdZ * 4, tg.pos.z + fwdX * 4), 8);
     tg.g.position.set(tg.pos.x, oh, tg.pos.z);
     tg.g.rotation.set(-pitch * 0.8, tg.yaw, roll * 0.8, 'YXZ');
+    tg.g.updateMatrixWorld();
+    _tugLights(tg);
+    _tugSmoke(tg, t);
     // 引き索：金物からタグの船尾のフックへ（張っているほどまっすぐ）
-    if (tg.action === 'pull' && hook && tg.state !== 'leaving') {
-        const hz = tg.g.userData.hookZ;
+    const slack = !(tg.action === 'pull' && hook);
+    if (slack && tg.lineOn && tg.lineHook && tg.state !== 'leaving') hook = tg.lineHook;
+    if (hook && tg.state !== 'leaving') {
+        // 押しているときは船首の索（船首のウインチ）、それ以外は船尾のフックから
+        const hz = slack && tg.action === 'push' ? TUG_LEN / 2 - 1.5 : tg.g.userData.hookZ;
         const ex = tg.pos.x + fwdX * hz, ez = tg.pos.z + fwdZ * hz, ey = oh + 2.6;
         const A = tg.line.geometry.attributes.position.array, n = 16;
         const span = Math.hypot(ex - hook.x, ez - hook.z);
-        const sag = span * (0.12 - 0.1 * Math.min(1, tg.force / 0.3));
-        for (let q = 0; q < n; q++) {
-            const u = q / (n - 1);
-            A[q * 3] = hook.x + (ex - hook.x) * u;
-            A[q * 3 + 1] = hook.y + (ey - hook.y) * u - sag * 4 * u * (1 - u);
-            A[q * 3 + 2] = hook.z + (ez - hook.z) * u;
+        const sag = slack ? Math.min(12, 2 + span * 0.25) : span * (0.12 - 0.1 * Math.min(1, tg.force / 0.3));
+        // 1点目は金物、2点目は舷の縁、そこからタグまで垂れた線
+        const E = tg.lineEdge || hook;
+        A[0] = hook.x; A[1] = hook.y; A[2] = hook.z;
+        for (let q = 1; q < n; q++) {
+            const u = (q - 1) / (n - 2);
+            A[q * 3] = E.x + (ex - E.x) * u;
+            A[q * 3 + 1] = E.y + (ey - E.y) * u - sag * 4 * u * (1 - u);
+            A[q * 3 + 2] = E.z + (ez - E.z) * u;
         }
         tg.line.geometry.attributes.position.needsUpdate = true;
-        tg.line.visible = dist < 30;
+        tg.line.visible = slack ? span < 80 : dist < 30;
     } else tg.line.visible = false;
 }
 window.updateTugs = updateTugs;
@@ -698,6 +826,9 @@ function renderTugPanel() {
         (window.world && world.mode === 'world' && typeof harborAuto !== 'undefined' ? `<div class="tg-row tg-auto">
             ${harborAuto.mode ? `<button onclick="harborAutoStop('自動の離着岸を止めました')">■ 自動の離着岸を止める</button>`
                 : `<button onclick="harborAutoBerthNow()">🤖 自動着岸</button><button onclick="harborAutoDepartNow()">🤖 自動離岸</button>`}
+            ${!harborAuto.mode && typeof tugEscort !== 'undefined' ? (tugEscort.manual
+                ? `<button onclick="tugEscortManual(false)">付き添いをやめる</button>`
+                : `<button onclick="tugEscortManual(true)" title="狭い水路などで、タグに両舷を付き添ってもらう（自動航行中は付き添われて微速で進む）">🛟 付き添いを頼む</button>`) : ''}
             ${harborAuto.msg ? `<div class="tg-automsg">${harborAuto.msg}</div>` : ''}</div>` : '') +
         (tugs.length ? tugs.map(t => `
         <div class="tg-item${t.state === 'leaving' ? ' leaving' : ''}">
@@ -705,7 +836,7 @@ function renderTugPanel() {
                 ${t.state !== 'leaving' ? `<button class="tg-rel" onclick="tugSet(${t.id}, 'release')">帰す</button>` : ''}</div>
             ${t.state !== 'leaving' ? `
             <div class="tg-row"><select onchange="tugSet(${t.id}, 'station', this.value)">${st.map(s => `<option value="${s.key}"${s.key === t.station ? ' selected' : ''}>${s.label}</option>`).join('')}</select></div>
-            <div class="tg-row">${Object.entries(TUG_ACTIONS).map(([k, l]) => `<button class="${t.action === k ? 'on' : ''}" onclick="tugSet(${t.id}, 'action', '${k}')">${l}</button>`).join('')}</div>
+            <div class="tg-row">${Object.entries(TUG_ACTIONS).map(([k, l]) => { const no = k === 'pull' && !tugPullHook(st.find(s => s.key === t.station), st); return `<button class="${t.action === k ? 'on' : ''}" ${no ? 'disabled title="この近くに索を取れる金物（クリート・索をかけてよいビット）がありません"' : ''} onclick="tugSet(${t.id}, 'action', '${k}')">${l}</button>`; }).join('')}</div>
             <div class="tg-row">${Object.entries({ low: '微', half: '半', full: '全' }).map(([k, l]) => `<button class="pw${t.power === k ? ' on' : ''}" onclick="tugSet(${t.id}, 'power', '${k}')">${l}</button>`).join('')}
                 <span class="tg-sep"></span>${t.action === 'pull' ? Object.entries(TUG_DIRS).map(([k, l]) => `<button class="dir${t.dir === k ? ' on' : ''}" onclick="tugSet(${t.id}, 'dir', '${k}')">${l}</button>`).join('') : ''}</div>` : ''}
         </div>`).join('') : '<div class="tg-empty">「＋ 呼ぶ」でタグボートが来ます。持ち場（係船設備の金物・舷側）を選んで、押す・引くを指示します。<br>速さが5ノットを超えると力が弱まり、8ノットでは効きません。</div>');

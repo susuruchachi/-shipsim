@@ -56,6 +56,8 @@ function worldTrueCompass() {
 }
 window.worldTrueCompass = worldTrueCompass;
 // 舵 25° ほどでの旋回半径[m]（17-main-loop.js：回る速さ ＝ 速さ×0.514 ÷ R × 舵/35、進む速さはそのまま m/s）
+// 作り込んだ港（川・入江の奥の港）の中の区間は、実際の港と同じようにタグが付き添う
+function _apInDetail(q) { return !!(q && world.kind === 'real' && typeof _rwDetailOf === 'function' && _rwDetailOf(q.lat, q.lon)); }
 function _apTurnRadius() { return 12 * (physics.scale || 1) * (physics.turningRadiusFactor || 5) / 0.514 * 1.4; }
 function _apHeadingForTrue(course) { return _apNorthHeading() - course; }
 
@@ -567,7 +569,24 @@ async function autopilotStart(port) {
     const chLen = isPt ? 0 : worldPortChannelLen(port);
     // ふつうの余裕で通れないときは、タグの補助で狭い所も通る（サウサンプトンのように）
     let lastErr = null;
-    for (const mode of ['normal', 'tug']) {
+    autopilot._newRoute = null;
+    // 同じ作り込んだ港の中の、別の埠頭へ：港の中の深い所だけを通って、行き先の航路の最初の点（泊地・ドックの外）へ
+    //（ふつうに計画すると、いったん航路を外海まで出てから戻ってくる）
+    if (!isPt && port.real && port.fairway && port.fairway.pts.length >= 2 && typeof _rwDetailOf === 'function') {
+        const Dh = _rwDetailOf(here.lat, here.lon);
+        const fin = port.fairway.pts[1];
+        const r = Dh && Dh === _rwDetailOf(port.lat, port.lon) ? _rwDetailRoute(Dh, here, { lat: fin.lat, lon: fin.lon }) : null;
+        if (r && r.pts.length) {
+            const route = [];
+            for (const q of r.pts) route.push({ lat: q.lat, lon: q.lon, label: `${port.name} への港内の水路`, channel: true, narrow: true });
+            let berthPlan = null, berthWhy = null;
+            if (autopilot.berth && typeof harborBerthPlan === 'function') { const bp = harborBerthPlan(port); if (bp.ok) berthPlan = bp; else berthWhy = bp.why; }
+            route.push({ lat: fin.lat, lon: fin.lon, label: berthPlan ? `${port.name} 泊地` : `${port.name} 港口`, channel: true, final: true, narrow: true });
+            autopilot.berthPlan = berthPlan; autopilot.berthWhy = berthWhy; autopilot.deepShip = false;
+            autopilot._newRoute = route;
+        }
+    }
+    for (const mode of (autopilot._newRoute ? [] : ['normal', 'tug'])) {
         const need = mode === 'tug' ? M.needTug : M.need;
         const route = [];
         // 今いる港の航路の上なら、まず航路を沖へ出る（航路がふつうには浅くても、タグがあれば通る）
@@ -591,7 +610,7 @@ async function autopilotStart(port) {
         if (onFw >= 0) {
             for (let k = Math.max(1, onFw + 1); k < fwOut.pts.length; k++)
                 route.push(Object.assign({ lat: fwOut.pts[k].lat, lon: fwOut.pts[k].lon }, { label: k === fwOut.pts.length - 1 ? `${np.port.name} 航路の出口` : `${np.port.name} 航路`, channel: true,
-                    narrow: fwOut.depth < M.need || rhumbCourse(fwOut.pts[k].lat, fwOut.pts[k].lon, np.port.lat, np.port.lon).dist < 4000 }));
+                    narrow: fwOut.depth < M.need || rhumbCourse(fwOut.pts[k].lat, fwOut.pts[k].lon, np.port.lat, np.port.lon).dist < 4000 || _apInDetail(fwOut.pts[k - 1]) }));
         } else if (np && np.port !== port && !np.port.real) {
             const P = np.port, TP = PORT_TYPES[P.type], chL = worldPortChannelLen(P);
             if (np.dist < TP.basin + chL + 1500 && TP.depth + 2 >= M.needTug) {
@@ -668,7 +687,7 @@ async function autopilotStart(port) {
                 if (deepShip) Object.assign(route[route.length - 1], { final: true });
                 else {
                     // 港の近く（4km 以内）は、実際の港と同じように、タグが付き添って微速で入る
-                    const nearPort = (q) => rhumbCourse(q.lat, q.lon, port.lat, port.lon).dist < 4000;
+                    const nearPort = (q) => rhumbCourse(q.lat, q.lon, port.lat, port.lon).dist < 4000 || _apInDetail(q);
                     // 航路の最後の点（泊地の中）で止まる。着岸はそこから（タグで横へ運んでから回す：50-harbor-auto.js）
                     //（港のまっすぐの軸の上の点へ行こうとすると、実際の航路の入り方によっては後ろ向きになる）
                     for (let k = fw.length - 2; k >= 2; k--) route.push({ lat: fw[k].lat, lon: fw[k].lon, label: `${port.name} 航路`, channel: true, narrow: channelNarrow || nearPort(fw[k]) });
@@ -1257,7 +1276,7 @@ function updateAutopilot(t, dt) {
     // 付き添ってもらいながら微速（タグが力を出せる 4 くらいまで）で通る。抜けたら帰す
     let escorting = false;
     if (typeof tugEscortStart === 'function') {
-        const narrowNow = !!wp.narrow;
+        const narrowNow = !!wp.narrow || !!tugEscort.manual;           // 手で付き添いを頼んでいる間も（50-harbor-auto.js）
         let narrowAhead = Infinity;
         if (!narrowNow) {
             let d = rc.dist;
@@ -1287,7 +1306,7 @@ function updateAutopilot(t, dt) {
             } else autopilot.escort = narrowNow ? 'on' : 'ahead';
             escorting = narrowNow && ready;
         } else {
-            if (tugEscort.active || tugEscort.held) tugEscortStop();
+            if (!tugEscort.manual && (tugEscort.active || tugEscort.held)) tugEscortStop();
             autopilot.escort = '';
         }
     }

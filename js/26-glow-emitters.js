@@ -54,6 +54,25 @@ const GLOW_BIN_DIRS = [
     new THREE.Vector3( 0, 0, 1), new THREE.Vector3( 0, 0, -1),
 ];
 
+// 船の窓明かりから作った環境光プローブ（windowGlowLightProbe）は、three.js では場面の
+// すべての材質に効く。タグ・陸・港の建物などが夜に船の明かりでぼんやり光らないよう、
+// 船以外の材質ではプローブの光を受けないようにする（前の onBeforeCompile もつなぐ）
+function noShipLightProbe(mat) {
+    if (!mat || mat.userData.noShipProbe) return mat;
+    mat.userData.noShipProbe = true;
+    const prev = mat.onBeforeCompile;
+    mat.onBeforeCompile = function (sh, r) {
+        if (prev) prev.call(this, sh, r);
+        sh.fragmentShader = sh.fragmentShader.replace('#include <lights_fragment_begin>',
+            THREE.ShaderChunk.lights_fragment_begin.replace(/getLightProbeIrradiance\( *lightProbe, *geometry *\)/g, 'vec3( 0.0 )'));
+    };
+    const key = mat.customProgramCacheKey ? mat.customProgramCacheKey.bind(mat) : () => '';
+    mat.customProgramCacheKey = () => key() + '|noProbe';
+    mat.needsUpdate = true;
+    return mat;
+}
+window.noShipLightProbe = noShipLightProbe;
+
 function disposeGlowEmitters() {
     for (const n of glowPanelNodes) if (n.parent) n.parent.remove(n);
     glowPanelNodes = [];
@@ -407,7 +426,7 @@ function _glowBuildProbe(modelRoot, pts, color) {
 //  （ブルームを切っていて奥行きが無いときは、画素ごとの比較に戻す）
 const GLOW_HALO_SIZE_MUL   = 1.8;   // パネルの大きさに対するにじみの大きさ
 const GLOW_HALO_MIN_M      = 2.5;   // にじみの最小サイズ[m]
-const GLOW_HALO_MAX_M      = 14.0;  // にじみの最大サイズ[m]
+const GLOW_HALO_MAX_M      = 7.0;   // にじみの最大サイズ[m]（大きいと船体の前に光の玉が浮いて見える）
 const GLOW_HALO_FADE_NEAR  = 25.0;  // これより近いと見えない[m]（本物の面光源に任せる）
 const GLOW_HALO_FADE_FAR   = 90.0;  // これより遠いと完全に見える[m]
 const GLOW_HALO_STRENGTH   = 0.55;
@@ -602,7 +621,9 @@ function updateGlowHalos() {
     const rain = (w && w.enabled && typeof w.rain === 'number') ? w.rain : 0;    // 0〜1
     const fog  = (w && w.enabled && typeof w.fog === 'number') ? w.fog : 0;      // 0〜1
     // 船内（34-shelter.js）では、室内の空気は霧っていないのでにじませない
-    const wet = Math.min(1.5, haze * 0.25 + rain * 0.6 + fog * 1.0) * (1 - (window.shelterIndoor || 0));
+    // （風が強いだけのもや（haze）では、ほとんどにじませない。以前は haze×0.25 で、晴れた嵐の夜
+    //  （風力 12・雲なし）でも船の灯りが船体の前に大きな光の玉になって見えた）
+    const wet = Math.min(1.5, haze * 0.04 + rain * 0.6 + fog * 1.0) * (1 - (window.shelterIndoor || 0));
     // にじみが大きくなるぶん面積で明るく見えるので、1点あたりの明るさはほぼ据え置く
     // （以前は大きさ2.8倍×明るさ2.4倍で、霧の中ではまぶしすぎた）
     u.uStrength.value = glow * GLOW_HALO_STRENGTH * (1 + wet * 0.2);

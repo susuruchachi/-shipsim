@@ -47,7 +47,8 @@ function updateDayNightCycle(dayProgress) {
     const tilt = 0.4; 
     const sunDistance = 400;
 
-    const sunX = Math.cos(sunAngle) * sunDistance;
+    // 世界の座標は +x が西（43-world.js）。東から昇って南を通り、西へ沈むよう、x は -cos
+    const sunX = -Math.cos(sunAngle) * sunDistance;
     const sunY = Math.sin(sunAngle) * sunDistance * Math.cos(tilt);
     const sunZ = -Math.sin(sunAngle) * sunDistance * Math.sin(tilt);
 
@@ -57,7 +58,7 @@ function updateDayNightCycle(dayProgress) {
     // moonPhase=0→新月(太陽と同方向), 0.5→満月(太陽の反対側)
     // 月は太陽より「遅れて」公転するので、moonPhaseが増えるほど太陽より後方（西）へ移動する
     const moonAngle = sunAngle - physics.moonPhase * Math.PI * 2;
-    const moonX = Math.cos(moonAngle) * sunDistance;
+    const moonX = -Math.cos(moonAngle) * sunDistance;
     const moonY = Math.sin(moonAngle) * sunDistance * Math.cos(tilt);
     const moonZ = -Math.sin(moonAngle) * sunDistance * Math.sin(tilt);
     const moonPos = new THREE.Vector3(moonX, moonY, moonZ);

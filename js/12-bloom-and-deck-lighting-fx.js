@@ -159,7 +159,9 @@ function updateBloomForWeather() {
     const haze = (w && w.enabled) ? Math.max(0, (w.haze || 1) - 1) : 0;
     const rain = (w && w.enabled && typeof w.rain === 'number') ? w.rain : 0;
     const fog  = (w && w.enabled && typeof w.fog === 'number') ? w.fog : 0;
-    const wet = haze * 0.25 + rain * 0.6 + fog * 1.0;
+    // （風が強いだけのもや（haze）では切らない。以前は haze×0.25 で、晴れた嵐の夜（風力 12・雲なし）に
+    //  ブルームが切れて、船の明かりがプロムナードを照らさず沈んで見えた：26-glow-emitters.js のにじみも同じ）
+    const wet = haze * 0.04 + rain * 0.6 + fog * 1.0;
     const k = 1 - THREE.MathUtils.smoothstep(wet, 0.08, 0.5);
     bloomPass.strength = bloomBaseStrength * k;
     return k > 0.02;

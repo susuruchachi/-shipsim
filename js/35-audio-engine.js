@@ -411,6 +411,8 @@ function _audioWaveImpacts(t, half) {
     }
     // 船首が波で持ち上がったあと、落ちて水面に打ち付けられる
     _audioBowDrop(t, half);
+    // 船首が波に飲み込まれている間と、甲板から水が引くまでの「サァァ…」
+    _audioGreenWater(t, half);
     // うねりが高いと、ときどき大きな波が舷側に当たる（波高1.5mくらいから）
     if (!E.sideNext) E.sideNext = t + 3;
     if (t > E.sideNext) {
@@ -461,6 +463,43 @@ function _audioBowDrop(t, half) {
         }
         E.bowArmed = 0;
     }
+}
+
+// 船首が大波に突っ込んで甲板まで水をかぶったとき：最初の「ドーン」（audioWaveImpact）に続いて、
+// 甲板を流れて舷から落ちる水の「サァァ…」を、水をかぶっている間と、水が抜けるまで鳴らし続ける。
+//  wet：かぶっている水の量の目安（0〜1.5）。沈んでいる間は増え、出たら数秒かけて抜ける（排水）
+function _audioGreenWater(t, half) {
+    const E = audio.env, c = audio.ctx;
+    if (typeof getOceanHeight !== 'function' || !E.outdoor) return;
+    const hp = window.hullProfile;
+    if (!hp || !hp.ready) return;
+    const dt = Math.min(0.1, Math.max(0, t - (E.gwT === undefined ? t : E.gwT))); E.gwT = t;
+    if (!E.gw) {
+        // 高い「サァァ」（白いノイズ）と、低い「ゴボゴボ」（茶色のノイズ）
+        const out = _mkGain(0, E.outdoor);
+        const hi = audioNoiseSource('white'), bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2600; bp.Q.value = 0.45;
+        const hiG = _mkGain(0.55, out); hi.connect(bp); bp.connect(hiG);
+        const lo = audioNoiseSource('brown'), lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 520; lp.Q.value = 0.5;
+        const loG = _mkGain(0.8, out); lo.connect(lp); lp.connect(loG);
+        E.gw = { out, bp, wet: 0 };
+    }
+    // 船首の甲板の縁（喫水線＋乾舷）が波の下にどれだけ入っているか
+    const dl = Math.max(0.02, (hp.designWaterlineY || 0) - (hp.keelY || 0));
+    const deckY = (hp.designWaterlineY || 0) + dl * 1.1;              // 船首の甲板の縁（乾舷 ≒ 喫水 × 1.1）
+    let sub = 0;
+    for (const zz of [0.9, 0.75, 0.6]) {
+        const p = audioShipPoint(0, deckY, half * zz, E._gwTmp || (E._gwTmp = new THREE.Vector3()));
+        sub = Math.max(sub, getOceanHeight(p.x, p.z, t) - p.y);
+    }
+    const L = Math.max(5, (physics.scale || 1) * 12);
+    const subK = Math.max(0, sub) / Math.max(0.5, L * 0.01);         // 船の大きさで割った沈み具合
+    const G = E.gw;
+    if (subK > 0.05) G.wet = Math.min(1.5, G.wet + subK * dt * 1.5);
+    else G.wet *= Math.exp(-dt / (2.5 + 2 * Math.min(1.5, L / 150)));    // 大きい船ほど甲板の水が抜けるのに時間がかかる
+    // 沈み始めは大きく（轟音に重なる流れ込む音）、水が引く間は高い「サァァ」が主に
+    const g = Math.min(1.2, G.wet) * (subK > 0.05 ? 0.9 : 0.7);
+    G.out.gain.setTargetAtTime(g < 0.01 ? 0 : g, c.currentTime, 0.12);
+    G.bp.frequency.setTargetAtTime(subK > 0.05 ? 1400 : 2800, c.currentTime, 0.4);
 }
 
 // 雷鳴：距離[m]から音が届くまで遅れて鳴る（29-weather-fx.js の落雷から呼ぶ）

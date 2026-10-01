@@ -733,6 +733,8 @@ function _collectMarkers() {
     if (typeof shipGroup === 'undefined' || !shipGroup) return;
     shipGroup.traverse((o) => {
         const ud = o.userData || {};
+        // （係船設備は本物の金物なので、目印のように画面上の大きさをそろえたり透かしたりしない）
+        if (ud.isMooring) return;
         if (ud.isViewpointMarker || ud.screenSizeMarker || ud.isGlbPivotMarker
             || (typeof cgMarker !== 'undefined' && o === cgMarker) || (typeof rudderMarker !== 'undefined' && o === rudderMarker)) {
             _markerList.push(o);

@@ -329,7 +329,14 @@ function updateWeather(dt, t) {
 
     // 全体の波の大きさ。今の風が立てる波に、嵐の後に残ったうねり（今の風より
     // 大きいぶん）を足し合わせたものを、実際の有義波高の目標にする。
-    const hsTarget = Math.sqrt(hSig * hSig + Math.pow(Math.max(0, hSwell - hSig), 2));
+    let hsTarget = Math.sqrt(hSig * hSig + Math.pow(Math.max(0, hSwell - hSig), 2));
+    // 港内・川の中（44-world-terrain.js）：陸や防波堤で囲まれているほど、低く細かい波に
+    const shel = (typeof worldWaveShelter === 'function') ? worldWaveShelter(t, dt) : null;
+    if (shel && (shel.amp < 0.999 || shel.width < 0.999)) {
+        hsTarget *= shel.amp;
+        physics.waveWidth *= shel.width;
+        physics.swellStrength *= shel.swell;
+    }
     physics.waveRoughness = weatherRoughnessForHs(hsTarget, physics.swellStrength, physics.chopStrength);
 
     // ── 空の雲量 ──

@@ -18,8 +18,16 @@
         const now = Date.now();
         const t = e.target;
         const isField = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT');
-        if (!isField && now - lastTouchEnd < 300 && e.touches.length === 0 && e.cancelable &&
-            !(t && t.closest && t.closest('canvas'))) e.preventDefault();
+        // ボタンなどは CSS の touch-action（style.css）でダブルタップ拡大が止まっているので、ここでは
+        // 止めない（以前はここで止めていたため、素早く続けて押すと2回目のタップが消え、ボタンの
+        // 反応が鈍く感じられた）。それ以外の所で止めたときも、タップ自体は click として届ける
+        const ctl = t && t.closest && t.closest('button, a, input, select, textarea, label, [role=button], [onclick], canvas');
+        if (!isField && !ctl && now - lastTouchEnd < 300 && e.touches.length === 0 && e.cancelable) {
+            e.preventDefault();
+            const c = e.changedTouches && e.changedTouches[0];
+            const el = c ? document.elementFromPoint(c.clientX, c.clientY) : t;
+            if (el && typeof el.click === 'function') el.click();
+        }
         lastTouchEnd = now;
     }, { passive: false });
 

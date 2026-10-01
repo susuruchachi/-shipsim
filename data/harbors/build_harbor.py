@@ -24,22 +24,23 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # 港ごとの設定：範囲（緯度・経度）、1 升[m]、ドックの深さ[m]
 HARBORS = {
-    'southampton': dict(name='サウサンプトン', lat0=50.795, lat1=50.918, lon0=-1.448, lon1=-1.295, cell=10, dock_depth=12.5, berth_depth=13.0, berth_reach=400,
+    'southampton': dict(name='サウサンプトン', lat0=50.775, lat1=50.918, lon0=-1.448, lon1=-1.240, cell=10, dock_depth=22.0, berth_depth=23.0, berth_reach=400,
                         # 本航路（ドック・ヘッド → サウサンプトン・ウォーター → カルショット沖）。最低潮位で 12.6m ＋ 潮の分
-                        channels=[dict(width=260, depth=13.5, pts=[[50.8973, -1.4118], [50.8923, -1.4067], [50.889, -1.4016], [50.8793, -1.3913], [50.8347, -1.3155], [50.8142, -1.2956], [50.8128, -1.2940]])]),
+                        channels=[dict(width=260, depth=24.0, pts=[[50.8973, -1.4118], [50.8923, -1.4067], [50.889, -1.4016], [50.8793, -1.3913], [50.8347, -1.3155], [50.8142, -1.2956], [50.8128, -1.2940]])]),
     # リヴァプール：マージー川（ピア・ヘッドの浮き桟橋・ドック）から、クロスビー水道・クイーンズ水道を通ってリヴァプール湾へ
-    'liverpool': dict(name='リヴァプール', lat0=53.385, lat1=53.555, lon0=-3.225, lon1=-2.955, cell=10, dock_depth=11.0, berth_depth=12.0, berth_reach=250,
+    'liverpool': dict(name='リヴァプール', lat0=53.385, lat1=53.555, lon0=-3.225, lon1=-2.955, cell=10, dock_depth=22.0, berth_depth=23.0, berth_reach=250,
                       # 掘った航路（潮の満ち引きが無いので、満潮を待たずに通れる深さにする）：ピア・ヘッド → マージー川（ナローズ）→ クロスビー水道 → クイーンズ水道 → 西の縁
-                      channels=[dict(width=350, depth=13.5, pts=[[53.4025, -3.0010], [53.4100, -3.0060], [53.4250, -3.0150], [53.4410, -3.0265], [53.4577, -3.0367], [53.470, -3.062], [53.4808, -3.0790], [53.5151, -3.1017], [53.521, -3.130], [53.5307, -3.1887], [53.533, -3.226]]),
-                                dict(width=450, depth=13.5, pts=[[53.5296, -3.1788], [53.5307, -3.1887], [53.533, -3.226]]),
-                                # クロスビー水道からクイーンズ水道へ曲がる所は広く（大きな船が回れるように）
-                                dict(width=700, depth=13.5, pts=[[53.5040, -3.0930], [53.5151, -3.1017], [53.5185, -3.1180]]),
-                                # 角の内側（回り始める 1km 手前から 1km 先まで：旋回半径 2km ほどの大きな船の通り道）
-                                dict(width=600, depth=13.5, pts=[[53.5067, -3.0962], [53.5124, -3.1061], [53.5181, -3.1160], [53.5215, -3.1320]])]),
+                      channels=[dict(width=350, depth=24.0, pts=[[53.4025, -3.0010], [53.4100, -3.0060], [53.4250, -3.0150], [53.4410, -3.0265], [53.4577, -3.0367], [53.470, -3.062], [53.4808, -3.0790], [53.5151, -3.1017], [53.521, -3.130], [53.5307, -3.1887], [53.533, -3.226]]),
+                                dict(width=450, depth=24.0, pts=[[53.5296, -3.1788], [53.5307, -3.1887], [53.533, -3.226]]),
+                                # クロスビー水道からクイーンズ水道へ曲がる所は広く（大きな船が回れるように。内側の通り道は自動）
+                                dict(width=700, depth=24.0, pts=[[53.5040, -3.0930], [53.5151, -3.1017], [53.5185, -3.1180]]),
+                                dict(width=600, depth=24.0, pts=[[53.5067, -3.0962], [53.5124, -3.1061], [53.5181, -3.1160], [53.5215, -3.1320]])]),
     # グラスゴー：クライド川（キング・ジョージ5世ドック・クライドバンクのジョン・ブラウン造船所）から、グリーノック沖（テイル・オブ・ザ・バンク）まで
     'glasgow': dict(name='グラスゴー', lat0=55.845, lat1=55.975, lon0=-4.790, lon1=-4.270, cell=10, dock_depth=10.0, berth_depth=11.0, berth_reach=150),
     # ベルファスト：ハーランド＆ウルフ（クイーンズ島・トンプソン・ドック）・ヴィクトリア水道から、ベルファスト湾まで
-    'belfast': dict(name='ベルファスト', lat0=54.595, lat1=54.705, lon0=-5.945, lon1=-5.720, cell=10, dock_depth=11.0, berth_depth=12.0, berth_reach=250),
+    'belfast': dict(name='ベルファスト', lat0=54.595, lat1=54.725, lon0=-5.945, lon1=-5.600, cell=10, dock_depth=22.0, berth_depth=23.0, berth_reach=250,
+                    # ヴィクトリア水道の口から、ベルファスト湾を北東へ、湾口の深い所まで
+                    channels=[dict(width=350, depth=24.0, pts=[[54.6320, -5.8780], [54.6362, -5.8750], [54.6600, -5.8400], [54.6900, -5.7910], [54.6950, -5.7440], [54.6980, -5.7000], [54.7050, -5.6600], [54.7120, -5.6200], [54.7180, -5.6000]])]),
 }
 
 UA = 'shipsim-harbor-builder/0.1 (personal ship simulator; one-off download)'
@@ -134,6 +135,17 @@ def fetch_osm(H, cache):
 # ── EMODnet の水深（esriAscii）──
 def fetch_emodnet(H, cache):
     fn = os.path.join(cache, 'emodnet.asc')
+    # 港の枠を広げたあとは、前に取った分が枠を覆っていないので取り直す
+    #（覆っていない所を外挿すると、何百 m もの深さのような、ありえない値になる）
+    if os.path.exists(fn) and os.path.getsize(fn) > 1000:
+        hd = {}
+        with open(fn) as f:
+            for _ in range(6):
+                k, v = f.readline().split(); hd[k.lower()] = float(v)
+        x1 = hd['xllcenter'] + (hd['ncols'] - 1) * hd['cellsize']; y1 = hd['yllcenter'] + (hd['nrows'] - 1) * hd['cellsize']
+        if hd['xllcenter'] > H['lon0'] or hd['yllcenter'] > H['lat0'] or x1 < H['lon1'] or y1 < H['lat1']:
+            print('EMODnet の範囲が港の枠を覆っていないので取り直します')
+            os.remove(fn)
     if not (os.path.exists(fn) and os.path.getsize(fn) > 1000):
         url = ('https://erddap.emodnet.eu/erddap/griddap/bathymetry_dtm_2024.esriAscii?elevation'
                f'%5B({H["lat0"] - 0.01:.4f}):1:({H["lat1"] + 0.01:.4f})%5D%5B({H["lon0"] - 0.01:.4f}):1:({H["lon1"] + 0.01:.4f})%5D')
@@ -232,13 +244,14 @@ def build(key, cache):
     fy = ((E['y0'] + (E['nr'] - 1) * E['cs']) - LAT) / E['cs']
     fx = (LON - E['x0']) / E['cs']
     x0i = np.clip(np.floor(fx).astype(int), 0, E['nc'] - 2); y0i = np.clip(np.floor(fy).astype(int), 0, E['nr'] - 2)
-    tx = fx - x0i; ty = fy - y0i
+    tx = np.clip(fx - x0i, 0, 1); ty = np.clip(fy - y0i, 0, 1)       # 外挿はしない
     a = E['a']
     q = [a[y0i, x0i], a[y0i, x0i + 1], a[y0i + 1, x0i], a[y0i + 1, x0i + 1]]
     w = [(1 - tx) * (1 - ty), tx * (1 - ty), (1 - tx) * ty, tx * ty]
     num = sum(np.where(np.isnan(v), 0, v) * ww for v, ww in zip(q, w))
     den = sum(np.where(np.isnan(v), 0, ww) for v, ww in zip(q, w))
     emod = np.where(den > 0.25, num / np.maximum(den, 1e-9), np.nan)
+    emod[(fx < -0.5) | (fy < -0.5) | (fx > E['nc'] - 0.5) | (fy > E['nr'] - 0.5)] = np.nan   # 取った範囲の外
     unk = A == 0
     A[unk & (emod < -1)] = 2
     A[A == 0] = 3
@@ -370,8 +383,28 @@ def build(key, cache):
         near_port = near_port | np.roll(near_port, 1, 0) | np.roll(near_port, -1, 0) | np.roll(near_port, 1, 1) | np.roll(near_port, -1, 1)
     bz = water & near_port
     depth[bz] = np.maximum(depth[bz], H.get('berth_depth', 12.0))
-    # 港ごとに書いた掘った航路（線と幅・深さ）：水の所だけ
+    # 港ごとに書いた掘った航路（線と幅・深さ）：水の所だけ。
+    # 曲がり角には、大きな船（旋回半径 TURN_R）が回り始める所から回り終える所まで、内側を結ぶ通り道も掘る
+    TURN_R = 2200
+    chans = []
     for ch in H.get('channels', []):
+        chans.append(ch)
+        pts = ch['pts']
+        for i in range(1, len(pts) - 1):
+            (la0, lo0), (la1, lo1), (la2, lo2) = pts[i - 1], pts[i], pts[i + 1]
+            ax, ay = (lo0 - lo1) * mLon, (la0 - la1) * mLat
+            bx, by = (lo2 - lo1) * mLon, (la2 - la1) * mLat
+            A, B = math.hypot(ax, ay), math.hypot(bx, by)
+            if A < 1 or B < 1: continue
+            turn = math.pi - math.acos(max(-1, min(1, (ax * bx + ay * by) / (A * B))))   # 曲がる角
+            if turn < math.radians(12): continue
+            reach = min(TURN_R * math.tan(turn / 2), 0.45 * A, 0.45 * B)
+            t1 = (la1 + ay / A * reach / mLat, lo1 + ax / A * reach / mLon)
+            t2 = (la1 + by / B * reach / mLat, lo1 + bx / B * reach / mLon)
+            mid = ((t1[0] + t2[0]) / 2, (t1[1] + t2[1]) / 2)
+            extra = TURN_R * (1 / math.cos(turn / 2) - 1)
+            chans.append(dict(width=ch['width'] + 2 * extra, depth=ch['depth'], pts=[list(t1), list(mid), list(t2)]))
+    for ch in chans:
         r = int(round(ch['width'] / 2 / cell))
         yy, xx = np.mgrid[-r:r + 1, -r:r + 1]
         disk = (yy * yy + xx * xx) <= r * r
@@ -431,9 +464,9 @@ def export_features(key, cache, nodes, ways, water, lat1, lon0, dLat, dLon, cell
     rows, cols = water.shape
     mLat = cell / dLat; mLon = cell / dLon
     lat0 = lat1 - (rows - 1) * dLat
-    # 水から 250m 以内
+    # 水から 600m 以内（港のまわりの街並みも：船から見える範囲）
     near = water.copy()
-    for it in range(int(250 / cell)):
+    for it in range(int(600 / cell)):
         near = near | np.roll(near, 1, 0) | np.roll(near, -1, 0) | np.roll(near, 1, 1) | np.roll(near, -1, 1)
     def xy(lat, lon):
         return ((lon - lon0) * mLon, (lat - lat0) * mLat)

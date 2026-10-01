@@ -22,11 +22,13 @@ const MOOR_COLORS = {
     red:   { label: '赤さび色', hex: 0x7a3a26 },
     green: { label: '緑', hex: 0x2f5a3c },
 };
-const shipMooring = { items: [] };
+// show：設定画面の外（ふだんの航海）でも金物を表示するか
+const shipMooring = { items: [], show: true };
 window.shipMooring = shipMooring;
 
 function _moorDefault(type) {
-    return { name: '', type: type || 'bitt', x: 0.5, y: 1, z: 0, rot: 0, size: 1, color: 'black', sym: true };
+    // tow：ビット・ボラードにタグの索を直接かけてよいか（クリートはいつも索を取れる）
+    return { name: '', type: type || 'bitt', x: 0.5, y: 1, z: 0, rot: 0, size: 1, color: 'black', sym: true, tow: false };
 }
 
 // ── 形（実寸[m]。原点は甲板の上、+x が柱の並ぶ向き）──
@@ -118,7 +120,24 @@ function updateMooring() {
     if (_moor.dirty || changed || (e0 && e0.g.parent !== shipGroup)) _moorRebuild();
     else if (typeof currentGizmoType !== 'undefined' && currentGizmoType === 'moor') _moorPlaceAll();
     else if (_moor.scale !== ((typeof physics !== 'undefined' && physics.scale) || 1)) _moorPlaceAll();
+    // 設定画面の外では、選んだときだけ表示する（索を取る位置としてはいつも使う）
+    const sp = document.getElementById('settings-panel');
+    const show = shipMooring.show !== false || !!(sp && sp.classList.contains('open'));
+    shipMooring.items.forEach((it, i) => {
+        const e = _moor.groups[i]; if (!e) return;
+        e.g.visible = show;
+        e.mirror.visible = show && !!it.sym && Math.abs(e.g.position.x) > 1e-3;
+    });
 }
+// タグの索を取れる金物か：クリートはいつも、ビット・ボラードは「索を直接かける」を選んだものだけ
+function mooringTowOk(it) { return !!it && (it.type === 'cleat' || !!it.tow); }
+window.mooringTowOk = mooringTowOk;
+function mooringRotate(i, d) {
+    const it = shipMooring.items[i]; if (!it) return;
+    it.rot = ((((it.rot || 0) + d) % 360) + 360) % 360;
+    _moorPlaceAll(); renderMooringPanel();
+}
+window.mooringRotate = mooringRotate;
 window.updateMooring = updateMooring;
 
 // 金物の位置（ワールド座標）の一覧。タグボートの索を取る所（反対舷の分も）
@@ -129,7 +148,7 @@ function mooringPoints() {
         const e = _moor.groups[i]; if (!e) return;
         const h = (it.type === 'cleat' ? 0.25 : it.type === 'bitt' ? 0.55 : 0.5) * (it.size || 1) / Math.max(1e-6, physics.scale || 1);
         for (const [o, side] of [[e.g, it.x >= 0 ? 1 : -1], [e.mirror, it.x >= 0 ? -1 : 1]]) {
-            if (!o.visible || !o.parent) continue;
+            if (!o.parent || (o === e.mirror && !(it.sym && Math.abs(e.g.position.x) > 1e-3))) continue;
             v.set(o.position.x, o.position.y + h, o.position.z);
             shipGroup.localToWorld(v);
             out.push({ index: i, type: it.type, side, local: { x: o.position.x, y: o.position.y + h, z: o.position.z }, world: v.clone() });
@@ -271,11 +290,12 @@ function mooringClear() {
 }
 function mooringSet(i, key, v) {
     const it = shipMooring.items[i]; if (!it) return;
-    if (key === 'sym') it.sym = !!v;
+    if (key === 'sym' || key === 'tow') it[key] = !!v;
     else if (key === 'type' || key === 'color' || key === 'name') it[key] = v;
     else { const n = parseFloat(v); if (!Number.isFinite(n)) return; it[key] = key === 'size' ? Math.max(0.2, Math.min(5, n)) : n; }
     if (key === 'type' || key === 'color') _moor.dirty = true;
     _moorPlaceAll();
+    if (key === 'type') renderMooringPanel();
 }
 Object.assign(window, { mooringAdd, mooringRemove, mooringCopy, mooringClear, mooringSet, mooringSnap, mooringAutoLayout });
 
@@ -304,6 +324,8 @@ window.onExtraGizmoChange = function (type, index, target) {
 function renderMooringPanel() {
     const list = document.getElementById('moor-list');
     if (!list) return;
+    const showBox = document.querySelector('.moor-show');
+    if (showBox) showBox.checked = shipMooring.show !== false;
     if (!shipMooring.items.length) {
         list.innerHTML = '<div style="font-size:11px;color:#888;padding:6px 0;">まだありません。下のボタンで追加するか、「おすすめの配置」を押してください。</div>';
         return;
@@ -322,6 +344,7 @@ function renderMooringPanel() {
                 <select class="moor-sel" onchange="mooringSet(${i}, 'type', this.value)">${opt(MOOR_TYPES, it.type)}</select>
                 <select class="moor-sel" onchange="mooringSet(${i}, 'color', this.value)">${opt(MOOR_COLORS, it.color)}</select>
                 <label class="sp-toggle"><input type="checkbox" ${it.sym ? 'checked' : ''} onchange="mooringSet(${i}, 'sym', this.checked)"> 左右対称</label>
+                ${it.type === 'cleat' ? '<span style="font-size:10px;color:#8ab;">索は舷の外から取る</span>' : `<label class="sp-toggle" title="タグボートの索をこの金物に直接かけてよい（クリートはいつもかけられる）"><input type="checkbox" ${it.tow ? 'checked' : ''} onchange="mooringSet(${i}, 'tow', this.checked)"> タグの索を直接かける</label>`}
             </div>
             <div class="sp-row sp-xyz-row">
                 <span class="sp-axis-label">X:</span>${num(i, 'x', it.x, 0.05)}
@@ -330,6 +353,8 @@ function renderMooringPanel() {
             </div>
             <div class="sp-row sp-xyz-row">
                 <span class="sp-axis-label" style="white-space:nowrap;width:auto;">向き°</span>${num(i, 'rot', it.rot, 15)}
+                <button class="sp-gizmo-btn" style="padding:2px 6px;" onclick="mooringRotate(${i}, -90)" title="左へ90°回す">⟲</button>
+                <button class="sp-gizmo-btn" style="padding:2px 6px;" onclick="mooringRotate(${i}, 90)" title="右へ90°回す">⟳</button>
                 <span class="sp-axis-label" style="white-space:nowrap;width:auto;">大きさ</span>${num(i, 'size', it.size, 0.1)}
             </div>
             <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
@@ -347,6 +372,7 @@ function applyMooringConfig(c) {
     if (typeof disableGizmo === 'function' && typeof currentGizmoType !== 'undefined' && currentGizmoType === 'moor') disableGizmo();
     shipMooring.items = (c && Array.isArray(c.items)) ? c.items.map(it => Object.assign(_moorDefault(it.type), it)) : [];
     shipMooring.items.forEach(it => { if (!MOOR_TYPES[it.type]) it.type = 'bitt'; if (!MOOR_COLORS[it.color]) it.color = 'black'; });
+    shipMooring.show = !(c && c.show === false);
     _moor.dirty = true;
     renderMooringPanel();
 }
