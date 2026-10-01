@@ -508,8 +508,10 @@ function _haAllocate(Fs, Mz, list, dt, noPull) {
 
 // 前後に引くタグを1隻選んで力を決める（引けるのは索を取れる金物のあるタグだけ：47-tugboats.js の tugPullHook）
 function _haAxialTug(use, eA, vA, massKg) {
-    if (use.length < 4 || Math.abs(eA) > 150 || Math.abs(eA) < 5 || Math.abs(vA) > 2) { harborAuto.axId = null; return null; }
-    const fwd = eA > 0, st = tugStations();
+    if (use.length < 4 || Math.abs(eA) > 150 || (Math.abs(eA) < 5 && Math.abs(vA) < 0.1) || Math.abs(vA) > 2) { harborAuto.axId = null; return null; }
+    // 目標へ向かう速さ（近いほどゆっくり）に合わせて、前へ引くか後ろへ引くか（行き過ぎそうなら逆へ引いて止める）
+    const vAd0 = Math.abs(eA) < 5 ? 0 : Math.sign(eA) * Math.min(0.6, 0.012 * Math.abs(eA));
+    const fwd = vAd0 - vA > 0, st = tugStations();
     let best = use.find(t => t.id === harborAuto.axId && t.dir === (fwd ? 'fwd' : 'aft')) || null;
     if (!best) {
         let bz = -Infinity;
@@ -522,11 +524,9 @@ function _haAxialTug(use, eA, vA, massKg) {
     }
     if (!best) { harborAuto.axId = null; return null; }
     harborAuto.axId = best.id;
-    const vAd = Math.sign(eA) * Math.min(0.6, 0.012 * Math.abs(eA));          // ノット
-    const Fa = massKg * 0.514 * 0.25 * (vAd - vA);
+    const Fa = massKg * 0.514 * 0.25 * (vAd0 - vA);
     best.action = 'pull'; best.dir = fwd ? 'fwd' : 'aft'; best.switchT = 0;
-    // 目標へ向かう向きの力だけ（止めるのは機関で）
-    best.autoPower = Math.sign(Fa) === (fwd ? 1 : -1) ? Math.min(1, Math.abs(Fa) / _tugPullN()) : 0;
+    best.autoPower = Math.min(1, Math.abs(Fa) / _tugPullN());
     return best;
 }
 // ── 目標の位置・向きへ動かす ──
@@ -539,17 +539,31 @@ function _haControl(target, dt, opt) {
     const eA = ex * fx + ez * fz, eS = ex * sx + ez * sz;
     const eY = target.h !== undefined ? _haWrap(target.h - physics.heading) : 0;
     const massKg = Math.max(1e5, (physics.mass || 1) * 1e6);
-    // 前後：機関を少しずつ（ベルが鳴りすぎないよう 6 秒に一度まで）
+    // 前後：機関（最微速の前進・後進と停止）で。大きな船は機関を止めても何分も惰性で進むので、
+    // 止まるのに要る距離（後進をかけたときの減速と、機関が逆転するまでの遅れから）を見て、早めに逆をかけて止める。
+    // 以前は「目標の速さより速ければ逆」を 6 秒ごとにしていたので、1 ノット近く行き過ぎてドックの中で前後に
+    // 行ったり来たりしていた（オリンピック：止めてから止まるまでに 100m 以上）
     const vA = physics.speed || 0;
-    // （目標の速さは、機関を動かす幅 ±0.2 より大きくしておく。小さいと、ずれが残っても機関が動かない）
-    const vAd = Math.abs(eA) < 12 ? 0 : Math.sign(eA) * Math.max(0.25, Math.min(opt.vA || 0.5, 0.02 * Math.abs(eA)));
+    const vmax = Math.max(0.25, opt.vA || 0.5);
     harborAuto.t += dt;
-    // （ふだんは 6 秒に一度。速すぎ・後ろへ速いときはすぐ直す）
-    const urgent = Math.abs(vA - vAd) > 1.0 && harborAuto.t - harborAuto.lastOrderT > 1.5;
-    if (harborAuto.t - harborAuto.lastOrderT > 6 || urgent) {
-        let o = 0;
-        if (vA < vAd - 0.2) o = 1; else if (vA > vAd + 0.2) o = -1;
-        if (typeof _apOrder === 'function' && autopilot.lastOrder !== o) { _apOrder(o); harborAuto.lastOrderT = harborAuto.t; }
+    const pf = (typeof enginePowerFactor === 'function') ? enginePowerFactor() : 1;
+    const kAcc = 0.3 / Math.max(0.1, physics.mass || 1) * pf;                    // 機関の速さの目標へ近づく割合[1/秒]（17-main-loop.js）
+    const vSlow = 0.15 * Math.max(1, physics.maxSpeed || 13);                    // 最微速後進の速さの目標[ノット]
+    const v = Math.abs(vA) * 0.514, aBrake = Math.max(0.002, (Math.abs(vA) + vSlow) * kAcc * 0.514);
+    const dStop = v * v / (2 * aBrake) + v * 7 + 2;                             // 逆転までの遅れ（約 7 秒）の分も
+    const toward = Math.sign(vA) === Math.sign(eA) && Math.abs(vA) > 0.05;
+    let o = 0;
+    // （機関で止めるのは 0.25 ノットまで。逆転の遅れで行き過ぎないように。残りは惰性と、前後に引くタグで）
+    if (Math.abs(eA) < 6) o = Math.abs(vA) > 0.25 ? -Math.sign(vA) : 0;                        // 着いた：止める
+    else if (toward && Math.abs(eA) < dStop) o = Math.abs(vA) > 0.25 ? -Math.sign(vA) : 0;     // このままでは行き過ぎる：逆をかける
+    else if (!toward && Math.abs(vA) > 0.12) o = Math.sign(eA);                                // 離れる向きに動いている：目標の方へ
+    else if (Math.abs(vA) < vmax - 0.05) o = Math.sign(eA);                                    // まだ遅い：目標の方へ
+    else o = 0;                                                                                 // 十分な速さ：惰性で
+    // 指令は 2 秒に一度まで（ベルが鳴りすぎないよう）。逆をかけるのは急ぐ
+    const cur = autopilot.lastOrder || 0, gap = harborAuto.t - harborAuto.lastOrderT;
+    const braking = o !== 0 && o === -Math.sign(vA) && toward;
+    if (o !== cur && (gap > 2 || (braking && gap > 0.5))) {
+        if (typeof _apOrder === 'function') { _apOrder(o); harborAuto.lastOrderT = harborAuto.t; }
     }
     if (typeof _apHelm === 'function') _apHelm(0, dt);
     // 横と回頭：タグで
