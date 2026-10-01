@@ -138,6 +138,20 @@ function mooringRotate(i, d) {
     _moorPlaceAll(); renderMooringPanel();
 }
 window.mooringRotate = mooringRotate;
+// いちばん近い舷（船体の外板）と平行に向ける：その前後位置での舷の線の傾きに合わせる
+//（金物の +x（柱・角の並ぶ向き）を舷に沿わせる。右舷側なら舷の線も鏡の向き）
+function mooringAlignSide(i) {
+    const it = shipMooring.items[i]; if (!it || typeof worldHullAt !== 'function') return;
+    const sc = (typeof physics !== 'undefined' && physics.scale) || 1;
+    const hp = window.hullProfile, dz = Math.max(0.05, ((hp && hp.ready) ? hp.halfLen : 6) * 0.02);
+    const slope = (worldHullAt(it.z + dz).hw - worldHullAt(it.z - dz).hw) / (2 * dz * sc);   // 半幅の前後の変わり方
+    const phi = Math.atan(slope) * 180 / Math.PI;
+    const side = it.x >= 0 ? 1 : -1;                       // +x が左舷
+    let rot = side > 0 ? phi - 90 : -phi - 90;
+    it.rot = Math.round((((rot % 360) + 360) % 360) * 10) / 10;
+    _moorPlaceAll(); renderMooringPanel();
+}
+window.mooringAlignSide = mooringAlignSide;
 window.updateMooring = updateMooring;
 
 // 金物の位置（ワールド座標）の一覧。タグボートの索を取る所（反対舷の分も）
@@ -304,6 +318,7 @@ const _moorPrevGizmoTarget = window.getExtraGizmoTarget;
 const _moorPrevGizmoChange = window.onExtraGizmoChange;
 window.getExtraGizmoTarget = function (type, index) {
     if (type === 'moor') { updateMooring(); const e = _moor.groups[index]; return { mesh: e && e.g, btnId: `gizmo-moor-${index}` }; }
+    if (type === 'moor_rot') { updateMooring(); const e = _moor.groups[index]; return { mesh: e && e.g, btnId: `gizmo-moor-rot-${index}` }; }
     return _moorPrevGizmoTarget ? _moorPrevGizmoTarget(type, index) : null;
 };
 window.onExtraGizmoChange = function (type, index, target) {
@@ -314,6 +329,17 @@ window.onExtraGizmoChange = function (type, index, target) {
         it.x = r(target.position.x); it.y = r(target.position.y); it.z = r(target.position.z);
         const row = document.querySelector(`#moor-list .moor-item[data-i="${index}"]`);
         if (row) ['x', 'y', 'z'].forEach(k => { const el = row.querySelector(`input[data-k="${k}"]`); if (el) el.value = it[k]; });
+        _moorPlaceAll();
+        return true;
+    }
+    if (type === 'moor_rot') {
+        // 回すのは上下の軸（甲板の上で向きを変える）だけ。ほかの軸に回されたら戻す
+        const it = shipMooring.items[index];
+        if (!it) return true;
+        const e = new THREE.Euler().setFromQuaternion(target.quaternion, 'YXZ');
+        it.rot = Math.round((((e.y * 180 / Math.PI) % 360) + 360) % 360 * 10) / 10;
+        const row = document.querySelector(`#moor-list .moor-item[data-i="${index}"]`);
+        if (row) { const el = row.querySelector('input[data-k="rot"]'); if (el) el.value = it.rot; }
         _moorPlaceAll();
         return true;
     }
@@ -359,6 +385,8 @@ function renderMooringPanel() {
             </div>
             <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
                 <button class="sp-gizmo-btn" id="gizmo-moor-${i}" onclick="toggleGizmo('moor', ${i})">📍 ギズモ</button>
+                <button class="sp-gizmo-btn" id="gizmo-moor-rot-${i}" onclick="toggleGizmo('moor_rot', ${i}, 'rotate'); if (typeof applyRotateAxisRestriction === 'function' && currentGizmoType === 'moor_rot') applyRotateAxisRestriction('Y')" title="ギズモで向きを回す（上下の軸だけ）">🔄 ギズモで回す</button>
+                <button class="sp-gizmo-btn" onclick="mooringAlignSide(${i})" title="いちばん近い舷の外板と平行に向ける">∥ 舷と平行に</button>
                 <button class="sp-gizmo-btn" onclick="mooringSnap(${i})" title="いまの位置の真下の甲板に載せる">⬇ 甲板に載せる</button>
                 <button class="sp-gizmo-btn" onclick="mooringCopy(${i})">⧉ 複製</button>
             </div>

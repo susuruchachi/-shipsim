@@ -59,7 +59,8 @@
 //               光らない物（地形・建物・港の施設など）をブルームから外す（昼の地面がにじんで白っぽく光っていた）
 // 0.03.009.002  「何度も座礁する」は同じ辺り（3km 以内）の回数で数える（前の港を出るときの座礁を持ち越していた）。
 //               使っている GPU の名前を設定の「軽量化」に出す。地形・建物は作ったときからブルームの外
-var APP_VERSION = '0.03.009.002';
+// 0.03.009.003  係船設備：ギズモで向きを回せる（上下の軸だけ）。「舷と平行に」で、いちばん近い舷の外板に沿わせる
+var APP_VERSION = '0.03.009.003';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
