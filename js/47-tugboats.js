@@ -843,6 +843,7 @@ function renderTugPanel() {
         (window.world && world.mode === 'world' && typeof harborAuto !== 'undefined' ? `<div class="tg-row tg-auto">
             ${harborAuto.mode ? `<button onclick="harborAutoStop('自動の離着岸を止めました')">■ 自動の離着岸を止める</button>`
                 : `<button onclick="harborAutoBerthNow()">🤖 自動着岸</button><button onclick="harborAutoDepartNow()">🤖 自動離岸</button>`}
+            ${!harborAuto.mode ? `<div class="tg-row tg-side">接舷：${[['auto', '自動'], ['port', '左舷'], ['starboard', '右舷']].map(([k, l]) => `<button class="${(harborAuto.sidePref || 'auto') === k ? 'on' : ''}" onclick="harborSetSidePref('${k}')">${l}</button>`).join('')}</div>` : ''}
             ${!harborAuto.mode && typeof tugEscort !== 'undefined' ? (tugEscort.manual
                 ? `<button onclick="tugEscortManual(false)">付き添いをやめる</button>`
                 : `<button onclick="tugEscortManual(true)" title="狭い水路などで、タグに両舷を付き添ってもらう（自動航行中は付き添われて微速で進む）">🛟 付き添いを頼む</button>`) : ''}

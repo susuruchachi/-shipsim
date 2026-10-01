@@ -820,6 +820,7 @@ window.onExtraGizmoChange = onExtraGizmoChange;
 
 // 押している間だけ鳴らすボタン（タッチ・マウス両対応）
 function _bindHold(el, down, up) {
+    el.dataset.hold = '1';   // 押している間だけ効くボタン（41-no-zoom.js の素早いタップの対象外）
     let held = false;
     const start = (e) => { e.preventDefault(); e.stopPropagation(); if (held) return; held = true; down(); };
     const end = (e) => { if (e) e.stopPropagation(); if (!held) return; held = false; up(); };

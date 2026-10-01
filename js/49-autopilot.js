@@ -1409,7 +1409,7 @@ function renderAutopilotPanel() {
         ${autopilot.escort ? `<div class="ap-row ap-escort">🚢 ${{ wait: 'タグを待っています（狭い水路の手前）', ahead: 'この先は狭い水路：タグが付き添います', on: 'タグの付き添いで狭い水路を微速で通っています' }[autopilot.escort]}</div>` : ''}
         <div class="ap-row">${Object.entries({ full: '全速', half: '半速', slow: '微速' }).map(([k, l]) => `<button class="${autopilot.cruise === k ? 'on' : ''}" onclick="autopilotSetCruise('${k}')">${l}</button>`).join('')}
             <button class="ap-off" onclick="autopilotStop('自動航行を切りました')">解除</button></div>
-        ${autopilot.dest && autopilot.dest.point ? '' : `<div class="ap-row"><label><input type="checkbox" ${autopilot.berth ? 'checked' : ''} onchange="autopilotSetBerth(this.checked)"> 着いたらタグで岸壁に着岸</label>${autopilot.berthPlan ? '' : (autopilot.berth && autopilot.berthWhy ? `<div class="ap-msg">${autopilot.berthWhy}</div>` : '')}</div>`}
+        ${autopilot.dest && autopilot.dest.point ? '' : `<div class="ap-row"><label><input type="checkbox" ${autopilot.berth ? 'checked' : ''} onchange="autopilotSetBerth(this.checked)"> 着いたらタグで岸壁に着岸</label> <select onchange="harborSetSidePref(this.value)" title="岸壁に付ける舷">${[['auto', '舷：自動'], ['port', '左舷付け'], ['starboard', '右舷付け']].map(([k, l]) => `<option value="${k}"${(harborAuto.sidePref || 'auto') === k ? ' selected' : ''}>${l}</option>`).join('')}</select>${autopilot.berthPlan ? '' : (autopilot.berth && autopilot.berthWhy ? `<div class="ap-msg">${autopilot.berthWhy}</div>` : '')}</div>`}
         ${autopilot.msg ? `<div class="ap-msg">${autopilot.msg}</div>` : ''}`;
 }
 window.renderAutopilotPanel = renderAutopilotPanel;

@@ -38,7 +38,10 @@
 // 0.03.003.000  名所の建物・像（緯度・経度で置き、船から 25km 以内で見える。足元の OSM の箱は出さない）：
 //               リヴァプールのロイヤル・リバー・ビルディング（時計塔・丸屋根・リバー・バード）、キュナード・ビルディング、
 //               ポート・オブ・リヴァプール・ビルディング、タイタニック・ベルファスト。将来のアメリカ用に自由の女神像も登録
-var APP_VERSION = '0.03.003.000';
+// 0.03.004.000  重い場面でボタンが効かなかったのを直す（指を離した時点で確実に押したことにする。建物の区画は 1 つずつ作る）。
+//               作り込んだ港の埠頭を地形に合わせる（作り物の岸壁を置かず・陸を削らず、船を寄せる位置は本物の岸の線から測る）。
+//               接舷する舷を選べる（自動・左舷・右舷：タグのメニューと自動航行のパネル）
+var APP_VERSION = '0.03.004.000';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

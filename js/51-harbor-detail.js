@@ -299,9 +299,18 @@ function updateHarborDetail(t, dt) {
         }
     }
     const sx = org.x - cx, sy = cz - org.z;                          // 船の位置（枠の角からの東・北 m）
-    if (!hdState.lastTileCheck || t - hdState.lastTileCheck > 1) {
+    // （1 回に 1 区画だけ、近い区画から。街の区画は建物が数千あり、2 区画を一度に作るとその間ボタンも効かなかった）
+    if (!hdState.lastTileCheck || t - hdState.lastTileCheck > 0.4 || t < hdState.lastTileCheck) {
         hdState.lastTileCheck = t;
-        let built = 0;
+        let built = 1;
+        let near = null, nearD = Infinity;
+        for (const [k] of F._tiles) {
+            if (hdState.tiles.get(k) !== undefined) continue;
+            const [ti, tj] = k.split(',').map(Number);
+            const dd = Math.hypot(Math.max(0, Math.abs((ti + 0.5) * HD_TILE - sx) - HD_TILE / 2), Math.max(0, Math.abs((tj + 0.5) * HD_TILE - sy) - HD_TILE / 2));
+            if (dd < HD_RANGE && dd < nearD) { nearD = dd; near = k; }
+        }
+        if (near) { const m = _hdBuildTile(d, F._tiles.get(near), org); hdState.tiles.set(near, m); if (m) hdState.group.add(m); }
         for (const [k, list] of F._tiles) {
             const [ti, tj] = k.split(',').map(Number);
             const dx = Math.max(0, Math.abs((ti + 0.5) * HD_TILE - sx) - HD_TILE / 2), dy = Math.max(0, Math.abs((tj + 0.5) * HD_TILE - sy) - HD_TILE / 2);

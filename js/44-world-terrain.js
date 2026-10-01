@@ -80,10 +80,11 @@ function _portAdjust(h, x, z, shapes) {
         const half = S.quayLen / 2;
         // 作り込んだ港：岸壁の後ろの陸を平らにし、前の水面を掘るだけ（陸は削らない・沖への航路は掘らない）
         if (S.detail) {
-            // 岸壁の前（45m：大きな船の幅と余裕）は必ず水（本物の岸の線と置いた岸壁の線のずれや、岸壁の端の角で船が陸に当たらないよう）
-            if (a > 0 && a < 45 && Math.abs(b) < half) { h = Math.min(h, -S.depth - 2); continue; }
-            if (a <= 0 && a > -S.apron && Math.abs(b) < half && h > -1) h = 3;
-            else if (a > 0 && a < Math.min(S.basin, 450) && Math.abs(b) < half + 40 && h < -0.5) {
+            // 地形に合わせる：陸は削らず・平らにもしない（本物の岸の線のまま）。岸壁の前の、もともと水
+            // （か干潟ほどの低い所）だけを、船が付けられる深さに掘る。船を寄せる位置は本物の岸の線から測る
+            //（50-harbor-auto.js の harborBerthPlan）
+            if (a > -10 && a < 45 && Math.abs(b) < half && h < 1.5) { h = Math.min(h, -S.depth - 2); continue; }
+            if (a > 0 && a < Math.min(S.basin, 450) && Math.abs(b) < half + 40 && h < -0.5) {
                 const want = -S.depth - 2, k = Math.min(1, (half + 40 - Math.abs(b)) / 40) * Math.min(1, (Math.min(S.basin, 450) - a) / 150);
                 if (h > want) h = h + (want - h) * k;
             }
@@ -395,15 +396,14 @@ function _buildPort(S) {
     const half = S.quayLen / 2;
 
     // 岸壁（海側の垂直な壁＋上の面）
-    // （作り込んだ港は、本物の岸壁の土地があるので、縁の帯だけ）
-    const apronV = S.detail ? 16 : S.apron;
-    addBox(concrete, -apronV / 2 + 4, 0, -3, apronV + 8, 12, S.quayLen);
+    // （作り込んだ港は、本物の岸壁の地形があるので、作り物の岸壁は置かない）
+    if (!S.detail) addBox(concrete, -S.apron / 2 + 4, 0, -3, S.apron + 8, 12, S.quayLen);
     // （作り込んだ港は、本物の岸壁の地形で当たりが取れるので、作り物の岸壁の当たりは置かない。同じ岸沿いの
     //  別の埠頭の岸壁と少し向きがずれていると、となりの埠頭の船に食い込んでしまう）
     if (!S.detail) colliders.push([-S.apron - 20, 6, -half, half]);
     // 係船柱（ボラード）：岸壁の縁に 25m おき
     const bollards = [];
-    for (let b = -half + 12; b <= half - 12; b += 25) {
+    for (let b = -half + 12; b <= half - 12 && !S.detail; b += 25) {
         const q = P(4.5, b);
         bollards.push({ x: q.x, y: 3.35, z: q.z, w: 0.7, h: 0.7, d: 0.7, rot });
     }
