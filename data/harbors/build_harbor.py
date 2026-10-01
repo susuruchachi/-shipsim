@@ -36,7 +36,13 @@ HARBORS = {
                                 dict(width=700, depth=24.0, pts=[[53.5040, -3.0930], [53.5151, -3.1017], [53.5185, -3.1180]]),
                                 dict(width=600, depth=24.0, pts=[[53.5067, -3.0962], [53.5124, -3.1061], [53.5181, -3.1160], [53.5215, -3.1320]])]),
     # グラスゴー：クライド川（キング・ジョージ5世ドック・クライドバンクのジョン・ブラウン造船所）から、グリーノック沖（テイル・オブ・ザ・バンク）まで
-    'glasgow': dict(name='グラスゴー', lat0=55.845, lat1=55.975, lon0=-4.790, lon1=-4.270, cell=10, dock_depth=10.0, berth_depth=11.0, berth_reach=150),
+    'glasgow': dict(name='グラスゴー', lat0=55.845, lat1=55.975, lon0=-4.790, lon1=-4.270, cell=10, dock_depth=14.0, berth_depth=14.0, berth_reach=150,
+                    river_depth=14.0,
+                    # クライド川（ボウリング → アースキン → クライドバンク → レンフルー → キング・ジョージ5世ドックの前）：川の真ん中を掘る
+                    auto_channels=[dict(a=[55.9300, -4.5300], b=[55.8735, -4.3533], width=140, depth=14.0)],
+                    # グリーノックのオーシャン・ターミナルの前と、クライド川の本航路（南岸寄り：グリーノック → ポート・グラスゴー → ダンバートン → ボウリング）
+                    channels=[dict(width=300, depth=14.0, pts=[[55.95620, -4.76121], [55.95820, -4.76121]]),
+                              dict(width=200, depth=14.0, pts=[[55.9568, -4.7598], [55.9420, -4.7000], [55.9380, -4.6807], [55.9340, -4.6200], [55.9324, -4.5747], [55.9284, -4.4996]])]),
     # ベルファスト：ハーランド＆ウルフ（クイーンズ島・トンプソン・ドック）・ヴィクトリア水道から、ベルファスト湾まで
     'belfast': dict(name='ベルファスト', lat0=54.595, lat1=54.725, lon0=-5.945, lon1=-5.600, cell=10, dock_depth=22.0, berth_depth=23.0, berth_reach=250,
                     # ヴィクトリア水道の口から、ベルファスト湾を北東へ、湾口の深い所まで
@@ -373,7 +379,20 @@ def build(key, cache):
             acc += np.where(ok, sh, 0); cnt += ok
         fill = miss & (cnt > 0)
         depth[fill] = acc[fill] / cnt[fill]
-    depth[water & np.isnan(depth)] = 2.5
+    nodata = water & np.isnan(depth)
+    depth[nodata] = 2.5
+    # 大きな川（river_depth）：水深の測られていない川の中は、岸から離れるほど深く（岸から 15m は浅く、
+    # そこから 4m 進むごとに 1m、river_depth まで）。大きな船が川の真ん中を遡れるように
+    if H.get('river_depth'):
+        rd = H['river_depth']
+        er = water.copy(); dist = np.zeros(water.shape, np.float32)
+        for it in range(int((rd * 4 + 15) / cell) + 2):
+            er = er & np.roll(er, 1, 0) & np.roll(er, -1, 0) & np.roll(er, 1, 1) & np.roll(er, -1, 1)
+            if not er.any():
+                break
+            dist += er
+        prof = np.clip((dist * cell - 15) / 4.0, 0, rd)
+        depth[nodata] = np.maximum(depth[nodata], prof[nodata])
     # ドック：書いてある深さ（なければ港の決まり）。港の決まりより浅くはしない（1911 年の深さ：40ft ≒ 12m）
     depth[kind == 2] = np.maximum(depth[kind == 2], H['dock_depth'])
     # 港の敷地（岸壁）の前 berth_reach[m] は掘ってある
@@ -404,6 +423,13 @@ def build(key, cache):
             mid = ((t1[0] + t2[0]) / 2, (t1[1] + t2[1]) / 2)
             extra = TURN_R * (1 / math.cos(turn / 2) - 1)
             chans.append(dict(width=ch['width'] + 2 * extra, depth=ch['depth'], pts=[list(t1), list(mid), list(t2)]))
+    # 川の航路（auto_channels）：a から b まで、岸からできるだけ離れた所（川の真ん中）を通る道を水の上で探し、
+    # 折れ線にして掘る（川の線を手で書かなくてよい。曲がりくねった川を遡る大きな船のため）
+    for ac in H.get('auto_channels', []):
+        pts = river_path(water, lat1, lon0, dLat, dLon, cell, ac['a'], ac['b'])
+        if pts:
+            print('auto channel', len(pts), 'points')
+            chans.append(dict(width=ac['width'], depth=ac['depth'], pts=pts))
     for ch in chans:
         r = int(round(ch['width'] / 2 / cell))
         yy, xx = np.mgrid[-r:r + 1, -r:r + 1]
@@ -542,6 +568,64 @@ def export_features(key, cache, nodes, ways, water, lat1, lon0, dLat, dLon, cell
                 x, y = xy(sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)); out_c.append([round(x, 1), round(y, 1)])
     json.dump({'b': out_b, 's': out_s, 'c': out_c}, open(os.path.join(HERE, f'{key}_feat.json'), 'w'), ensure_ascii=False, separators=(',', ':'))
     print('features: buildings', len(out_b), 'seamarks', len(out_s), 'cranes', len(out_c), 'bytes', os.path.getsize(os.path.join(HERE, f'{key}_feat.json')), flush=True)
+
+
+def river_path(water, lat1, lon0, dLat, dLon, cell, A, B, f=2):
+    """水の上で、A から B まで、岸から離れた所を通る道（緯度・経度の折れ線）。f 升ずつまとめて探す"""
+    import heapq
+    rows, cols = water.shape
+    ny, nx = rows // f, cols // f
+    w = water[:ny * f, :nx * f].reshape(ny, f, nx, f).all(axis=(1, 3))
+    # 岸からの距離（升目）：削っていく
+    d = np.zeros(w.shape, np.int32); er = w.copy()
+    for it in range(40):
+        er = er & np.roll(er, 1, 0) & np.roll(er, -1, 0) & np.roll(er, 1, 1) & np.roll(er, -1, 1)
+        if not er.any(): break
+        d += er
+    cost = np.where(w, 1.0 + 60.0 / (1.0 + d.astype(np.float64)) ** 2, np.inf)
+    def ij(q): return int(round((lat1 - q[0]) / dLat / f)), int(round((q[1] - lon0) / dLon / f))
+    s, t = ij(A), ij(B)
+    # 始まり・終わりが水でなければ、近くの水へ
+    def snap(p):
+        best = None
+        for r in range(0, 30):
+            for a in range(-r, r + 1):
+                for b in (-r, r) if abs(a) != r else range(-r, r + 1):
+                    j, i = p[0] + a, p[1] + b
+                    if 0 <= j < ny and 0 <= i < nx and w[j, i]:
+                        return (j, i)
+        return None
+    s, t = snap(s), snap(t)
+    if not s or not t: return None
+    dist = np.full(w.shape, np.inf); prev = {}
+    dist[s] = 0; hq = [(0.0, s)]
+    nb = [(1, 0, 1), (-1, 0, 1), (0, 1, 1), (0, -1, 1), (1, 1, 1.414), (1, -1, 1.414), (-1, 1, 1.414), (-1, -1, 1.414)]
+    while hq:
+        g, (j, i) = heapq.heappop(hq)
+        if (j, i) == t: break
+        if g > dist[j, i]: continue
+        for a, b, L in nb:
+            jj, ii = j + a, i + b
+            if 0 <= jj < ny and 0 <= ii < nx and w[jj, ii]:
+                ng = g + L * cost[jj, ii]
+                if ng < dist[jj, ii]:
+                    dist[jj, ii] = ng; prev[(jj, ii)] = (j, i); heapq.heappush(hq, (ng, (jj, ii)))
+    if t not in prev: return None
+    path = [t]
+    while path[-1] != s: path.append(prev[path[-1]])
+    path.reverse()
+    # 間引き（線からのずれが 2 升以内なら省く）
+    def simp(P):
+        if len(P) < 3: return P
+        (y0, x0), (y1, x1) = P[0], P[-1]
+        L = math.hypot(y1 - y0, x1 - x0) or 1
+        dm, k = -1, 0
+        for q in range(1, len(P) - 1):
+            y, x = P[q]; dd = abs((x1 - x0) * (y0 - y) - (x0 - x) * (y1 - y0)) / L
+            if dd > dm: dm, k = dd, q
+        return simp(P[:k + 1])[:-1] + simp(P[k:]) if dm > 2 else [P[0], P[-1]]
+    P = simp(path)
+    return [[round(lat1 - (j + 0.5) * f * dLat, 5), round(lon0 + (i + 0.5) * f * dLon, 5)] for j, i in P]
 
 
 def connect_berths(depth, water, band, deep, cell, width_m, want):

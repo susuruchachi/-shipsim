@@ -204,6 +204,12 @@ const HD_LANDMARKS = {
         { kind: 'portal', name: 'ゴライアス', lat: 54.60459, lon: -5.90471, bearing: 130, span: 140, hgt: 96 },
         { kind: 'portal', name: 'サムソン', lat: 54.60951, lon: -5.89774, bearing: 128, span: 140, hgt: 106 },
     ],
+    // クライド川のタイタン・クレーン（片持ちの大きなクレーン）：クライドバンク（ジョン・ブラウン造船所。クイーン・メリー号の
+    // 艤装に使った）とグリーノック
+    glasgow: [
+        { kind: 'titan', name: 'タイタン・クレーン（クライドバンク）', lat: 55.89735, lon: -4.40870, bearing: 151, hgt: 46, jib: 45 },
+        { kind: 'titan', name: 'タイタン・クレーン（グリーノック）', lat: 55.94387, lon: -4.73044, bearing: 135, hgt: 45, jib: 45 },
+    ],
 };
 function _hdLandmark(d, L, org) {
     const mLat = d.cell / d.dLat, mLon = d.cell / d.dLon;
@@ -242,6 +248,16 @@ function _hdLandmark(d, L, org) {
         }
         add(9, 9, L.span + 20, 0, top + 4.5, 0, yel);                               // 主梁
         add(12, 7, 14, 0, top + 12.5, hs * 0.3, yel);                              // トロリー（巻き上げ機）
+    }
+    else if (L.kind === 'titan') {
+        // 塔（鉄骨の四角い柱）と、上で前後に張り出す梁（長い方は水の上、短い方におもり）
+        const blue = _hdMat(0x4a5560, { roughness: 0.7, metalness: 0.3 }), dark = _hdMat(0x2e3236);
+        const top = L.hgt - 6;
+        for (const sx of [-4, 4]) for (const sz of [-4, 4]) add(1.4, top, 1.4, sx, top / 2, sz, blue);
+        for (const hy of [top * 0.33, top * 0.66, top]) { add(9, 1, 1, 0, hy, -4, blue); add(9, 1, 1, 0, hy, 4, blue); add(1, 1, 9, -4, hy, 0, blue); add(1, 1, 9, 4, hy, 0, blue); }
+        add(7, 6, L.jib + 25, 0, top + 3, (L.jib - 25) / 2, blue);                   // 梁
+        add(8, 7, 9, 0, top + 9, 0, dark);                                          // 機械室
+        add(6, 5, 7, 0, top - 1, -22, dark);                                        // おもり
     }
     g.traverse(o => { if (o.isMesh) o.userData.noLightBake = true; });
     g.name = 'Landmark:' + (L.name || L.kind);

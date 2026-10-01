@@ -588,8 +588,16 @@ function _tugStep(t, dt, last) {
                 }
             } else {
                 // 待機：舷側に並んで同じ向き（反対舷へ回ったときは、そこで押し引きしているタグの外側で）
+                // 待つ所が陸・浅瀬・岸壁にかかるときは、船の中央寄りの空いている所で待つ（ほかのタグの道もふさがない）
                 const gap = TUG_BEAM / 2 + 3 + (flipped ? TUG_LEN + 8 : 0);
                 tx = edge.x + out.x * gap; tz = edge.z + out.z * gap;
+                if (_tugStaticBlocked(tx, tz)) {
+                    for (const f of [0.6, 0.3, 0, -0.3]) {
+                        const zz = st.z * sc * f, hw2 = _tugHalfWidth(zz / sc) * sc;
+                        const q = _tugFromShip(C, zz, side * (hw2 + gap));
+                        if (!_tugStaticBlocked(q.x, q.z)) { tx = q.x; tz = q.z; break; }
+                    }
+                }
                 tyaw = Math.atan2(F.fx, F.fz);
             }
         }

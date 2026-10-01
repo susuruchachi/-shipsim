@@ -122,7 +122,7 @@ const REAL_WORLDS = {
     britain: {
         name: 'ブリテン諸島・アイルランド', url: 'data/britain', center: { lat: 54.3, lon: -4.5 }, start: 'サウサンプトン港',
         // 作り込んだ港（data/harbors/<key>：10m おきの地形。OpenStreetMap の海岸線・ドック＋EMODnet の水深）
-        harbors: ['southampton', 'liverpool', 'belfast'],
+        harbors: ['southampton', 'liverpool', 'belfast', 'glasgow'],
         // 実在の港（おおよその位置。実際の海岸に合わせて数km以内で置き直す）
         ports: [
             // イングランド南岸
@@ -146,7 +146,9 @@ const REAL_WORLDS = {
             ['ロサイス軍港', 'naval', 56.020, -3.440], ['リース港', 'city', 55.985, -3.175], ['アバディーン港', 'city', 57.143, -2.080],
             ['ピーターヘッド漁港', 'fishing', 57.500, -1.780], ['フレーザーバラ漁港', 'fishing', 57.695, -2.005], ['ラーウィック港', 'town', 60.155, -1.140],
             ['カークウォール港', 'town', 58.985, -2.960], ['ストーノウェイ港', 'town', 58.207, -6.385], ['ウラプール漁港', 'fishing', 57.895, -5.160],
-            ['オーバン港', 'town', 56.415, -5.475], ['ファスレーン軍港', 'naval', 56.065, -4.820], ['グリーノック港', 'city', 55.950, -4.765],
+            ['オーバン港', 'town', 56.415, -5.475], ['ファスレーン軍港', 'naval', 56.065, -4.820], ['グリーノック港', 'city', 55.950, -4.765, null, { at: [55.95596, -4.76121], bearing: 0, quay: 360 }],
+            // クライド川を遡ったグラスゴー：キング・ジョージ5世ドック（幅 115m）。川幅が 250m ほどなので、ドックの前で回せる長さの船だけ
+            ['グラスゴー港 キング・ジョージ5世ドック', 'cargo', 55.868, -4.3514, [[55.9284, -4.4996], [55.9568, -4.7598]], { at: [55.86806, -4.35142], bearing: 265, quay: 360, dock: { entrance: [55.87236, -4.35312], inBearing: 175, turnOut: 110 } }],
             // アイリッシュ海・ウェールズ・ブリストル海峡
             ['ベルファスト港', 'city', 54.620, -5.890, [[54.7170, -5.6050]], { at: [54.63449, -5.87459], bearing: 303 }], ['リヴァプール港', 'city', 53.450, -3.020, [[53.5325, -3.2210]], { at: [53.40454, -2.99848], bearing: 252 }], ['ホーリーヘッド港', 'town', 53.315, -4.625],
             ['ダグラス港', 'town', 54.148, -4.475], ['ミルフォード・ヘイヴン港', 'cargo', 51.705, -5.050], ['ブリストル港', 'cargo', 51.505, -2.715],
@@ -490,7 +492,7 @@ function _rwPlacePort(def, idx) {
 const DOCK_TURN_OUT = 320;
 function _rwDockOut(p, dist) {
     if (!p || !p.dock) return null;
-    const [la, lo] = p.dock.entrance, br = (p.dock.inBearing + 180) * Math.PI / 180, d = dist || DOCK_TURN_OUT;
+    const [la, lo] = p.dock.entrance, br = (p.dock.inBearing + 180) * Math.PI / 180, d = dist || p.dock.turnOut || DOCK_TURN_OUT;
     const mLat = WORLD_R * Math.PI / 180, mLon = mLat * Math.cos(la * Math.PI / 180);
     return { lat: la + Math.cos(br) * d / mLat, lon: lo + Math.sin(br) * d / mLon };
 }

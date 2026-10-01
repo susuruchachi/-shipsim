@@ -83,8 +83,21 @@ function harborBerthPlan(port, prefHeading) {
         const qE = Q.toQ(E.x, E.z);
         const aMid = Math.max(aB + 4, qE.a);                                             // ドックの真ん中の線（岸壁から）
         if (aMid - aB < 10) return { ok: false, why: `${port.name}のドックは、この船（幅${Math.round(D.B)}m）には狭すぎます` };
-        const out = Math.max(D.HL + 90, 200);
+        const out = port.dock.turnOut || Math.max(D.HL + 90, 200);
         const T = { x: E.x - ux * out, z: E.z - uz * out };
+        // ドックの前（川など）で、この船を回せる広さがあるか（回す所のまわり、船の半分の長さ＋余裕の円が水の上か）
+        const ringOk = (rr) => {
+            for (let k = 0; k < 24; k++) {
+                const a = k / 24 * Math.PI * 2;
+                if (worldSeabedAt(T.x + Math.sin(a) * rr, T.z + Math.cos(a) * rr) > -(worldShipDraft() + 0.5)) return false;
+            }
+            return true;
+        };
+        if (typeof worldSeabedAt === 'function' && !ringOk(D.HL + 12)) {
+            let rMax = 0;
+            for (let rr = 20; rr < D.HL + 12; rr += 10) { if (!ringOk(rr)) break; rMax = rr; }
+            return { ok: false, why: `${port.name}のドックの前は、この船（${Math.round(D.L)}m）を回すには狭すぎます（回せるのは長さおよそ ${Math.max(0, Math.round(2 * (rMax - 12) / 10) * 10)}m までの船）` };
+        }
         const pBd = Q.toW(aB, bC), pCd = Q.toW(aMid, bC);
         // 沖側の舷（船の中の +x ＝ 左舷 が、岸壁から離れた方を向いているなら +1）
         const hr = hDock * _haRad, open = (Math.cos(hr) * S.sx - Math.sin(hr) * S.sz) > 0 ? 1 : -1;
@@ -346,6 +359,13 @@ function _haAllocate(Fs, Mz, list, dt, noPull) {
     f = solve(T.map((q, i) => { const want = Math.sign(f[i]) === q.side ? 'pull' : 'push'; if (want === 'pull' && !q.canPull) return 0.02; return (q.t.action === 'standby' || q.t.action === want) ? 1 : 0.15; }));
     // 索を取れる金物が近くに無いタグは引けない（押すだけ）
     f = f.map((v, i) => (Math.sign(v) === T[i].side && !T[i].canPull) ? 0 : v);
+    // 引けないタグの分などで横の力が足りなければ、その向きに力を出せるタグ（押す側か、引ける側）で残りを分け合う
+    //（回す力は少しずれるが、まず動かす。持ち場に着いていないタグがいるときも、着いているタグだけで動かせる）
+    const deficit = Fs - f.reduce((a, v) => a + v, 0);
+    if (Math.abs(deficit) > Math.abs(Fs) * 0.25) {
+        const able = T.map((q, i) => (Math.sign(deficit) === q.side ? q.canPull : true) ? i : -1).filter(i => i >= 0);
+        for (const i of able) f[i] += deficit / able.length;
+    }
     const Fmax = _tugPullN();
     const big = Math.max(...f.map(Math.abs));
     if (big > Fmax) f = f.map(v => v * Fmax / big);
