@@ -801,7 +801,10 @@ function animatePropellers(t, dt) {
     propMeshes.forEach(g => {
         const dir = g.userData.dir || 1;
         if (g.userData.isProp) {
-            g.rotation.z += spinRate * dir * (dt || 0);   // GLBのスクリューと同じ速さ
+            // 機関ごとの回転数（56-engines.js）
+            const id = 'prop:' + g.userData.propIndex + (g.userData.isMirror ? ':m' : '');
+            const sr = (typeof engineRpmFor === 'function') ? engineRpmFor(id) * Math.max(0.1, physics.maxSpeed || 1) * 1.5 * (1 + (window._propRacingIntensity || 0) * 0.6) : spinRate;
+            g.rotation.z += sr * dir * (dt || 0);   // GLBのスクリューと同じ速さ
         }
     });
 
@@ -817,7 +820,9 @@ function animatePropellers(t, dt) {
             const pv = part.pivotOffset || new THREE.Vector3();
 
             if (part.key === 'screw' || part.key === 'paddle') {
-                part.spin = (part.spin || 0) + spinRate * invert * (dt || 0);
+                // 機関ごとの回転数（56-engines.js）
+                const sr = (typeof engineRpmFor === 'function') ? engineRpmFor('glb:' + part.id) * Math.max(0.1, physics.maxSpeed || 1) * 1.5 * (1 + (window._propRacingIntensity || 0) * 0.6) : spinRate;
+                part.spin = (part.spin || 0) + sr * invert * (dt || 0);
 
                 // 回転軸 (basePos + pivotOffset) を中心に回転させる。
                 // モデル自体の原点は basePos のまま変わらない。

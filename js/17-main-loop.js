@@ -166,7 +166,8 @@ function animate() {
             ? getPropThrustTargetSpeed() : physics.targetSpeed;
         // 推進器の加速度（船首尾軸に沿った推力）。この後の heave 計算で、
         // 船体ピッチ角だけ傾けて鉛直成分も加えるために保持しておく。
-        const thrustAccMag = (propTargetSpeed - physics.speed) * (0.3 / physics.mass);
+        // 機関の馬力（56-engines.js）が見積もりより大きければ加速も速い
+        const thrustAccMag = (propTargetSpeed - physics.speed) * (0.3 / physics.mass) * ((typeof enginePowerFactor === 'function') ? enginePowerFactor() : 1);
         physics.speed += thrustAccMag * subDt;
         physics.speed = THREE.MathUtils.clamp(physics.speed, -maxSpd * 0.5, maxSpd);
 
@@ -184,7 +185,9 @@ function animate() {
         if (isDesignMode) {
             physics.turnRate += (0.0 - physics.turnRate) * 3.0 * subDt;
         } else {
-            physics.turnRate += (targetTurnRateDeg * rudderEffectiveness - physics.turnRate) * 3.0 * subDt;
+            // 左右の機関の推力の差でも回る（56-engines.js：左舷前進・右舷後進でその場で右へ回る）
+            const _twist = (typeof engineTwistDeg === 'function') ? engineTwistDeg() : 0;
+            physics.turnRate += (targetTurnRateDeg * rudderEffectiveness + _twist - physics.turnRate) * 3.0 * subDt;
             physics.heading += physics.turnRate * subDt;
         }
 

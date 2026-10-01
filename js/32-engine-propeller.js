@@ -34,6 +34,11 @@ function _approach(v, target, rate, dt) {
 
 // 物理のサブステップごとに呼ぶ（17-main-loop.js）
 function updatePropRpm(dt, designMode) {
+    // 機関がスクリューごとにあるとき（56-engines.js）：機関ごとに回して、合わせた推力の回転数にする
+    if (typeof engineUpdate === 'function') {
+        const r = engineUpdate(dt, designMode);
+        if (r !== null && r !== undefined) { physics.propRpm = r; return r; }
+    }
     const maxSpd = Math.max(0.1, physics.maxSpeed || 1);
     const target = designMode ? 0 : THREE.MathUtils.clamp((physics.targetSpeed || 0) / maxSpd, -0.5, 1);
     let r = physics.propRpm || 0;

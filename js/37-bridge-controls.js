@@ -1050,6 +1050,7 @@ function applyBridgeLayout() {
     if (tugB) tugB.style.bottom = `calc(${useTg ? S + 41 : 221}px + env(safe-area-inset-bottom))`;
     const subB = document.getElementById('btn-sub');
     if (subB) subB.style.bottom = `calc(${useTg ? S + 41 : 221}px + env(safe-area-inset-bottom))`;
+    if (typeof engineLayoutUI === 'function') engineLayoutUI();      // 機関ごとのテレグラフ（56-engines.js）
     _br.dirtyT = _br.dirtyW = true;
 }
 window.applyBridgeLayout = applyBridgeLayout;

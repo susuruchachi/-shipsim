@@ -918,3 +918,12 @@ body.hud-hidden #btn-sub, body.hud-hidden #sub-panel { display: none !important;
 #sub-scope .ss-v { position: absolute; left: 50%; top: 50%; width: 1px; height: 40vmin; margin-top: -20vmin; background: rgba(0,0,0,0.75); }
 #sub-scope .ss-info { position: absolute; left: 0; right: 0; bottom: calc(50% - 36vmin); text-align: center; color: #bfe8c8; font: 13px monospace; text-shadow: 0 0 4px #000; }
 .wp-suit { color: #ffd84a; margin-right: 3px; }
+
+/* 機関の独立操作（56-engines.js） */
+#btn-engines { left: calc(14px + env(safe-area-inset-left)); width: auto; min-width: 70px; height: 28px; padding: 0 8px; font-size: 11px; border-radius: 14px; }
+#btn-engines.on { background: rgba(255, 210, 120, 0.45); border-color: #ffd278; }
+body.menu-open #btn-engines { left: 300px; }
+body.hud-hidden #btn-engines, body.hud-hidden #engine-tgs { display: none !important; }
+#engine-tgs { position: absolute; z-index: 10; left: calc(14px + env(safe-area-inset-left)); bottom: calc(14px + env(safe-area-inset-bottom)); gap: 6px; align-items: flex-end; touch-action: none; filter: drop-shadow(0 4px 10px rgba(0,0,0,0.5)); }
+body.menu-open #engine-tgs { left: 300px; }
+#engine-tgs canvas { touch-action: none; }

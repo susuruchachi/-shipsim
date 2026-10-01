@@ -312,7 +312,7 @@
   </div>
   <div id="settings-tabs">
     <button class="settings-tab active" data-tab="pivot" onclick="switchTab('pivot')">📐 基本/Pivot</button>
-    <button class="settings-tab" data-tab="propulsion" onclick="switchTab('propulsion')">⚙ 推進器</button>
+    <button class="settings-tab" data-tab="propulsion" onclick="switchTab('propulsion');renderEngineSettings()">⚙ 推進器</button>
     <button class="settings-tab" data-tab="rudder" onclick="switchTab('rudder')">🔧 舵</button>
     <button class="settings-tab" data-tab="navlights" onclick="switchTab('navlights')">💡 航行灯</button>
     <button class="settings-tab" data-tab="lighting" onclick="switchTab('lighting')">☀ 照明</button>
@@ -490,6 +490,7 @@
         </div>
         <div class="sp-funnel-list" id="glb-propulsion-parts-list"></div>
       </div>
+      <div class="sp-section" id="engine-settings"></div>
     </div>
 
     <div class="settings-page" id="tab-rudder">
@@ -1351,6 +1352,7 @@
 <script src="js/53-landmarks.js"></script>
 <script src="js/54-submarine.js"></script>
 <script src="js/55-ship-types.js"></script>
+<script src="js/56-engines.js"></script>
 <script src="js/17-main-loop.js"></script>
 <script src="js/18-hull-wake-physics.js"></script>
 <script src="js/19-swe-fluid.js"></script>

@@ -60,7 +60,10 @@
 // 0.03.009.002  「何度も座礁する」は同じ辺り（3km 以内）の回数で数える（前の港を出るときの座礁を持ち越していた）。
 //               使っている GPU の名前を設定の「軽量化」に出す。地形・建物は作ったときからブルームの外
 // 0.03.009.003  係船設備：ギズモで向きを回せる（上下の軸だけ）。「舷と平行に」で、いちばん近い舷の外板に沿わせる
-var APP_VERSION = '0.03.009.003';
+// 0.03.010.000  機関をスクリューごとに：後進できるか・馬力（空なら排水量と最高速力からの見積もりを等分）を推進器の設定で決める。
+//               テレグラフの上の「機関」ボタンで独立操作にすると、機関ごとのテレグラフ（後進できない機関は後進の目盛り無し）。
+//               左右の機関を前進・後進に分けると、その場で回る。馬力の合計が大きければ加速も速い
+var APP_VERSION = '0.03.010.000';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
