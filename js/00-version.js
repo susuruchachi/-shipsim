@@ -41,7 +41,9 @@
 // 0.03.004.000  重い場面でボタンが効かなかったのを直す（指を離した時点で確実に押したことにする。建物の区画は 1 つずつ作る）。
 //               作り込んだ港の埠頭を地形に合わせる（作り物の岸壁を置かず・陸を削らず、船を寄せる位置は本物の岸の線から測る）。
 //               接舷する舷を選べる（自動・左舷・右舷：タグのメニューと自動航行のパネル）
-var APP_VERSION = '0.03.004.000';
+// 0.03.005.000  港への進入路の小さなずれ（行き過ぎて折り返す短い寄り道・升目のジグザグ）を、深さを確かめてまっすぐにする。
+//               座礁から抜け出したら、航路の続きへ戻る（進入路の最初からやり直さない）
+var APP_VERSION = '0.03.005.000';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

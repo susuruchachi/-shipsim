@@ -547,6 +547,89 @@ function autopilotStartPoint(lat, lon) {
 }
 window.autopilotStartPoint = autopilotStartPoint;
 
+// ── 航路の点の間を、深さを確かめながら見る（直線で結んでも浅い所にかからないか） ──
+// 中心と左右（船の半幅＋余裕）を 30m おきに。need：必要な水深
+function _apLineSafe(A, B, need, hw) {
+    const rc = rhumbCourse(A.lat, A.lon, B.lat, B.lon), n = Math.max(1, Math.ceil(rc.dist / 30));
+    const c = rc.course * _apRad, mLat = WORLD_R * _apRad, mLon = mLat * Math.cos(A.lat * _apRad);
+    const ox = Math.cos(c) * (hw + 6), oy = -Math.sin(c) * (hw + 6);          // 横（東・北）
+    for (let k = 1; k < n; k++) {
+        const u = k / n, la = A.lat + (B.lat - A.lat) * u, lo = A.lon + (B.lon - A.lon) * u;
+        for (const sgn of [0, -1, 1]) {
+            if (apDepthAt(la + sgn * oy / mLat, lo + sgn * ox / mLon) < need) return false;
+        }
+    }
+    return true;
+}
+function _apShipHalfBeam() {
+    const hp = window.hullProfile;
+    if (!hp || !hp.ready) return 15;
+    let m = 0; for (const q of hp.slices || []) m = Math.max(m, q.halfWidth || 0);
+    return (m || hp.halfBeam || 1) * (physics.scale || 1);
+}
+// 航路の小さなずれ（短い寄り道）をなくす：前後の点を直線で結んでも深さが足りるなら、間の点を省く。
+// 急に曲がって狭い水路で座礁するのを防ぐ（港の中の道すじは 40m の升目から作るので、小さなジグザグが残る）
+function _apSmoothRoute(route) {
+    if (!route || route.length < 3) return route;
+    const M = apMargins(), hw = _apShipHalfBeam();
+    let changed = true, guard = 0;
+    while (changed && guard++ < 6) {
+        changed = false;
+        for (let i = 1; i < route.length - 1; i++) {
+            const A = route[i - 1], P = route[i], B = route[i + 1];
+            if (P.final || A.final) continue;
+            const ab = rhumbCourse(A.lat, A.lon, B.lat, B.lon), ap = rhumbCourse(A.lat, A.lon, P.lat, P.lon), pb = rhumbCourse(P.lat, P.lon, B.lat, B.lon);
+            const off = Math.abs(Math.sin((ap.course - ab.course) * _apRad)) * ap.dist;   // 線からのずれ[m]
+            // 線からのずれが小さければ、曲がりが大きくても省く（航路の継ぎ目の、行き過ぎて折り返す短いずれ）。
+            // 前後の線の外へはみ出す点（行き過ぎ）も、はみ出しが短ければ同じ
+            const u = Math.cos((ap.course - ab.course) * _apRad) * ap.dist, over = Math.max(0, -u, u - ab.dist);
+            if (off > Math.max(80, ab.dist * 0.06) || over > 400) continue;
+            const need = (P.narrow || B.narrow) ? M.needTug : M.need;
+            if (!_apLineSafe(A, B, need, hw)) continue;
+            B.narrow = !!(B.narrow || P.narrow); B.channel = !!(B.channel || P.channel);
+            if (P.label && !B.label) B.label = P.label;
+            route.splice(i, 1); i--; changed = true;
+        }
+    }
+    return route;
+}
+// 座礁から抜け出したあと：航路を最初から引き直さず、今の航路のいちばん近い所の少し先へ、まっすぐ戻れるなら
+// そこから続ける（港への進入路の途中なら、その続きから）。戻れなければ false（引き直す）
+function _apResumeRoute() {
+    const R = autopilot.route;
+    if (!R || R.length < 1 || !autopilot.dest) return false;
+    const here = worldShipLatLon(), mLat = WORLD_R * _apRad, mLon = mLat * Math.cos(here.lat * _apRad);
+    const pts = [autopilot.legFrom || here, ...R];
+    let best = null;
+    for (let k = Math.max(0, (autopilot.leg || 0) - 1); k < pts.length - 1; k++) {
+        const A = pts[k], B = pts[k + 1];
+        const ax = (A.lon - here.lon) * mLon, ay = (A.lat - here.lat) * mLat, bx = (B.lon - here.lon) * mLon, by = (B.lat - here.lat) * mLat;
+        const L2 = (bx - ax) ** 2 + (by - ay) ** 2 || 1, u = Math.max(0, Math.min(1, -(ax * (bx - ax) + ay * (by - ay)) / L2));
+        const d = Math.hypot(ax + u * (bx - ax), ay + u * (by - ay));
+        if (!best || d < best.d) best = { d, k, u, L: Math.sqrt(L2) };
+    }
+    if (!best || best.d > 1500) return false;
+    // 近い所から、ずれの分＋150m 先の点へ（真横へ戻ると、線に乗ったところで急に曲がることになる）
+    let k = best.k, u = best.u, ahead = best.d + 150;
+    while (k < pts.length - 1) {
+        const A = pts[k], B = pts[k + 1], L = rhumbCourse(A.lat, A.lon, B.lat, B.lon).dist || 1;
+        const left = (1 - u) * L;
+        if (ahead <= left || k === pts.length - 2) { u = Math.min(1, u + ahead / L); break; }
+        ahead -= left; k++; u = 0;
+    }
+    const A = pts[k], B = pts[k + 1];
+    const P = { lat: A.lat + (B.lat - A.lat) * u, lon: A.lon + (B.lon - A.lon) * u };
+    const M = apMargins();
+    if (!_apLineSafe(here, P, M.needTug, _apShipHalfBeam())) return false;
+    const rest = pts.slice(k + 1).map(q => Object.assign({}, q));
+    const atEnd = u >= 0.999;
+    const route = atEnd ? rest : [{ lat: P.lat, lon: P.lon, label: '航路へ戻る所', narrow: !!B.narrow, channel: !!B.channel }, ...rest];
+    autopilot.route = route; autopilot.leg = 0; autopilot.active = true; autopilot.planning = false;
+    autopilot.legFrom = here; autopilot.lastOrder = null; autopilot.overshoot = false;
+    return true;
+}
+window._apResumeRoute = _apResumeRoute;
+
 // ── 始める・やめる ──
 function _apMsg(s) { autopilot.msg = s; renderAutopilotPanel(); }
 async function autopilotStart(port) {
@@ -789,7 +872,7 @@ async function autopilotStart(port) {
         _apMsg(`${port.name} への航路が見つかりませんでした（${why}）`);
         return;
     }
-    const route = autopilot._newRoute; autopilot._newRoute = null;
+    const route = _apSmoothRoute(autopilot._newRoute); autopilot._newRoute = null;
     route.forEach((w, i) => { if (!w.label) w.label = `変針点 ${i + 1}`; });
     autopilot.route = route; autopilot.leg = 0; autopilot.planning = false; autopilot.active = true;
     autopilot.planDraft = draft; autopilot.draftT = 0;           // この喫水で引いた航路（深くなったら引き直す）
@@ -1129,6 +1212,13 @@ function _apAground(dt) {
         autopilot.aground = null;
         const dest = autopilot.dest;
         if (!dest) { if (ownTugs && typeof tugEscortStop === 'function') tugEscortStop(); autopilotStop('座礁から抜け出しました'); return; }
+        // まず、今の航路の続きへ戻れないか（港への進入路の途中なら、最初からやり直さない）
+        if (_apResumeRoute()) {
+            autopilot.note = withTugs ? '座礁からタグと一緒に抜け出しました。航路の続きへ戻ります' : '座礁から自力で抜け出しました。航路の続きへ戻ります';
+            autopilot.turnFirst = { t: 0, ownTugs, checked: false };
+            renderAutopilotPanel();
+            return;
+        }
         const note = withTugs ? '座礁からタグと一緒に抜け出しました。今の場所から航路を引き直しました' : '座礁から自力で抜け出しました。今の場所から航路を引き直しました';
         autopilotStart(dest).then(() => {
             if (!autopilot.active) { if (ownTugs && typeof tugEscortStop === 'function') tugEscortStop(); return; }
@@ -1341,6 +1431,7 @@ function worldRebase() {
     if (typeof shipHistory !== 'undefined') shipHistory.length = 0;
     if (window.tugs) for (const tg of tugs) { tg.pos.add(shift); tg.g.position.add(shift); tg.path = null; }
     if (window._tugCrumbs) for (const c of _tugCrumbs) { c.x += shift.x; c.z += shift.z; }
+    if (typeof subTorpShift === 'function') subTorpShift(shift, dH);
     if (typeof _tugShip !== 'undefined') { _tugShip.lastX = null; }
     if (typeof worldTerrainModeChanged === 'function') worldTerrainModeChanged(true);
     if (typeof _worldSave === 'function') _worldSave();
