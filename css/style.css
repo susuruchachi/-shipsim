@@ -927,3 +927,5 @@ body.hud-hidden #btn-engines, body.hud-hidden #engine-tgs { display: none !impor
 #engine-tgs { position: absolute; z-index: 10; left: calc(14px + env(safe-area-inset-left)); bottom: calc(14px + env(safe-area-inset-bottom)); gap: 6px; align-items: flex-end; touch-action: none; filter: drop-shadow(0 4px 10px rgba(0,0,0,0.5)); }
 body.menu-open #engine-tgs { left: 300px; }
 #engine-tgs canvas { touch-action: none; }
+.ap-tugopt button, #tug-panel .ap-tugopt button { font-size: 10px; padding: 2px 6px; }
+#tug-panel .ap-tugopt { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; width: 100%; margin-top: 4px; }

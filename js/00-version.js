@@ -63,7 +63,10 @@
 // 0.03.010.000  機関をスクリューごとに：後進できるか・馬力（空なら排水量と最高速力からの見積もりを等分）を推進器の設定で決める。
 //               テレグラフの上の「機関」ボタンで独立操作にすると、機関ごとのテレグラフ（後進できない機関は後進の目盛り無し）。
 //               左右の機関を前進・後進に分けると、その場で回る。馬力の合計が大きければ加速も速い
-var APP_VERSION = '0.03.010.000';
+// 0.03.010.001  出港・狭い水路でタグを使うか選べる（自動：100m 以上の船なら使う）。タグなしの出港はサイドスラスターで岸壁から離れ、
+//               港口の方へ回ってから出る。自動航行の出港は、行き先を決めたあとテレグラフが STAND BY になってから。
+//               今いる所から最初の点へまっすぐ行くと岸壁の角にかかるときは、港の中の深い所を通る道すじを足す
+var APP_VERSION = '0.03.010.001';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

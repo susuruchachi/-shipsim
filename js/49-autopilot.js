@@ -25,6 +25,23 @@ try { autopilot.berth = localStorage.getItem('susuru_ap_berth') !== '0'; } catch
 function autopilotSetBerth(on) { autopilot.berth = !!on; try { localStorage.setItem('susuru_ap_berth', on ? '1' : '0'); } catch (e) { /* ignore */ } renderAutopilotPanel(); }
 window.autopilotSetBerth = autopilotSetBerth;
 window.autopilot = autopilot;
+// タグを使うか（出港・狭い水路）：auto（船が 100m 以上なら使う）・on・off。この端末に覚える
+autopilot.tugOpt = { depart: 'auto', narrow: 'auto' };
+try { Object.assign(autopilot.tugOpt, JSON.parse(localStorage.getItem('susuru_ap_tugs') || '{}')); } catch (e) { /* ignore */ }
+function apShipLen() { const hp = window.hullProfile; return ((hp && hp.ready) ? hp.halfLen * 2 : 12) * (physics.scale || 1); }
+function apUseTugs(kind) { const v = autopilot.tugOpt[kind]; return v === 'on' ? true : v === 'off' ? false : apShipLen() >= 100; }
+function autopilotSetTugOpt(kind, v) {
+    autopilot.tugOpt[kind] = v;
+    try { localStorage.setItem('susuru_ap_tugs', JSON.stringify(autopilot.tugOpt)); } catch (e) { /* ignore */ }
+    renderAutopilotPanel(); if (typeof renderTugPanel === 'function') renderTugPanel();
+}
+window.apUseTugs = apUseTugs; window.autopilotSetTugOpt = autopilotSetTugOpt;
+// タグの選択の HTML（自動航行・タグのパネルで共用）
+function apTugOptHTML() {
+    const row = (kind, label) => `<div class="ap-row ap-tugopt">${label}：${[['auto', `自動（${apUseTugs(kind) ? '使う' : '使わない'}）`], ['on', '使う'], ['off', '使わない']].map(([k, l]) => `<button class="${autopilot.tugOpt[kind] === k ? 'on' : ''}" onclick="autopilotSetTugOpt('${kind}', '${k}')">${k === 'auto' ? (autopilot.tugOpt[kind] === 'auto' ? l : '自動') : l}</button>`).join('')}</div>`;
+    return row('depart', '出港のタグ') + row('narrow', '狭い水路のタグ');
+}
+window.apTugOptHTML = apTugOptHTML;
 
 // ── 航程線（メルカトル航法）──
 const _apRad = Math.PI / 180;
@@ -593,6 +610,17 @@ function _apSmoothRoute(route) {
     }
     return route;
 }
+// 今いる所から最初の点へまっすぐ行くと浅い所（岸壁の角など）にかかるときは、作り込んだ港の中の深い所を通る道すじを前に足す
+function _apFixFirstLeg(route) {
+    if (!route || !route.length || typeof _rwDetailOf !== 'function' || typeof _rwDetailRoute !== 'function') return route;
+    const here = worldShipLatLon(), M = apMargins();
+    if (_apLineSafe(here, route[0], M.needTug, _apShipHalfBeam())) return route;
+    const D = _rwDetailOf(here.lat, here.lon);
+    if (!D) return route;
+    const r = _rwDetailRoute(D, here, { lat: route[0].lat, lon: route[0].lon });
+    if (!r || !r.pts || !r.pts.length) return route;
+    return [...r.pts.map(p => ({ lat: p.lat, lon: p.lon, narrow: true, channel: true })), ...route];
+}
 // 座礁から抜け出したあと：航路を最初から引き直さず、今の航路のいちばん近い所の少し先へ、まっすぐ戻れるなら
 // そこから続ける（港への進入路の途中なら、その続きから）。戻れなければ false（引き直す）
 function _apResumeRoute() {
@@ -634,10 +662,37 @@ window._apResumeRoute = _apResumeRoute;
 function _apMsg(s) { autopilot.msg = s; renderAutopilotPanel(); }
 async function autopilotStart(port) {
     if (!port || world.mode !== 'world') return;
-    // 岸壁に付いているなら、まずタグで離岸してから（50-harbor-auto.js。離岸が終わるとここへ戻る）
+    // 岸壁に付いているなら：テレグラフが STAND BY（機関用意）になるのを待ってから出港する
+    // （タグを使うならタグで離岸してから（50-harbor-auto.js。離岸が終わるとここへ戻る）、使わないなら綱を放して自分で出る）
     if (typeof harborBerthedAt === 'function' && !(harborAuto && harborAuto.mode) && harborBerthedAt()) {
-        if (harborAutoDepartNow(port)) { _apMsg(`タグで離岸してから ${port.name} へ向かいます`); return; }
+        const sb = physics.telegraphAnswerSpecial === 'standby' || physics.telegraphSpecial === 'standby';
+        if (!sb && !autopilot._departGo) {
+            autopilot.pendingDepart = port;
+            _apMsg(`${port.name} への出港の用意：テレグラフを STAND BY（機関用意）にすると出港します`);
+            return;
+        }
+        autopilot.pendingDepart = null;
+        if (apUseTugs('depart')) {
+            if (harborAutoDepartNow(port)) { _apMsg(`タグで離岸してから ${port.name} へ向かいます`); return; }
+        } else {
+            // タグなし：綱を放し、サイドスラスター（船首・船尾の横向きのスクリュー）で岸壁から横へ離れてから出る
+            const plan = harborBerthedAt();
+            if (typeof _haClearLines === 'function') _haClearLines();
+            harborAuto.pendingLines = null;
+            if (plan) {
+                const h = (physics.heading || 0) * _apRad, side = plan.open || 1;
+                const D = (typeof _haDims === 'function') ? _haDims() : { B: 20 };
+                // 泊地の真ん中（タグで離岸するときに回す所）まで横へ出て、港口の向きへ回ってから航路を引く
+                const T = plan.turn || null;
+                const need = T ? Math.max(32, Math.hypot(T.x - physics.cgWorldX, T.z - physics.cgWorldZ)) : Math.max(32, D.B * 0.6 + 14);
+                const ux = T ? (T.x - physics.cgWorldX) / need : Math.cos(h) * side, uz = T ? (T.z - physics.cgWorldZ) / need : -Math.sin(h) * side;
+                autopilot.selfDepart = { port, moved: 0, need, dx: ux, dz: uz, v: 0, hOut: plan.hOut };
+                _apMsg(`もやい綱を放し、サイドスラスターで岸壁から離れています（${port.name} へ）`);
+                return;
+            }
+        }
     }
+    autopilot.pendingDepart = null;
     autopilotStop('', true);
     autopilot.resume = null;
     autopilot.planning = true; autopilot.dest = port;
@@ -872,7 +927,7 @@ async function autopilotStart(port) {
         _apMsg(`${port.name} への航路が見つかりませんでした（${why}）`);
         return;
     }
-    const route = _apSmoothRoute(autopilot._newRoute); autopilot._newRoute = null;
+    const route = _apSmoothRoute(_apFixFirstLeg(autopilot._newRoute)); autopilot._newRoute = null;
     route.forEach((w, i) => { if (!w.label) w.label = `変針点 ${i + 1}`; });
     autopilot.route = route; autopilot.leg = 0; autopilot.planning = false; autopilot.active = true;
     autopilot.planDraft = draft; autopilot.draftT = 0;           // この喫水で引いた航路（深くなったら引き直す）
@@ -919,7 +974,10 @@ function autopilotResume() {
     renderAutopilotPanel();
     if (typeof worldMapRedraw === 'function') worldMapRedraw(true);
 }
-function autopilotDismiss() { autopilot.resume = null; autopilot.msg = ''; if (typeof harborAuto !== 'undefined') { harborAuto.msg = ''; harborAuto.resume = null; } renderAutopilotPanel(); }
+function autopilotDepartNow() { const p = autopilot.pendingDepart; if (!p) return; autopilot.pendingDepart = null; autopilot._departGo = true; autopilotStart(p); autopilot._departGo = false; }
+function autopilotCancelDepart() { autopilot.pendingDepart = null; autopilot.selfDepart = null; autopilot.msg = ''; renderAutopilotPanel(); }
+window.autopilotDepartNow = autopilotDepartNow; window.autopilotCancelDepart = autopilotCancelDepart;
+function autopilotDismiss() { autopilot.pendingDepart = null; autopilot.resume = null; autopilot.msg = ''; if (typeof harborAuto !== 'undefined') { harborAuto.msg = ''; harborAuto.resume = null; } renderAutopilotPanel(); }
 function autopilotFold(on) { autopilot.folded = !!on; try { localStorage.setItem('susuru_ap_fold', on ? '1' : '0'); } catch (e) { /* ignore */ } renderAutopilotPanel(); }
 try { autopilot.folded = localStorage.getItem('susuru_ap_fold') === '1'; } catch (e) { /* ignore */ }
 Object.assign(window, { autopilotResume, autopilotDismiss, autopilotFold });
@@ -1021,6 +1079,7 @@ function _agRetreat(withTugs, prefer) {
 // 回し終えたら、座礁のときに呼んだタグは帰す。true を返す間は、ふつうの航路の操船をしない
 function _apTurnFirst(dt) {
     const F = autopilot.turnFirst, R = autopilot.route;
+    const noTug = !apUseTugs('narrow');               // タグを使わないなら、サイドスラスターでその場で回す
     if (!R || !R[autopilot.leg]) { autopilot.turnFirst = null; return false; }
     const here = worldShipLatLon(), wp = R[autopilot.leg];
     const hT = _apHeadingForTrue(rhumbCourse(here.lat, here.lon, wp.lat, wp.lon).course);
@@ -1042,12 +1101,23 @@ function _apTurnFirst(dt) {
             for (const a of [-HL, 0, HL]) for (const o of [-hw, 0, hw]) if (worldSeabedAt(X + fx * a + qx * o, Z + fz * a + qz * o) > -dr) { blocked = true; break; }
         }
         if (!blocked) return done();
-        if (!tugEscort.active && typeof tugEscortStart === 'function') { tugEscortStart(); F.ownTugs = true; tugEscort.t = 0; }
-        _apMsg('ここで向きを変えると浅い所にかかるので、タグでその場で回します');
+        if (noTug) _apMsg('ここで向きを変えると浅い所にかかるので、サイドスラスターでその場で回します');
+        else {
+            if (!tugEscort.active && typeof tugEscortStart === 'function') { tugEscortStart(); F.ownTugs = true; tugEscort.t = 0; }
+            _apMsg('ここで向きを変えると浅い所にかかるので、タグでその場で回します');
+        }
     }
     F.t += dt;
     _apOrder(0); _apHelm(0, dt);
     if (Math.abs(e) < 8 || F.t > 600) { _apMsg(''); return done(); }
+    if (noTug) {
+        // 船首・船尾のサイドスラスター：小さな船ほど速く回る（270m で毎秒 0.5°、60m で 2°）。行き足は止める
+        const gd = dt * (typeof physicsSpeed !== 'undefined' ? physicsSpeed : 1);
+        const rate = Math.max(0.4, Math.min(3, 130 / Math.max(20, apShipLen())));
+        if (Math.abs(physics.speed || 0) < 1.5) physics.heading += Math.sign(e) * Math.min(Math.abs(e), rate * gd);
+        _apMsg(`サイドスラスターでその場で回頭しています（あと ${Math.round(Math.abs(e))}°）`);
+        return true;
+    }
     tugEscort.t = (tugEscort.t || 0) + dt;
     if (typeof tugEscortReady === 'function' && tugEscortReady()) {
         tugEscortAssist(0, e, dt);
@@ -1238,6 +1308,40 @@ function _apAground(dt) {
 // ── 毎フレーム ──
 function updateAutopilot(t, dt) {
     if (!window.world || world.mode !== 'world') { if (autopilot.active) autopilotStop('世界を航海するモードではないので、自動航行を止めました'); return; }
+    // タグなしの出港：岸壁から横へ離れる（ゆっくり加速し、離れたら航路を引いて出る）
+    if (autopilot.selfDepart) {
+        const S = autopilot.selfDepart, d = Math.min(0.1, Math.max(0, dt || 0)) * (typeof physicsSpeed !== 'undefined' ? physicsSpeed : 1);
+        const left = S.need - S.moved;
+        if (left > 0.01) {
+            S.v = Math.min(S.moved < 25 ? 0.6 : 1.6, S.v + 0.08 * d, Math.max(0.15, left * 0.08));
+            const step = Math.min(left, S.v * d);
+            physics.cgWorldX += S.dx * step; physics.cgWorldZ += S.dz * step; S.moved += step;
+            physics.speed = 0;
+            return;
+        }
+        // 港口の向きへ回る
+        if (Number.isFinite(S.hOut)) {
+            const e = ((S.hOut - physics.heading + 540) % 360) - 180;
+            if (Math.abs(e) > 2) {
+                const rate = Math.max(0.4, Math.min(3, 130 / Math.max(20, apShipLen())));
+                physics.heading += Math.sign(e) * Math.min(Math.abs(e), rate * d);
+                _apMsg(`サイドスラスターで港口の方へ回っています（あと ${Math.round(Math.abs(e))}°）`);
+                return;
+            }
+        }
+        {
+            autopilot.selfDepart = null; autopilot._departGo = true;
+            // 航路が決まったら、最初の区間へ向く（浅い所にかかるならスラスターでその場で回す）
+            Promise.resolve(autopilotStart(S.port)).then(() => { if (autopilot.active) autopilot.turnFirst = { t: 0, ownTugs: false, checked: false }; });
+            autopilot._departGo = false;
+        }
+        return;
+    }
+    // 出港の用意：テレグラフが STAND BY になったら出る
+    if (autopilot.pendingDepart && (physics.telegraphAnswerSpecial === 'standby' || physics.telegraphSpecial === 'standby')) {
+        const p = autopilot.pendingDepart; autopilot.pendingDepart = null;
+        autopilot._departGo = true; autopilotStart(p); autopilot._departGo = false;
+    }
     // 原点が遠くなったら移す
     if (Math.hypot(physics.cgWorldX || 0, physics.cgWorldZ || 0) > AP_REBASE_DIST) worldRebase();
     if (!autopilot.active || !autopilot.route) return;
@@ -1370,7 +1474,12 @@ function updateAutopilot(t, dt) {
     // 狭い水路・浅い水道（航路の点の narrow）：手前でタグを呼び、持ち場に着くまで待って、
     // 付き添ってもらいながら微速（タグが力を出せる 4 くらいまで）で通る。抜けたら帰す
     let escorting = false;
-    if (typeof tugEscortStart === 'function') {
+    if (!apUseTugs('narrow') && !tugEscort.manual) {
+        // タグを使わない：狭い水路は微速で
+        if (wp.narrow) order = Math.min(order, 1);
+        if (tugEscort.active || tugEscort.held) tugEscortStop();
+        autopilot.escort = '';
+    } else if (typeof tugEscortStart === 'function') {
         const narrowNow = !!wp.narrow || !!tugEscort.manual;           // 手で付き添いを頼んでいる間も（50-harbor-auto.js）
         let narrowAhead = Infinity;
         if (!narrowNow) {
@@ -1456,7 +1565,7 @@ function renderAutopilotPanel() {
     _apEnsureDom();
     const el = document.getElementById('ap-panel');
     const ha = typeof harborAuto !== 'undefined' ? harborAuto : null;
-    const show = world.mode === 'world' && (autopilot.active || autopilot.planning || autopilot.msg || autopilot.resume || (ha && (ha.mode || ha.msg || ha.resume)));
+    const show = world.mode === 'world' && (autopilot.active || autopilot.planning || autopilot.pendingDepart || autopilot.selfDepart || autopilot.msg || autopilot.resume || (ha && (ha.mode || ha.msg || ha.resume)));
     el.classList.toggle('open', !!show);
     el.classList.toggle('folded', !!autopilot.folded);
     if (!show) return;
@@ -1484,12 +1593,15 @@ function renderAutopilotPanel() {
         const msg = autopilot.msg || (ha && ha.msg) || '';
         const btns = [];
         if (autopilot.planning) btns.push('<button onclick="autopilotStop(\'\')">やめる</button>');
-        else {
+        else if (autopilot.pendingDepart) {
+            btns.push('<button class="on" onclick="autopilotDepartNow()">▶ 今すぐ出港</button>');
+            btns.push('<button onclick="autopilotCancelDepart()">やめる</button>');
+        } else {
             if (autopilot.resume) btns.push(`<button class="on" onclick="autopilotResume()">▶ 再開（${autopilot.resume.dest.name}へ）</button>`);
             if (ha && ha.resume) btns.push(`<button class="on" onclick="harborAutoResume()">▶ ${ha.resume.mode === 'berth' ? '着岸' : '離岸'}を再開</button>`);
             btns.push('<button onclick="autopilotDismiss()">閉じる</button>');
         }
-        uiSetHTML(el, `<div class="ap-title">${fold}🧭 自動航行</div><div class="ap-msg">${msg}</div><div class="ap-row">${btns.join('')}</div>`);
+        uiSetHTML(el, `<div class="ap-title">${fold}🧭 自動航行</div><div class="ap-msg">${msg}</div><div class="ap-row">${btns.join('')}</div>${autopilot.pendingDepart ? apTugOptHTML() : ''}`);
         return;
     }
     const R = autopilot.route, wp = R[autopilot.leg];
@@ -1507,6 +1619,7 @@ function renderAutopilotPanel() {
         <div class="ap-row">${Object.entries({ full: '全速', half: '半速', slow: '微速' }).map(([k, l]) => `<button class="${autopilot.cruise === k ? 'on' : ''}" onclick="autopilotSetCruise('${k}')">${l}</button>`).join('')}
             <button class="ap-off" onclick="autopilotStop('自動航行を切りました')">解除</button></div>
         ${autopilot.dest && autopilot.dest.point ? '' : `<div class="ap-row"><label><input type="checkbox" ${autopilot.berth ? 'checked' : ''} onchange="autopilotSetBerth(this.checked)"> 着いたらタグで岸壁に着岸</label> <select onchange="harborSetSidePref(this.value)" title="岸壁に付ける舷">${[['auto', '舷：自動'], ['port', '左舷付け'], ['starboard', '右舷付け']].map(([k, l]) => `<option value="${k}"${(harborAuto.sidePref || 'auto') === k ? ' selected' : ''}>${l}</option>`).join('')}</select>${autopilot.berthPlan ? '' : (autopilot.berth && autopilot.berthWhy ? `<div class="ap-msg">${autopilot.berthWhy}</div>` : '')}</div>`}
+        ${apTugOptHTML()}
         ${autopilot.msg ? `<div class="ap-msg">${autopilot.msg}</div>` : ''}`);
 }
 window.renderAutopilotPanel = renderAutopilotPanel;

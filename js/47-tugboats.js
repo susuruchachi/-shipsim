@@ -846,6 +846,7 @@ function renderTugPanel() {
             ${!harborAuto.mode && typeof tugEscort !== 'undefined' ? (tugEscort.manual
                 ? `<button onclick="tugEscortManual(false)">付き添いをやめる</button>`
                 : `<button onclick="tugEscortManual(true)" title="狭い水路などで、タグに両舷を付き添ってもらう（自動航行中は付き添われて微速で進む）">🛟 付き添いを頼む</button>`) : ''}
+            ${!harborAuto.mode && typeof apTugOptHTML === 'function' ? apTugOptHTML() : ''}
             ${harborAuto.msg ? `<div class="tg-automsg">${harborAuto.msg}</div>` : ''}</div>` : '') +
         (tugs.length ? tugs.map(t => `
         <div class="tg-item${t.state === 'leaving' ? ' leaving' : ''}">
