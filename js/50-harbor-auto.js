@@ -174,12 +174,22 @@ function harborBerthPlan(port, prefHeading, asBerthed) {
     const open = useH1 ? -1 : 1;              // 沖側の舷（船の中の +x ＝ 左舷 なら +1）。h1 では左舷が岸壁側
     const pB = Q.toW(aB, bC), pE = Q.toW(aE, bC);
     // 港口の方の向き：現実世界の港は、掘った航路の最初の区間の向き（岸壁からまっすぐ沖とは限らない）
-    let hOut = Math.atan2(S.sx, S.sz) / _haRad;
+    //（回す所 o から見て、航路の点のうち o にいちばん近い点から先へたどり、250m 以上離れた最初の点の方。
+    //  以前は航路の最初の 2 点の向きにしていたが、その 2 点が 20m ほどしか離れていない所（オーシャン・ドック）では
+    //  実際の航路と関係ない向きになり、ほぼ 180° 回してから自動航行が向きを戻していた）
     const fw = port.real && port.fairway ? port.fairway.pts : null;
-    if (fw && fw.length >= 3) {
-        const A = worldUnitToLocal(worldLatLonToUnit(fw[1].lat, fw[1].lon)), B = worldUnitToLocal(worldLatLonToUnit(fw[2].lat, fw[2].lon));
-        if (Number.isFinite(A.x) && Number.isFinite(B.x) && Math.hypot(B.x - A.x, B.z - A.z) > 1) hOut = Math.atan2(B.x - A.x, B.z - A.z) / _haRad;
-    }
+    const outToward = (o, fallback) => {
+        if (!fw || fw.length < 2) return { h: fallback, pt: null };
+        const L = fw.map(q => worldUnitToLocal(worldLatLonToUnit(q.lat, q.lon)));
+        let kN = 1, dN = Infinity;
+        for (let k = 1; k < L.length; k++) { const d = Math.hypot(L[k].x - o.x, L[k].z - o.z); if (d < dN) { dN = d; kN = k; } }
+        for (let k = kN; k < L.length; k++) {
+            if (Number.isFinite(L[k].x) && Math.hypot(L[k].x - o.x, L[k].z - o.z) > 250) return { h: Math.atan2(L[k].x - o.x, L[k].z - o.z) / _haRad, pt: fw[k] };
+        }
+        return { h: fallback, pt: null };
+    };
+    const OUT = outToward(pE, Math.atan2(S.sx, S.sz) / _haRad);
+    const hOut = OUT.h;
     // ドックの中の岸壁（43-world.js の dock）：ドックの外（入口の外の真ん中の線の上）で向きを合わせ、
     // 船首からまっすぐ入って、岸壁の前（ドックの真ん中の線の上）で止め、横へ寄せる。出るときは後ろへまっすぐ出る
     if (port.dock) {
@@ -256,18 +266,14 @@ function harborBerthPlan(port, prefHeading, asBerthed) {
         const sternIn = sp === 'port' ? openBow !== -1 : sp === 'starboard' ? openBow !== 1
             : (asBerthed && Math.abs(_haWrap(cur - hDock)) > 90);
         const hBerth = sternIn ? hDock + 180 : hDock, open = sternIn ? -openBow : openBow;
-        let hOutD = hDock + 180;
-        if (fw && fw.length >= 3) {
-            const A = worldUnitToLocal(worldLatLonToUnit(fw[1].lat, fw[1].lon)), B = worldUnitToLocal(worldLatLonToUnit(fw[2].lat, fw[2].lon));
-            if (Math.hypot(B.x - A.x, B.z - A.z) > 1) hOutD = Math.atan2(B.x - A.x, B.z - A.z) / _haRad;
-        }
+        const OUTD = outToward(T, hDock + 180);
         return {
             ok: true, port, S, aB, aE: aMid, bC, open, dock: true, aQ, quayExt, sternIn,
             berth: { x: pBd.x, z: pBd.z, h: hBerth },
             mid: { x: pCd.x, z: pCd.z },                 // ドックの真ん中の線の上の、岸壁の前
             turn: { x: T.x, z: T.z },                    // ドックの外で向きを合わせる所
             align: Math.hypot(T.x - align.x, T.z - align.z) > 15 ? align : null,   // 回す所が真ん中の線から外れていれば、ここへ寄せてから入る
-            hIn: hBerth, hOut: hOutD,
+            hIn: hBerth, hOut: OUTD.h, outPt: OUTD.pt,
         };
     }
     return {
@@ -275,7 +281,7 @@ function harborBerthPlan(port, prefHeading, asBerthed) {
         berth: { x: pB.x, z: pB.z, h: hB },
         turn: { x: pE.x, z: pE.z },
         hIn: Math.atan2(-S.sx, -S.sz) / _haRad,     // 岸壁の方を向く
-        hOut,                                        // 港口の方を向く
+        hOut, outPt: OUT.pt,                         // 港口の方を向く（outPt：その向きの航路の点）
     };
 }
 window.harborBerthPlan = harborBerthPlan;
@@ -465,14 +471,20 @@ function harborAutoBerthNow() {
 function harborAutoDepartNow(then) {
     const plan = harborBerthedAt();
     if (!plan) { _haMsg('岸壁に横付けしていません'); return false; }
-    // 同じ作り込んだ港の中の別の埠頭へ行くときは、港の出口ではなく、そちらへ向かう港内の水路の向きに回す
-    if (then && then.real && then.fairway && then.fairway.pts.length >= 2 && typeof _rwDetailOf === 'function') {
+    // 回す向き：自動航行が最初に向かう点の方。同じ作り込んだ港の中の別の埠頭へ行くときは、港の出口ではなく、
+    // そちらへ向かう港内の水路の最初の点。回す所からその点へまっすぐ行くと浅い所にかかるときは、
+    // 自動航行と同じく港の中の深い所をたどる道すじの、250m 以上先の点の方
+    if (typeof _rwDetailOf === 'function') {
         const D = _rwDetailOf(plan.port.lat, plan.port.lon);
-        if (D && D === _rwDetailOf(then.lat, then.lon)) {
+        let tgt = plan.outPt || null;
+        if (then && then.real && then.fairway && then.fairway.pts.length >= 2 && D && D === _rwDetailOf(then.lat, then.lon)) tgt = then.fairway.pts[1];
+        if (D && tgt) {
             const Q = _haQ(plan.S), o = plan.dock ? plan.turn : Q.toW(plan.aE, plan.bC || 0);
-            const oll = worldUnitToLatLon(worldLocalToUnit(o.x, o.z)), fin = then.fairway.pts[1];
-            const r = _rwDetailRoute(D, oll, { lat: fin.lat, lon: fin.lon });
-            const pts = r ? [...r.pts, fin] : [fin];
+            const oll = worldUnitToLatLon(worldLocalToUnit(o.x, o.z));
+            const safe = typeof _apLineSafe === 'function' && typeof apMargins === 'function'
+                && _apLineSafe(oll, tgt, apMargins().needTug, typeof _apShipHalfBeam === 'function' ? _apShipHalfBeam() : _haDims().hw);
+            let pts = [tgt];
+            if (!safe) { const r = _rwDetailRoute(D, oll, { lat: tgt.lat, lon: tgt.lon }); if (r) pts = [...r.pts, tgt]; }
             const q = pts.find(p => { const L = worldUnitToLocal(worldLatLonToUnit(p.lat, p.lon)); return Math.hypot(L.x - o.x, L.z - o.z) > 250; }) || pts[pts.length - 1];
             const L = worldUnitToLocal(worldLatLonToUnit(q.lat, q.lon));
             if (Math.hypot(L.x - o.x, L.z - o.z) > 30) plan.hOut = Math.atan2(L.x - o.x, L.z - o.z) / _haRad;

@@ -820,9 +820,10 @@ function animatePropellers(t, dt) {
             // pivotOffset は親（shipGroup）ローカル座標系でのオフセット
             const pv = part.pivotOffset || new THREE.Vector3();
 
-            if (part.key === 'screw' || part.key === 'paddle') {
-                // 機関ごとの回転数（56-engines.js）
-                const sr = (typeof engineRpmFor === 'function') ? engineRpmFor('glb:' + part.id) * Math.max(0.1, physics.maxSpeed || 1) * 1.5 * (1 + (window._propRacingIntensity || 0) * 0.6) : spinRate;
+            if (part.key === 'screw' || part.key === 'paddle' || part.key === 'thruster') {
+                // 機関ごとの回転数（56-engines.js）。バウスラスターはスラスターの出力（58-maneuvering.js）
+                const sr = part.key === 'thruster' ? ((typeof maneuverThrusterSpin === 'function') ? maneuverThrusterSpin(part) : 0)
+                    : (typeof engineRpmFor === 'function') ? engineRpmFor('glb:' + part.id) * Math.max(0.1, physics.maxSpeed || 1) * 1.5 * (1 + (window._propRacingIntensity || 0) * 0.6) : spinRate;
                 part.spin = (part.spin || 0) + sr * invert * (dt || 0);
 
                 // 回転軸 (basePos + pivotOffset) を中心に回転させる。

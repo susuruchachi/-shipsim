@@ -126,6 +126,7 @@ function collectShipConfig() {
             invert: !!p.invert,
             spinAxis: p.spinAxis || 'x',
             disabled: !!p.disabled,
+            kind: p.origKey && p.key !== p.origKey ? p.key : undefined,     // 種類を切り替えた部品（07-glb-movable-parts.js）
             pivotOffset: p.pivotOffset ? { x: p.pivotOffset.x, y: p.pivotOffset.y, z: p.pivotOffset.z } : { x:0, y:0, z:0 },
         })),
         // エリアライト個別設定（強度・色・ON/OFF・位置・向き・サイズ）
@@ -444,6 +445,7 @@ function applyShipConfig(cfg) {
                     if (typeof saved.invert === 'boolean') part.invert = saved.invert;
                     if (saved.spinAxis) part.spinAxis = saved.spinAxis;
                     if (typeof saved.disabled === 'boolean') part.disabled = saved.disabled;
+                    if (saved.kind && typeof setGlbPartKindRaw === 'function') setGlbPartKindRaw(part, saved.kind);
                     if (saved.pivotOffset) {
                         if (!part.pivotOffset) part.pivotOffset = new THREE.Vector3();
                         part.pivotOffset.set(saved.pivotOffset.x, saved.pivotOffset.y, saved.pivotOffset.z);

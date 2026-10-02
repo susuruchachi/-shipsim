@@ -17,7 +17,7 @@ const MNV_N_PER_KW = 120;          // サイドスラスターの推力 [N/kW]
 const POD_N_PER_HP = 80;           // ポッドの推力 [N/馬力]（船のプロペラのボラードプル程度）
 const MNV_KEYS = { ',': ['bow', 1], '.': ['bow', -1], 'k': ['stern', 1], 'l': ['stern', -1] };
 const maneuver = {
-    thrusters: [],                 // { name, at（−1 船尾〜＋1 船首）, kW }
+    thrusters: [],                 // { name, at（−1 船尾〜＋1 船首）, kW, y（高さ。null＝自動）, part（モデルの部品の名前。null＝付け足したもの） }
     podMode: 'helm',               // 'helm' | 'indep' | 'joy'
     podRate: 8,                    // ポッドが向きを変える速さ [°/秒]
     joy: { x: 0, y: 0, r: 0, latch: false, holdHdg: false, holdPos: false },
@@ -41,7 +41,80 @@ function _mnvHL() { const hp = window.hullProfile; return ((hp && hp.ready) ? hp
 function _mnvMassKg() { return Math.max(1e5, (physics.mass || 1) * 1e6); }
 // 速さが出ると、スラスター（と遅いときのポッドの横向きの力）は効かなくなる
 function thrusterSpeedFactor() { return Math.max(0, 1 - Math.abs(physics.speed || 0) / 6); }
-function thrusterCapN(T) { return Math.max(0, +T.kW || 0) * MNV_N_PER_KW; }
+function thrusterCapN(T) { return T._on === false ? 0 : Math.max(0, +T.kW || 0) * MNV_N_PER_KW; }
+// ── モデルの部品のスラスター（07-glb-movable-parts.js：名前に "Thruster" / "スラスター" を含む部品、
+//    または部品の種類を「バウスラスター」にしたもの）──
+function _mnvThrusterParts() {
+    return (typeof glbMovableParts !== 'undefined' && glbMovableParts) ? glbMovableParts.filter(p => p.key === 'thruster' && !p.disabled && p.object) : [];
+}
+function _mnvPartOf(T) { return T.part ? _mnvThrusterParts().find(p => p.name === T.part) || null : null; }
+// 部品の真ん中（船のローカル座標）
+function _mnvPartCenter(part) {
+    const v = new THREE.Vector3();
+    part.object.updateWorldMatrix(true, true);
+    new THREE.Box3().setFromObject(part.object).getCenter(v);
+    shipGroup.updateMatrixWorld(true);
+    return _mnvFromShip(shipGroup.worldToLocal(v));      // 船体の向きの面で
+}
+function _mnvPartRadius(part) {
+    const b = new THREE.Box3().setFromObject(part.object), sz = new THREE.Vector3(); b.getSize(sz);
+    const sc = new THREE.Vector3(); shipGroup.getWorldScale(sc);
+    const r = Math.max(sz.y, Math.min(sz.x, sz.z)) / 2 / (sc.x || 1);
+    return Number.isFinite(r) && r > 0 ? r : null;
+}
+function _mnvBowSign() { const hp = window.hullProfile; return (hp && hp.ready && hp.bowSign) || 1; }
+// 船体の向きの面：船の中（shipGroup）で、船の長さの向きが z になるように回した面。
+// モデルの向きの補正（modelOffset.ry・X が前のモデル。18-hull-wake-physics.js の _wakeAxisRad と同じ）の分だけ回す
+function _mnvFrameA() {
+    const hp = window.hullProfile;
+    const ry = (typeof modelOffset !== 'undefined' && modelOffset && typeof modelOffset.ry === 'number') ? modelOffset.ry * _mnvRad : 0;
+    return ry + (hp && hp.xIsForward ? Math.PI / 2 : 0);
+}
+// 船体の向きの面（x＝横・左舷が＋、y、z＝長さ）→ 船の中（shipGroup）の座標
+function _mnvToShip(x, y, z, out) {
+    const a = _mnvFrameA(), c = Math.cos(a), s = Math.sin(a);
+    return (out || new THREE.Vector3()).set(x * c + z * s, y, -x * s + z * c);
+}
+function _mnvFromShip(v) {
+    const a = _mnvFrameA(), c = Math.cos(a), s = Math.sin(a);
+    return { x: v.x * c - v.z * s, y: v.y, z: v.x * s + v.z * c };
+}
+// 部品のスラスターを一覧（maneuver.thrusters）に足す・使えなくなった部品のものは休ませる（_on＝false）
+function _mnvSyncParts() {
+    const parts = _mnvThrusterParts();
+    const hp = window.hullProfile, half = (hp && hp.ready) ? hp.halfLen : 6;
+    let added = false;
+    for (const part of parts) {
+        if (maneuver.thrusters.some(T => T.part === part.name)) continue;
+        let at = 0.86;
+        try { at = Math.max(-1, Math.min(1, _mnvPartCenter(part).z / half * _mnvBowSign())); } catch (e) { /* */ }
+        maneuver.thrusters.push({ name: '', at, kW: thrusterDefaultKw(), y: null, part: part.name });
+        added = true;
+    }
+    let changed = added;
+    for (const T of maneuver.thrusters) {
+        const part = T.part ? _mnvPartOf(T) : null;
+        const on = !T.part || !!part;
+        if (T._on !== on) { T._on = on; changed = true; }
+        // 部品のスラスターの前後の位置は、部品の今の位置から（モデルの置き直し・縮尺の変更にも付いていく）
+        if (part && hp && hp.ready) {
+            try {
+                const at = +Math.max(-1, Math.min(1, _mnvPartCenter(part).z / half * _mnvBowSign())).toFixed(3);
+                if (Math.abs(at - (T.at || 0)) > 0.002) { T.at = at; _mnv.visKey = ''; }
+            } catch (e) { /* */ }
+        }
+    }
+    if (changed) { _mnv.visKey = ''; _mnvUpdateHudButton(); renderManeuverPanel(); const el = document.getElementById('mnv-settings'); if (el && el.offsetParent) renderManeuverSettings(); }
+    return changed;
+}
+window.maneuverSyncParts = _mnvSyncParts;
+// モデルのスラスターの部品の回す速さ[rad/s]（12-bloom-...js の animatePropellers から）
+function maneuverThrusterSpin(part) {
+    const i = maneuver.thrusters.findIndex(T => T.part === part.name);
+    const st = i >= 0 ? _mnv.th[i] : null;
+    return st ? st.out * 14 : 0;
+}
+window.maneuverThrusterSpin = maneuverThrusterSpin;
 // 既定の出力：全長から（0.04×L²）。ただし主機の 2 割まで（軽い船に大きすぎないように）
 function thrusterDefaultKw() {
     const L = _mnvHL() * 2;
@@ -261,6 +334,7 @@ window.maneuverShift = maneuverShift;
 function updateManeuver(t, dt) {
     dt = Math.min(0.5, Math.max(0, dt || 0));
     const design = typeof isDesignMode !== 'undefined' && isDesignMode;
+    if (!_mnv.syncT || performance.now() - _mnv.syncT > 1000) { _mnv.syncT = performance.now(); _mnvSyncParts(); }
     if (maneuver.thrusters.length) _mnvThState(maneuver.thrusters.length - 1);
     _mnv.th.length = maneuver.thrusters.length;
     const mode = podModeNow();
@@ -284,13 +358,15 @@ function updateManeuver(t, dt) {
         const s = _mnv.th[i], bow = (T.at || 0) >= 0;
         let want = mode === 'joy' ? s.auto : s.set;
         for (const k in _mnv.keys) if (_mnv.keys[k]) { const [w, sg] = MNV_KEYS[k]; if ((w === 'bow') === bow) want = sg; }
-        if (design) want = 0;
+        if (design || T._on === false) want = 0;
         want = Math.max(-1, Math.min(1, want || 0));
         const d = want - s.out, step = 0.5 * dt;
         s.out = Math.abs(d) <= step ? want : s.out + Math.sign(d) * step;
     });
     if (_mnv.th.some(s => Math.abs(s.out) > 1e-3) || (mode && mode !== 'helm' && L.some(E => Math.abs(E.rpm) > 1e-3))) _mnv.activeT = performance.now();
     _mnvVisual(t, dt);
+    // ギズモの目印は、ギズモで動かしている間だけ見せる
+    for (const m of _mnv.markers || []) if (m) m.visible = typeof currentGizmoTarget !== 'undefined' && currentGizmoTarget === m;
     // ── パネル ──
     const panel = document.getElementById('mnv-panel');
     if (panel && panel.classList.contains('open')) {
@@ -319,22 +395,33 @@ function _mnvHullX(y, z) {
     }
     if (typeof importedModelGroup !== 'undefined' && importedModelGroup && typeof shipGroup !== 'undefined' && shipGroup) {
         shipGroup.updateMatrixWorld(true);
-        const o = shipGroup.localToWorld(new THREE.Vector3(hw * 2 + 1, y, z));
-        const b = shipGroup.localToWorld(new THREE.Vector3(0, y, z));
+        const o = shipGroup.localToWorld(_mnvToShip(hw * 2 + 1, y, z));
+        const b = shipGroup.localToWorld(_mnvToShip(0, y, z));
         const rc = new THREE.Raycaster(o, b.sub(o).normalize());
         if (typeof camera !== 'undefined') rc.camera = camera;             // 模型の中のスプライト用
         let hits = [];
         try { hits = rc.intersectObject(importedModelGroup, true).filter(h => h.object.visible && h.object.isMesh); } catch (e) { hits = []; }
-        if (hits.length) { const p = shipGroup.worldToLocal(hits[0].point.clone()); if (p.x > 0.02) return { x: p.x, hit: true }; }
+        if (hits.length) { const p = _mnvFromShip(shipGroup.worldToLocal(hits[0].point.clone())); if (p.x > 0.02) return { x: p.x, hit: true }; }
     }
     return { x: hw * 0.85, hit: false };
 }
 function _mnvThrusterGeom(T) {
+    if (T._on === false) return null;
     const hp = window.hullProfile, sc = physics.scale || 1;
     const half = (hp && hp.ready) ? hp.halfLen : 6;
-    const z = (T.at || 0) * half;
+    let z = (T.at || 0) * half * _mnvBowSign();
     const wl = (hp && hp.ready) ? (hp.designWaterlineY || 0) : 0, keel = (hp && hp.ready) ? (hp.keelY || -1) : -1;
-    const r = Math.max(0.3, Math.min(1.6, 0.0275 * Math.sqrt(Math.max(10, +T.kW || 0)))) / sc;   // トンネルの半径（1000kW で径 1.7m）
+    let r = Math.max(0.3, Math.min(1.6, 0.0275 * Math.sqrt(Math.max(10, +T.kW || 0)))) / sc;   // トンネルの半径（1000kW で径 1.7m）
+    // モデルの部品のスラスター：位置・大きさは部品から（トンネルの口はモデルにあるので作らない）
+    const part = _mnvPartOf(T);
+    if (part) {
+        const c = _mnvPartCenter(part), pr = _mnvPartRadius(part);
+        if (pr) r = Math.min(r * 2, Math.max(r * 0.5, pr));
+        const q = _mnvHullX(c.y, c.z);
+        return { x: q.x, y: c.y, z: c.z, r, part: true };
+    }
+    // 高さを決めてあれば、その高さ
+    if (Number.isFinite(T.y)) { const q = _mnvHullX(T.y, z); return { x: q.x, y: T.y, z, r }; }
     let best = null;
     for (const k of [0.55, 0.45, 0.35]) {
         const y = wl - (wl - keel) * k, q = _mnvHullX(y, z);
@@ -346,7 +433,7 @@ function _mnvThrusterGeom(T) {
 function _mnvBuildVis() {
     if (typeof shipGroup === 'undefined' || !shipGroup) return;
     const hp = window.hullProfile;
-    const key = JSON.stringify(maneuver.thrusters.map(T => [T.at, T.kW])) + '|' + (hp && hp.ready ? hp.halfLen + ',' + hp.halfBeam : '-') + '|' + (physics.scale || 1) + '|' + (shipGroup.children.length > 0);
+    const key = JSON.stringify(maneuver.thrusters.map(T => [T.at, T.kW, T.y, T.part, T._on])) + '|' + _mnvFrameA().toFixed(3) + '|' + (hp && hp.ready ? hp.halfLen + ',' + hp.halfBeam : '-') + '|' + (physics.scale || 1) + '|' + (shipGroup.children.length > 0);
     if (key === _mnv.visKey && _mnv.vis && _mnv.vis.parent === shipGroup) return;
     _mnv.visKey = key;
     if (_mnv.vis) { _mnv.vis.parent && _mnv.vis.parent.remove(_mnv.vis); _mnv.vis.traverse(c => { if (c.geometry) c.geometry.dispose(); }); }
@@ -357,7 +444,7 @@ function _mnvBuildVis() {
     maneuver.thrusters.forEach((T) => {
         const G = _mnvThrusterGeom(T);
         g.userData.geo.push(G);
-        if (!G) return;
+        if (!G || G.part) return;
         for (const side of [1, -1]) {
             const hole = new THREE.Mesh(new THREE.CircleGeometry(G.r, 24), holeM);
             hole.position.set(side * (G.x + 0.02 / (physics.scale || 1)), G.y, G.z);
@@ -370,6 +457,7 @@ function _mnvBuildVis() {
             for (const m of [hole, rim, bars]) { m.userData.noBloom = true; m.userData.isThruster = true; g.add(m); }
         }
     });
+    g.rotation.y = _mnvFrameA();          // 中の物は船体の向きの面で置いてある
     shipGroup.add(g);
     _mnv.vis = g;
     if (typeof bloomTargetsDirty === 'function') bloomTargetsDirty();
@@ -402,8 +490,9 @@ function _mnvVisual(t, dt) {
         const side = out > 0 ? -1 : 1;
         _mnv.puffAcc[i] = (_mnv.puffAcc[i] || 0) + dt * (6 + 14 * Math.abs(out));
         if (_mnv.puffAcc[i] > 30) _mnv.puffAcc[i] = 30;
-        _mnvV.set(side * (G.x + G.r * 0.5), G.y, G.z); shipGroup.localToWorld(_mnvV);
-        _mnvV2.set(side, 0, 0).transformDirection(shipGroup.matrixWorld);
+        _mnv.vis.updateMatrixWorld();
+        _mnvV.set(side * (G.x + G.r * 0.5), G.y, G.z); _mnv.vis.localToWorld(_mnvV);
+        _mnvV2.set(side, 0, 0).transformDirection(_mnv.vis.matrixWorld);
         const wy = (typeof getOceanHeight === 'function') ? getOceanHeight(_mnvV.x, _mnvV.z, t) : 0;
         if (_mnvV.y > wy + 0.5) { _mnv.puffAcc[i] = 0; return; }         // 口が水の上に出ている
         const R = G.r * sc, v = (2 + 6 * Math.abs(out)) * Math.min(1.6, Math.max(0.6, R));
@@ -444,7 +533,7 @@ window.maneuverPodAzForPart = maneuverPodAzForPart;
 // ════════════════════════════════════════════════════════════
 //  画面：「操船」ボタンとパネル
 // ════════════════════════════════════════════════════════════
-function _mnvHasPanel() { return maneuver.thrusters.length > 0 || azipodActive(); }
+function _mnvHasPanel() { return maneuver.thrusters.some(T => T._on !== false) || azipodActive(); }
 function _mnvUpdateHudButton() {
     const b = document.getElementById('btn-mnv'); if (!b) return;
     const on = _mnvHasPanel();
@@ -462,7 +551,7 @@ function _mnvSetup() {
     P.btn.style.display = 'none';
     _mnvUpdateHudButton();
 }
-function _mnvUiKey() { return [maneuver.thrusters.length, azipodActive(), podModeNow(), maneuver.podMode, typeof engineList === 'function' && azipodActive() ? engineList().map(E => E.id).join(',') : '', maneuver.joy.latch, maneuver.joy.holdHdg, maneuver.joy.holdPos].join('|'); }
+function _mnvUiKey() { return [maneuver.thrusters.map(T => T._on === false ? 0 : 1).join(''), azipodActive(), podModeNow(), maneuver.podMode, typeof engineList === 'function' && azipodActive() ? engineList().map(E => E.id).join(',') : '', maneuver.joy.latch, maneuver.joy.holdHdg, maneuver.joy.holdPos].join('|'); }
 function renderManeuverPanel() {
     const panel = document.getElementById('mnv-panel'); if (!panel) return;
     _mnv.uiKey = _mnvUiKey();
@@ -470,9 +559,10 @@ function renderManeuverPanel() {
     const L = pods && typeof engineList === 'function' ? engineList() : [];
     let h = `<div class="mv-head"><span class="mv-title">操船</span></div>
         <div class="mv-body"><canvas id="mnv-diag" width="110" height="200"></canvas><div class="mv-ctl">`;
-    if (maneuver.thrusters.length) {
+    if (maneuver.thrusters.some(T => T._on !== false)) {
         h += `<div class="mv-sec">サイドスラスター</div>`;
         maneuver.thrusters.forEach((T, i) => {
+            if (T._on === false) return;
             const nm = T.name || ((T.at || 0) >= 0 ? '船首スラスター' : '船尾スラスター');
             h += `<div class="mv-th"><div class="mv-thn">${nm}<span id="mnv-th-${i}" class="mv-val"></span></div>
                 <div class="mv-row">${[[-1, '◀◀'], [-0.5, '◀'], [0, '■'], [0.5, '▶'], [1, '▶▶']].map(([v, l]) =>
@@ -618,6 +708,7 @@ function _mnvDrawDiagram() {
     // スラスター
     const lf = thrusterSpeedFactor();
     maneuver.thrusters.forEach((T, i) => {
+        if (T._on === false) return;
         const s = _mnv.th[i], y = Y((T.at || 0) * half);
         ctx.strokeStyle = 'rgba(200,220,240,0.6)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(X(hb * 0.7), y); ctx.lineTo(X(-hb * 0.7), y); ctx.stroke();
         if (s && s.out) arrow(cx, y, -s.out * 34 * Math.max(0.2, lf), 0, lf > 0.3 ? '#ffd65a' : '#aa9050');
@@ -677,7 +768,7 @@ window.addEventListener('keydown', (e) => {
     const tag = document.activeElement && document.activeElement.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
     const k = e.key.toLowerCase();
-    if (MNV_KEYS[k] && maneuver.thrusters.length) _mnv.keys[k] = true;
+    if (MNV_KEYS[k] && maneuver.thrusters.some(T => T._on !== false)) _mnv.keys[k] = true;
 });
 window.addEventListener('keyup', (e) => { const k = e.key.toLowerCase(); if (_mnv.keys[k]) _mnv.keys[k] = false; });
 window.addEventListener('blur', () => { _mnv.keys = {}; });
@@ -689,20 +780,32 @@ function renderManeuverSettings() {
     const el = document.getElementById('mnv-settings'); if (!el) return;
     const L = _mnvHL() * 2, est = thrusterDefaultKw();
     let h = `<div class="sp-section-title">サイドスラスター</div>
-        <div style="font-size:10px;color:#888;margin-bottom:6px;">船体を横に貫くトンネルの中のスクリューで、船首（船尾）を横へ押します。6ノットを超えるとほとんど効きません。
-        推力は出力 1kW あたり約 120N。この船（全長 ${Math.round(L)}m）なら 1 基 ${est}kW ほどが目安です。</div>`;
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">船体を横に貫くトンネルの中のスクリュー（バウスラスター・スターンスラスター）で、船首（船尾）を横へ押します。6ノットを超えるとほとんど効きません。
+        推力は出力 1kW あたり約 120N。この船（全長 ${Math.round(L)}m）なら 1 基 ${est}kW ほどが目安です。
+        読み込んだモデルに名前に "Thruster" / "スラスター" を含む部品があれば、それがスラスターになります（出力に合わせて回ります）。</div>`;
+    const hp = window.hullProfile;
     maneuver.thrusters.forEach((T, i) => {
+        if (T._on === false) return;
+        const part = T.part ? _mnvPartOf(T) : null;
+        const ph = (T.at || 0) >= 0 ? '船首スラスター' : '船尾スラスター';
         h += `<div class="sp-item-card"><div class="sp-item-header"><span class="sp-item-title">
-                <input type="text" value="${(T.name || '').replace(/"/g, '&quot;')}" placeholder="${(T.at || 0) >= 0 ? '船首スラスター' : '船尾スラスター'}" style="width:110px" onchange="maneuverSetConf(${i},'name',this.value)"></span>
-                <button class="sp-del-btn" onclick="maneuverRemoveThruster(${i})">✕</button></div>
-            <div class="sp-row"><span class="sp-label">前後の位置:</span><input type="range" min="-100" max="100" value="${Math.round((T.at || 0) * 100)}" oninput="maneuverSetConf(${i},'at',this.value/100);this.nextElementSibling.textContent=(this.value>=0?'船首寄り ':'船尾寄り ')+Math.abs(this.value)+'%'"><span style="font-size:10px;color:#aef;width:80px">${(T.at || 0) >= 0 ? '船首寄り ' : '船尾寄り '}${Math.abs(Math.round((T.at || 0) * 100))}%</span></div>
-            <div class="sp-row"><span class="sp-label">出力 kW:</span><input type="number" min="10" max="20000" step="10" value="${T.kW}" style="width:80px" onchange="maneuverSetConf(${i},'kW',this.value)">
+                <input type="text" value="${(T.name || '').replace(/"/g, '&quot;')}" placeholder="${ph}" style="width:110px" onchange="maneuverSetConf(${i},'name',this.value)"></span>
+                ${part ? '' : `<button class="sp-gizmo-btn" id="gizmo-thruster-${i}" onclick="toggleGizmo('thruster',${i})" title="ギズモで位置（前後・高さ）を動かす">📍 ギズモ</button>
+                <button class="sp-del-btn" onclick="maneuverRemoveThruster(${i})">✕</button>`}</div>`;
+        if (part) {
+            h += `<div style="font-size:10px;color:#9ab;margin-bottom:4px;">モデルの部品「${part.name}」（位置は部品から。止める・スクリューとして扱うときは、上の「モデル内パーツ」で）</div>`;
+        } else {
+            h += `<div class="sp-row"><span class="sp-label">前後の位置:</span><input type="range" id="mnv-at-${i}" min="-100" max="100" value="${Math.round((T.at || 0) * 100)}" oninput="maneuverSetConf(${i},'at',this.value/100);this.nextElementSibling.textContent=(this.value>=0?'船首寄り ':'船尾寄り ')+Math.abs(this.value)+'%'"><span style="font-size:10px;color:#aef;width:80px">${(T.at || 0) >= 0 ? '船首寄り ' : '船尾寄り '}${Math.abs(Math.round((T.at || 0) * 100))}%</span></div>
+            <div class="sp-row"><span class="sp-label">高さ:</span><input type="number" id="mnv-y-${i}" step="0.05" value="${Number.isFinite(T.y) ? T.y.toFixed(2) : ''}" placeholder="自動" style="width:70px" onchange="maneuverSetConf(${i},'y',this.value)">
+                <button class="sp-add-btn" style="flex:none" onclick="maneuverSetConf(${i},'y','');renderManeuverSettings()" title="喫水線と船底の間で、船体の横腹に当たる高さ">自動</button></div>`;
+        }
+        h += `<div class="sp-row"><span class="sp-label">出力 kW:</span><input type="number" min="10" max="20000" step="10" value="${T.kW}" style="width:80px" onchange="maneuverSetConf(${i},'kW',this.value)">
                 <span style="font-size:10px;color:#9ab">推力 約 ${(thrusterCapN(T) / 9806).toFixed(1)} t</span></div></div>`;
     });
     h += `<div class="sp-row" style="gap:4px;flex-wrap:wrap">
-            <button class="sp-add-btn" onclick="maneuverAddThruster(0.86)">＋ 船首スラスター</button>
-            <button class="sp-add-btn" onclick="maneuverAddThruster(-0.82)">＋ 船尾スラスター</button>
-            ${maneuver.thrusters.length ? `<button class="sp-add-btn" onclick="maneuverClearThrusters()">すべて外す</button>` : ''}</div>`;
+            <button class="sp-add-btn" onclick="maneuverAddThruster(0.86)">＋ バウスラスター（船首）</button>
+            <button class="sp-add-btn" onclick="maneuverAddThruster(-0.82)">＋ スターンスラスター（船尾）</button>
+            ${maneuver.thrusters.some(T => !T.part) ? `<button class="sp-add-btn" onclick="maneuverClearThrusters()">付け足したものをすべて外す</button>` : ''}</div>`;
     if (azipodActive()) {
         h += `<div class="sp-section-title" style="margin-top:10px">アジポッド</div>
             <div style="font-size:10px;color:#888;margin-bottom:6px;">推進器ごとの機関がポッドになり、360° 向きを変えられます。推力は機関の馬力 1 馬力あたり約 80N。
@@ -714,27 +817,101 @@ function renderManeuverSettings() {
 }
 window.renderManeuverSettings = renderManeuverSettings;
 function maneuverAddThruster(at) {
-    maneuver.thrusters.push({ name: '', at, kW: thrusterDefaultKw() });
+    maneuver.thrusters.push({ name: '', at, kW: thrusterDefaultKw(), y: null, part: null });
     renderManeuverSettings(); renderManeuverPanel(); _mnvUpdateHudButton();
 }
-function maneuverRemoveThruster(i) { maneuver.thrusters.splice(i, 1); _mnv.th.splice(i, 1); renderManeuverSettings(); renderManeuverPanel(); _mnvUpdateHudButton(); }
-function maneuverClearThrusters() { maneuver.thrusters.length = 0; _mnv.th.length = 0; renderManeuverSettings(); renderManeuverPanel(); _mnvUpdateHudButton(); }
+function _mnvGizmoOff() { if (typeof currentGizmoType !== 'undefined' && currentGizmoType === 'thruster' && typeof disableGizmo === 'function') disableGizmo(); }
+// ギズモの目印を外す（i を省くと全部）。番号がずれるので、外したスラスターの分は詰める
+function _mnvDropMarker(i) {
+    const M = _mnv.markers || [];
+    const drop = (m) => { if (m) { if (m.parent) m.parent.remove(m); m.geometry.dispose(); m.material.dispose(); } };
+    if (i === undefined) { M.forEach(drop); _mnv.markers = []; return; }
+    drop(M[i]); M.splice(i, 1);
+}
+function maneuverRemoveThruster(i) {
+    _mnvGizmoOff();
+    maneuver.thrusters.splice(i, 1); _mnv.th.splice(i, 1); _mnvDropMarker(i);
+    renderManeuverSettings(); renderManeuverPanel(); _mnvUpdateHudButton();
+}
+function maneuverClearThrusters() {
+    _mnvGizmoOff();
+    for (let i = maneuver.thrusters.length - 1; i >= 0; i--) if (!maneuver.thrusters[i].part) { maneuver.thrusters.splice(i, 1); _mnv.th.splice(i, 1); _mnvDropMarker(i); }
+    renderManeuverSettings(); renderManeuverPanel(); _mnvUpdateHudButton();
+}
 function maneuverSetConf(i, k, v) {
     const T = maneuver.thrusters[i]; if (!T) return;
     if (k === 'name') T.name = String(v || '').slice(0, 30);
     else if (k === 'at') T.at = Math.max(-1, Math.min(1, +v || 0));
     else if (k === 'kW') { T.kW = Math.max(10, Math.min(20000, +v || 0)); renderManeuverSettings(); }
+    else if (k === 'y') T.y = (v === '' || v === null || !Number.isFinite(+v)) ? null : +v;
+    _mnvPlaceMarker(i);
     renderManeuverPanel();
+}
+// ── ギズモ（10-ship-editor-propulsors.js の toggleGizmo / onGizmoChange）：目印を動かすと前後の位置・高さが変わる ──
+function _mnvPlaceMarker(i) {
+    const m = (_mnv.markers || [])[i], T = maneuver.thrusters[i];
+    if (!m || !T || T.part) return;
+    const G = _mnvThrusterGeom(T);
+    if (G) m.position.set(0, G.y, G.z);
+}
+function _mnvMarker(i) {
+    const T = maneuver.thrusters[i];
+    if (!T || T.part || typeof shipGroup === 'undefined' || !shipGroup) return null;
+    _mnv.markers = _mnv.markers || [];
+    let m = _mnv.markers[i];
+    if (!m) {
+        const sc = physics.scale || 1;
+        m = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffd65a, depthTest: false, transparent: true, opacity: 0.85 }));
+        m.scale.setScalar(Math.max(0.3, 1.2 / sc));
+        m.renderOrder = 999; m.visible = false;
+        m.userData.noBloom = true; m.userData.noLightBake = true; m.userData.isThrusterMarker = true;
+        _mnv.markers[i] = m;
+    }
+    // 目印は船体の向きの面（回した入れ物）の中に置く。ギズモの前後＝船の長さの向き
+    if (!_mnv.mHolder) { _mnv.mHolder = new THREE.Group(); _mnv.mHolder.name = 'ThrusterMarkers'; }
+    if (_mnv.mHolder.parent !== shipGroup) shipGroup.add(_mnv.mHolder);
+    _mnv.mHolder.rotation.y = _mnvFrameA();
+    if (m.parent !== _mnv.mHolder) _mnv.mHolder.add(m);
+    _mnvPlaceMarker(i);
+    return m;
+}
+{
+    const prevT = window.getExtraGizmoTarget, prevC = window.onExtraGizmoChange;
+    window.getExtraGizmoTarget = function (type, index) {
+        if (type === 'thruster') { const m = _mnvMarker(index); return m ? { mesh: m, btnId: `gizmo-thruster-${index}` } : null; }
+        return typeof prevT === 'function' ? prevT(type, index) : null;
+    };
+    window.onExtraGizmoChange = function (type, index, target) {
+        if (type === 'thruster') {
+            const T = maneuver.thrusters[index]; if (!T) return true;
+            const hp = window.hullProfile, half = (hp && hp.ready) ? hp.halfLen : 6;
+            target.position.x = 0;                       // トンネルは船の真ん中を横に貫く
+            T.at = Math.max(-1, Math.min(1, target.position.z / half * _mnvBowSign()));
+            T.at = +T.at.toFixed(3);
+            T.y = Math.round(target.position.y * 1000) / 1000;
+            const a = document.getElementById('mnv-at-' + index);
+            if (a) { a.value = Math.round(T.at * 100); if (a.nextElementSibling) a.nextElementSibling.textContent = (T.at >= 0 ? '船首寄り ' : '船尾寄り ') + Math.abs(Math.round(T.at * 100)) + '%'; }
+            const y = document.getElementById('mnv-y-' + index); if (y) y.value = T.y.toFixed(2);
+            return true;
+        }
+        return typeof prevC === 'function' ? prevC(type, index, target) : false;
+    };
 }
 Object.assign(window, { maneuverAddThruster, maneuverRemoveThruster, maneuverClearThrusters, maneuverSetConf });
 
 // ── 保存・読み込み（13-save-load-config.js）──
 function getManeuverConfig() {
-    return { thrusters: maneuver.thrusters.map(T => ({ name: T.name || '', at: +(+T.at || 0).toFixed(3), kW: +T.kW || 0 })), podMode: maneuver.podMode, podRate: maneuver.podRate };
+    // モデルの部品のスラスターは、今のモデルにその部品があるものだけ（モデルがまだ無いときは全部）
+    const haveParts = typeof glbMovableParts !== 'undefined' && glbMovableParts && glbMovableParts.length > 0;
+    const keep = (T) => !T.part || !haveParts || glbMovableParts.some(p => p.name === T.part);
+    return { thrusters: maneuver.thrusters.filter(keep).map(T => ({ name: T.name || '', at: +(+T.at || 0).toFixed(3), kW: +T.kW || 0, y: Number.isFinite(T.y) ? T.y : null, part: T.part || null })), podMode: maneuver.podMode, podRate: maneuver.podRate };
 }
 function applyManeuverConfig(c) {
-    maneuver.thrusters = (c && Array.isArray(c.thrusters)) ? c.thrusters.map(T => ({ name: String(T.name || ''), at: Math.max(-1, Math.min(1, +T.at || 0)), kW: Math.max(10, +T.kW || 100) })) : [];
+    _mnvGizmoOff(); _mnvDropMarker();
+    maneuver.thrusters = (c && Array.isArray(c.thrusters)) ? c.thrusters.map(T => ({ name: String(T.name || ''), at: Math.max(-1, Math.min(1, +T.at || 0)), kW: Math.max(10, +T.kW || 100),
+        y: (T.y !== null && T.y !== undefined && Number.isFinite(+T.y)) ? +T.y : null, part: T.part ? String(T.part) : null })) : [];
     _mnv.th.length = 0;
+    _mnv.syncT = 0;
     maneuver.podMode = (c && ['helm', 'indep', 'joy'].includes(c.podMode)) ? c.podMode : 'helm';
     maneuver.podRate = (c && +c.podRate > 0) ? +c.podRate : 8;
     _mnv.pods.clear(); _mnv.visKey = '';

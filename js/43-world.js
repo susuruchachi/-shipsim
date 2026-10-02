@@ -636,12 +636,36 @@ function _rwDetailRoute(d, st, tgt) {
     if (sk < 0) return null;
     const t = tgt ? cellOf(tgt) : null;
     const goal = (i, j) => t ? Math.abs(i - t.i) <= 2 && Math.abs(j - t.j) <= 2 : (i < 3 || j < 3 || i >= nx - 3 || j >= ny - 3) && dep[j * nx + i] >= 10;
-    // 浅い所（8m 未満）から 80m 以内の升目は通りにくく（水路の真ん中を通る）
-    const nearShoal = new Uint8Array(N);
-    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-        if (dep[j * nx + i] >= 8) continue;
-        for (let b = -2; b <= 2; b++) for (let a = -2; a <= 2; a++) { const ii = i + a, jj = j + b; if (ii >= 0 && jj >= 0 && ii < nx && jj < ny) nearShoal[jj * nx + ii] = 1; }
-    }
+    // 水路の真ん中を通る：浅い所からの距離（升目の数）を測り、浅い所に近いほど通りにくくする。
+    // 以前は「浅い所（8m 未満）から 80m 以内」だけを避けていたので、それより外なら浅い所のすぐそばでも同じ
+    // 通りやすさで、曲がり角では内側の浅瀬すれすれを回り（しかも船は変針点の手前から内側へ回り込む）、
+    // サウサンプトンのカルショット沖やマージー川の河口などで座礁しやすかった。
+    // 大きな船が通れる深さ（12.5m）の所は 12.5m より浅い所からの距離、それより浅い川などは 6m より浅い所からの距離で
+    const SH = 12.5;
+    const distFrom = (bad) => {
+        // 2 回なでる距離（3-4 の面取り距離。升目 1 つ ＝ 3）
+        const dd = new Float32Array(N);
+        // （港の枠の縁も浅い所と同じに見る：枠の外は分からないので、縁に沿って走らない）
+        for (let k = 0; k < N; k++) { const i = k % nx, j = (k / nx) | 0; dd[k] = bad(dep[k]) || i === 0 || j === 0 || i === nx - 1 || j === ny - 1 ? 0 : 1e9; }
+        for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+            const k = j * nx + i; let v = dd[k];
+            if (i > 0) v = Math.min(v, dd[k - 1] + 3);
+            if (j > 0) { v = Math.min(v, dd[k - nx] + 3); if (i > 0) v = Math.min(v, dd[k - nx - 1] + 4); if (i < nx - 1) v = Math.min(v, dd[k - nx + 1] + 4); }
+            dd[k] = v;
+        }
+        for (let j = ny - 1; j >= 0; j--) for (let i = nx - 1; i >= 0; i--) {
+            const k = j * nx + i; let v = dd[k];
+            if (i < nx - 1) v = Math.min(v, dd[k + 1] + 3);
+            if (j < ny - 1) { v = Math.min(v, dd[k + nx] + 3); if (i < nx - 1) v = Math.min(v, dd[k + nx + 1] + 4); if (i > 0) v = Math.min(v, dd[k + nx - 1] + 4); }
+            dd[k] = v;
+        }
+        for (let k = 0; k < N; k++) dd[k] = Math.min(40, dd[k] / 3);
+        return dd;
+    };
+    const d12 = distFrom(v => v < SH), d6 = distFrom(v => v < 6);
+    // その升目の「浅い所までの距離」（升目の数）と、浅い所に近い分の通りにくさ
+    const clrAt = (k) => dep[k] >= SH ? d12[k] : d6[k];
+    const nearCost = (k) => 1 + 30 / ((d6[k] + 0.5) * (d6[k] + 0.5)) + (dep[k] >= SH ? 30 / ((d12[k] + 0.5) * (d12[k] + 0.5)) : 0);
     const g = new Float64Array(N).fill(Infinity), from = new Int32Array(N).fill(-1), heap = [];
     const push = (k, v) => { heap.push([v, k]); let c = heap.length - 1; while (c > 0) { const q = (c - 1) >> 1; if (heap[q][0] <= heap[c][0]) break; [heap[q], heap[c]] = [heap[c], heap[q]]; c = q; } };
     const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let c = 0; for (;;) { const l = 2 * c + 1, r = l + 1; let m = c; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === c) break; [heap[m], heap[c]] = [heap[c], heap[m]]; c = m; } } return top; };
@@ -659,7 +683,7 @@ function _rwDetailRoute(d, st, tgt) {
             const kk = jj * nx + ii, dd = dep[kk];
             if (dd < 6) continue;
             // 大きな船（喫水 10m ほど）が通れる深さ（12.5m）より浅い所は、ずっと通りにくく（掘ってある航路を通る）
-            const ng = v + Math.hypot(a, b) * (1 + 200 / (dd * dd) + (dd < 12.5 ? 8 : 0)) * (nearShoal[kk] ? 4 : 1);
+            const ng = v + Math.hypot(a, b) * (1 + 200 / (dd * dd) + (dd < 12.5 ? 8 : 0)) * nearCost(kk);
             if (ng < g[kk]) { g[kk] = ng; from[kk] = k; push(kk, ng); }
         }
     }
@@ -669,10 +693,20 @@ function _rwDetailRoute(d, st, tgt) {
     for (let k = end; k >= 0; k = from[k]) path.push(k);
     path.reverse();
     // まっすぐにできる所はまっすぐに（線の上と左右 40m を 20m おきに、12m（道すじの浅い所がそれより浅ければ、そこまで）より深いか：
-    // 大きな船の幅と横ずれの分）
+    // 大きな船の幅と横ずれの分）。さらに、まっすぐにした線が、元の道すじ（水路の真ん中）と同じくらい浅い所から
+    // 離れていること（道すじのその間でいちばん浅い所に近い所の 8 割。曲がり角の内側の浅瀬へ寄せない）
     let deepest = Infinity;
     for (const k of path) deepest = Math.min(deepest, dep[k]);
-    const clear = (k0, k1) => {
+    const clr = path.map(k => clrAt(k));
+    const cellAt = (la, lo) => {
+        const i = Math.max(0, Math.min(nx - 1, Math.round((lo - d.lon0) / d.dLon / f - 0.5))), j = Math.max(0, Math.min(ny - 1, Math.round((d.lat1 - la) / d.dLat / f - 0.5)));
+        return j * nx + i;
+    };
+    const clear = (ia, ib) => {
+        const k0 = path[ia], k1 = path[ib];
+        let need = Infinity;
+        for (let q = ia; q <= ib; q++) need = Math.min(need, clr[q]);
+        need = Math.min(12, need) * 0.8 - 0.5;
         const A = ll(k0 % nx, (k0 / nx) | 0), B = ll(k1 % nx, (k1 / nx) | 0);
         const ey = (B.lat - A.lat) / d.dLat, ex = (B.lon - A.lon) / d.dLon, el = Math.hypot(ex, ey) || 1;
         const L = el * d.cell, n = Math.max(2, Math.ceil(L / 20));
@@ -680,6 +714,7 @@ function _rwDetailRoute(d, st, tgt) {
         for (let q = 1; q < n; q++) {
             const u = q / n, la = A.lat + (B.lat - A.lat) * u, lo = A.lon + (B.lon - A.lon) * u;
             for (const k of [0, -1, 1]) if (!(_rwDetailAt(d, la + oLat * k, lo + oLon * k) < -Math.min(12, deepest - 0.5))) return false;
+            if (need > 0 && clrAt(cellAt(la, lo)) < need) return false;
         }
         return true;
     };
@@ -687,7 +722,7 @@ function _rwDetailRoute(d, st, tgt) {
     let a = 0;
     while (a < path.length - 1) {
         let b = a + 1;
-        for (let c = Math.min(path.length - 1, a + 400); c > a + 1; c--) if (clear(path[a], path[c])) { b = c; break; }
+        for (let c = Math.min(path.length - 1, a + 400); c > a + 1; c--) if (clear(a, c)) { b = c; break; }
         simp.push(path[b]); a = b;
     }
     const pts = simp.map(k => ll(k % nx, (k / nx) | 0));

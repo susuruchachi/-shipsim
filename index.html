@@ -480,12 +480,16 @@
       <div class="sp-section">
         <div class="sp-section-title">推進器リスト</div>
         <div class="sp-propulsion-list" id="prop-list"></div>
-        <button class="sp-add-btn" onclick="addPropulsor()">＋ 追加</button>
+        <div class="sp-row" style="gap:4px;flex-wrap:wrap">
+          <button class="sp-add-btn" onclick="addPropulsor()">＋ 追加</button>
+          <button class="sp-add-btn" onclick="maneuverAddThruster(0.86);var e=document.getElementById('mnv-settings');if(e)e.scrollIntoView({block:'start'})" title="船首を横へ押すトンネルの中のスクリュー（設定は下の「サイドスラスター」で）">＋ バウスラスター</button>
+        </div>
       </div>
       <div class="sp-section">
-        <div class="sp-section-title">モデル内パーツ (スクリュー・外輪)</div>
+        <div class="sp-section-title">モデル内パーツ (スクリュー・外輪・バウスラスター)</div>
         <div style="font-size:10px;color:#888;margin-bottom:6px;">
-          読み込んだモデルの中から、名前に "Screw"・"Paddle" などを含むパーツを検出し、個別に回転軸・回転方向を設定できます。<br>
+          読み込んだモデルの中から、名前に "Screw"・"Paddle"・"Thruster"（スラスター）などを含むパーツを検出し、個別に回転軸・回転方向を設定できます。<br>
+          見分け方が違うときは「種類」でスクリュー・外輪・バウスラスターを切り替え、使わない部品は「機能停止」にしてください。<br>
           船速に応じて自動でアニメーションします。逆方向に動く場合は「反転」ボタンを押してください。
         </div>
         <div class="sp-funnel-list" id="glb-propulsion-parts-list"></div>

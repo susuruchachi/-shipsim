@@ -602,7 +602,9 @@ function _apSmoothRoute(route) {
             const u = Math.cos((ap.course - ab.course) * _apRad) * ap.dist, over = Math.max(0, -u, u - ab.dist);
             if (off > Math.max(80, ab.dist * 0.06) || over > 400) continue;
             const need = (P.narrow || B.narrow) ? M.needTug : M.need;
-            if (!_apLineSafe(A, B, need, hw)) continue;
+            // 港の航路の点（水路の真ん中を通るように引いてある）を省くときは、省いた分だけ線が浅い方へ寄ることがあるので、
+            // ずれの分（40m 以上）だけ広く見て、それでも深さが足りるときだけ
+            if (!_apLineSafe(A, B, need, hw + (P.channel ? Math.max(40, off) : 0))) continue;
             B.narrow = !!(B.narrow || P.narrow); B.channel = !!(B.channel || P.channel);
             if (P.label && !B.label) B.label = P.label;
             route.splice(i, 1); i--; changed = true;
