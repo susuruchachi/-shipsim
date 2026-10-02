@@ -800,47 +800,56 @@ function _trFarWaterMesh() {
     if (_trFarWater) return _trFarWater;
     const U = window._waterUniforms;
     if (!U) return null;
-    const OUT = 32000, IN = 1790;           // 内側の穴は波の水面（±1800m の四角）の少し内側
-    const shape = new THREE.Shape();
-    shape.moveTo(-OUT, -OUT); shape.lineTo(OUT, -OUT); shape.lineTo(OUT, OUT); shape.lineTo(-OUT, OUT); shape.lineTo(-OUT, -OUT);
-    const hole = new THREE.Path();
-    hole.moveTo(-IN, -IN); hole.lineTo(-IN, IN); hole.lineTo(IN, IN); hole.lineTo(IN, -IN); hole.lineTo(-IN, -IN);
-    shape.holes.push(hole);
-    const geo = new THREE.ShapeGeometry(shape);
-    geo.rotateX(-Math.PI / 2);
+    // 遠くほど粗い格子の水面（波の水面の四角 ±1800m の少し内側から、±32km まで）。
+    // 大きな三角形 1 枚で張ると、頂点ごとに計算する対数深度が三角形の内側で大きくずれて、
+    // 波の水面との継ぎ目で前後が入れ替わる（細い黒い線が出る）。そのため距離に応じた細かさの格子にする
+    const pos = [], idx = [];
+    const addPatch = (x0, z0, x1, z1, cell) => {
+        const nx = Math.max(1, Math.round((x1 - x0) / cell)), nz = Math.max(1, Math.round((z1 - z0) / cell)), base = pos.length / 3;
+        for (let j = 0; j <= nz; j++) for (let i = 0; i <= nx; i++) pos.push(x0 + (x1 - x0) * i / nx, 0, z0 + (z1 - z0) * j / nz);
+        for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) { const a = base + j * (nx + 1) + i, b = a + 1, c = a + nx + 1, d = c + 1; idx.push(a, c, b, b, c, d); }
+    };
+    // 内側 r0〜外側 r1 の四角い輪（r0・r1 は cell の倍数。輪どうしは少し重ねる：同じ色なので重なっても見えない）
+    const addRing = (r0, r1, cell) => {
+        addPatch(-r1, -r1, r1, -r0, cell); addPatch(-r1, r0, r1, r1, cell);
+        addPatch(-r1, -r0, -r0, r0, cell); addPatch(r0, -r0, r1, r0, cell);
+    };
+    addRing(1680, 4200, 120); addRing(3600, 12000, 600); addRing(10000, 32000, 2000);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setIndex(pos.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(idx, 1) : new THREE.Uint16BufferAttribute(idx, 1));
     const mat = new THREE.ShaderMaterial({
         uniforms: {
             deepColor: U.deepColor, shallowColor: U.shallowColor, sunDir: U.sunDir, sunColor: U.sunColor,
             waterFogColor: U.waterFogColor, waterFogDensity: U.waterFogDensity, uBloomDark: U.uBloomDark,
-            seabedTex: U.seabedTex, seabedRect: U.seabedRect,
         },
+        // 深度は地形・船・近くの水面と同じ対数深度（04-scene-and-water-init.js の水面と同じ式）にそろえる。
+        // 通常の深度のままだと、遠くでは地形の海底（対数深度）のほうが手前と判定されて、水面を突き抜けて見える
         vertexShader: `
+            #ifdef USE_LOGDEPTHBUF
+                uniform float logDepthBufFC;
+            #endif
             varying vec3 vW;
-            void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+            void main() {
+                vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz;
+                gl_Position = projectionMatrix * viewMatrix * w;
+                #ifdef USE_LOGDEPTHBUF
+                    if (projectionMatrix[2][3] == -1.0) {
+                        gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
+                        gl_Position.z *= gl_Position.w;
+                    }
+                #endif
+            }`,
         fragmentShader: `
             uniform vec3 deepColor, shallowColor, sunDir, sunColor, waterFogColor;
             uniform float waterFogDensity, uBloomDark;
-            uniform sampler2D seabedTex; uniform vec4 seabedRect;
             varying vec3 vW;
             void main() {
                 if (uBloomDark > 0.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
                 vec3 viewDir = normalize(cameraPosition - vW);
                 vec3 n = vec3(0.0, 1.0, 0.0);
+                // 遠くは斜めに見るので、浅い海でも海底は透けない：普通の海の色（近くの水面の端も同じ色へ戻してある）
                 vec3 base = mix(deepColor, shallowColor, 0.6);
-                // 浅い所は海底が透ける（近くの水面と同じ絵を使う）
-                if (seabedRect.w > 0.5) {
-                    vec2 suv = (vW.xz - seabedRect.xy) / seabedRect.z;
-                    if (suv.x > 0.001 && suv.y > 0.001 && suv.x < 0.999 && suv.y < 0.999) {
-                        vec4 sb = texture2D(seabedTex, suv);
-                        float sd = sb.a * 200.0;
-                        float vis = pow(clamp(1.0 - sd / 200.0, 0.0, 1.0), 1.8) * 0.9;
-                        // 絵の端（計算した範囲の外側）へ向かって、少しずつ普通の海の色へ戻す（急に色が変わらないように）
-                        vis *= smoothstep(0.0, 0.18, min(min(suv.x, suv.y), min(1.0 - suv.x, 1.0 - suv.y)));
-                        vec3 trans = exp(-sd * vec3(0.060, 0.022, 0.016));
-                        float lum = dot(shallowColor, vec3(0.3, 0.5, 0.2));
-                        base = mix(base, sb.rgb * lum * 4.0 * trans + shallowColor * (1.0 - trans) * 0.8, vis);
-                    }
-                }
                 float fresnel = pow(1.0 - max(0.0, dot(n, viewDir)), 4.0);
                 vec3 skyRefl = vec3(0.30, 0.52, 0.82);
                 vec3 col = mix(base, skyRefl, 0.12 + fresnel * 0.5);
@@ -849,6 +858,9 @@ function _trFarWaterMesh() {
                 float fd = length(vW - cameraPosition) * waterFogDensity;
                 col = mix(col, waterFogColor, clamp(1.0 - exp(-fd * fd), 0.0, 1.0));
                 gl_FragColor = vec4(col, 1.0);
+                // 近くの水面（04-scene-and-water-init.js）と同じ変換（これが無いと、遠くの海だけ暗い紺色になる）
+                #include <tonemapping_fragment>
+                #include <encodings_fragment>
             }`,
     });
     _trFarWater = new THREE.Mesh(geo, mat);
@@ -865,7 +877,7 @@ function _trFarWaterUpdate() {
     if (!show && m.parent) m.parent.remove(m);
     m.visible = show;
     // 波の水面と同じ所（船について動く）。高さは波の水面の平均の高さ
-    if (show && typeof waterMesh !== 'undefined' && waterMesh) m.position.set(waterMesh.position.x, waterMesh.position.y - 0.05, waterMesh.position.z);
+    if (show && typeof waterMesh !== 'undefined' && waterMesh) m.position.set(waterMesh.position.x, waterMesh.position.y - 0.3, waterMesh.position.z);
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -919,6 +931,9 @@ function _brkMaterial() {
     return new THREE.ShaderMaterial({
         uniforms: { uSize: { value: 26 }, uScale: { value: 400 } },
         vertexShader: `
+            #ifdef USE_LOGDEPTHBUF
+                uniform float logDepthBufFC;
+            #endif
             attribute float aAlpha;
             varying float vA;
             uniform float uSize, uScale;
@@ -927,6 +942,12 @@ function _brkMaterial() {
                 vA = aAlpha;
                 gl_PointSize = aAlpha <= 0.001 ? 0.0 : min(160.0, uSize * uScale / max(1.0, -mv.z));
                 gl_Position = projectionMatrix * mv;
+                #ifdef USE_LOGDEPTHBUF
+                    if (projectionMatrix[2][3] == -1.0) {         // 地形・水面と同じ対数深度
+                        gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
+                        gl_Position.z *= gl_Position.w;
+                    }
+                #endif
             }`,
         fragmentShader: `
             varying float vA;
