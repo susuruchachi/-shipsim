@@ -91,7 +91,9 @@
 //               ずれた所で回したときは、入口の前の線の上へ寄せてから入る・出る。離岸は今付けている舷のまま計画する。
 // 0.03.013.002  自動の離着岸の前後の操船：止まるのに要る距離を見て早めに逆をかける（大きな船がドックの中で前後に
 //               行ったり来たりしていた）。前後に引くタグも、行き過ぎそうなら逆へ引いて止める。
-var APP_VERSION = '0.03.013.002';
+// 0.03.013.003  自動航行のパネルを小さくたたんでいると、目的地を選んでも「今すぐ出港」「やめる」「再開」のボタンが
+//               出なかったのを直す（たたんでいても、決めることが待っているときはボタンを出す）。
+var APP_VERSION = '0.03.013.003';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

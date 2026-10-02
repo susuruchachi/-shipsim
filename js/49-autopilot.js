@@ -1583,7 +1583,20 @@ function renderAutopilotPanel() {
         else if (autopilot.planning) line = '🧭 航路を計算しています…';
         else if (autopilot.resume || (ha && ha.resume)) line = '⏸ 止まっています';
         else line = autopilot.msg || (ha && ha.msg) || '';
-        uiSetHTML(el, `<div class="ap-line">${fold}<span>${line}</span></div>`);
+        // 決めることが待っているとき（出港の用意・止まっている）は、たたんでいてもボタンを出す
+        //（以前は 1 行の説明だけで、「今すぐ出港」「再開」などのボタンが出なかった）
+        const acts = [];
+        if (!autopilot.active && !(ha && ha.mode)) {
+            if (autopilot.planning) acts.push('<button onclick="autopilotStop(\'\')">やめる</button>');
+            else if (autopilot.pendingDepart) {
+                line = `⚓ ${autopilot.pendingDepart.name || ''} へ：STAND BY で出港`;
+                acts.push('<button class="on" onclick="autopilotDepartNow()">▶ 今すぐ出港</button>', '<button onclick="autopilotCancelDepart()">やめる</button>');
+            } else {
+                if (autopilot.resume) acts.push('<button class="on" onclick="autopilotResume()">▶ 再開</button>');
+                if (ha && ha.resume) acts.push(`<button class="on" onclick="harborAutoResume()">▶ ${ha.resume.mode === 'berth' ? '着岸' : '離岸'}を再開</button>`);
+            }
+        }
+        uiSetHTML(el, `<div class="ap-line">${fold}<span>${line}</span></div>${acts.length ? `<div class="ap-row">${acts.join('')}</div>` : ''}`);
         return;
     }
     if (ha && ha.mode) {
