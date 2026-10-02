@@ -15,9 +15,9 @@ let globalSmokeGeo, globalSmokeMat, globalSmokePoints;
 // その端末のいちばん高い画質（内部解像度の倍率＝devicePixelRatio、2 まで）での見た目を基準にし、
 // 画質を下げても画面に対する大きさが変わらないようにする
 function particleResK() {
-    const el = (typeof renderer !== 'undefined' && renderer) ? renderer.domElement : null;
-    if (!el || !el.clientHeight) return 1;
-    const pr = el.height / el.clientHeight;                          // 今の内部解像度の倍率
+    // （以前は描画の画面の高さ（clientHeight）を毎回読んでいて、そのたびに画面の配置の計算が走り重かった。
+    //   内部解像度の倍率は renderer がそのまま持っている）
+    const pr = (typeof renderer !== 'undefined' && renderer && renderer.getPixelRatio) ? renderer.getPixelRatio() : 1;
     const full = Math.min(2, window.devicePixelRatio || 1);          // この端末の「高」の倍率
     return Math.max(0.2, Math.min(2, pr / full));
 }
@@ -655,7 +655,10 @@ function animateWakeParticles(t, dt) {
         // 引き波の帯そのもの)だけ寿命を約3倍に伸ばす(0.14→0.047)。spray(1)・
         // 波切りストリーク(2)は勢いよく飛び散って落ちる一瞬の水しぶきなので、
         // 「長持ち」の対象ではなく従来のまま。
-        ageAttr.array[i] += dt * (d.type === 0 ? 0.047 : (d.type === 2 ? 0.55 : 0.75)) * (0.8 + d.rand * 0.4);
+        // （寿命を半分以下に：泡 約21秒→約9秒、しぶき 約1.3秒→約0.6秒、波切りの筋 約1.8秒→約0.8秒。
+        //   長く残る泡が引き波に沿って数千個たまり、1 個ずつの波の高さの計算と、重なった大きな半透明の点の
+        //   描画で、引き波が伸びるほど重くなっていた）
+        ageAttr.array[i] += dt * (d.type === 0 ? 0.11 : (d.type === 2 ? 1.25 : 1.6)) * (0.8 + d.rand * 0.4);
         if (isBallistic) {
             // spray / 波切りストリーク は上昇後に重力で落ちる弾道運動。
             // 波切りストリークは「水の重いシート」を表現するため、通常スプレーより

@@ -542,6 +542,7 @@ function createWater() {
         bowFullnessU:   { value: 1.0 },
         sternFullnessU: { value: 1.0 },
         wakeCount:      { value: 0 },
+        wakeBox:        { value: new THREE.Vector4(0, 0, -1, -1) },   // 引き波が届く範囲（x0, z0, x1, z1。17-main-loop.js）
         wakeXZTH:       { value: Array.from({ length: MAX_WAKE }, () => new THREE.Vector4()) },
         wakeSpeed:      { value: new Float32Array(MAX_WAKE) },
     });
@@ -997,6 +998,7 @@ function createWater() {
             uniform float     bowFullnessU;
             uniform float     sternFullnessU;
             uniform int       wakeCount;
+            uniform vec4      wakeBox;
             uniform float     uBloomDark;   // ブルーム抽出パス（黒く塗るだけ）では引き波・法線の計算を省く
             uniform vec4      wakeXZTH[MAX_WAKE];   // x, z, t, headingRad
             uniform float     wakeSpeed[MAX_WAKE];
@@ -1402,9 +1404,12 @@ function createWater() {
                     // （ブルーム抽出パスでは省く：窓の光を隠すのは大きなうねりで、
                     //  引き波の高さの差は見分けがつかないため）
                     // ここがいわゆる「引き波系」で、軽量化しても見た目の正確さを保つ部分。
-                    vec2 wk = wakeHF(wp.xz, time);
-                    oceanH += wk.x;
-                    foam = max(foam, wk.y);
+                    // 引き波が届く範囲の外の頂点（大半）は、32 本の波源を調べること自体をしない
+                    if (wp.x >= wakeBox.x && wp.x <= wakeBox.z && wp.z >= wakeBox.y && wp.z <= wakeBox.w) {
+                        vec2 wk = wakeHF(wp.xz, time);
+                        oceanH += wk.x;
+                        foam = max(foam, wk.y);
+                    }
                 }
 
                 wp.y += oceanH + sweH;

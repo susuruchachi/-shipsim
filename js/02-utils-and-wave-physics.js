@@ -213,9 +213,11 @@ function sanitizePhysics() {
     }
 }
 
+const _wakeHRes = { y: 0, foam: 0 };   // 使い回す（呼び出し側は .y をすぐ読むだけ）
 function getWakeHeight(x, z, t) {
     const historyLen = shipHistory.length;
-    if (historyLen < 2) return { y: 0, foam: 0 };
+    _wakeHRes.y = 0; _wakeHRes.foam = 0;
+    if (historyLen < 2) return _wakeHRes;
 
     let wakeY = 0, wakeFoam = 0;
     const scaleRatio = physics.scale / 12.0;
@@ -238,17 +240,32 @@ function getWakeHeight(x, z, t) {
     // 引き波の発生源が船首から後ろにずれて見える原因だった。
     const L = hullHalfLen;
 
-    for (let i = 0; i < historyLen; i++) {
+    const bandFull = Math.sqrt(Math.max(physics.bowFullness, physics.sternFullness)) * pitchWavelenScale * 1.5;
+
+    // 新しい方から見ていき、15秒より古くなったら打ち切る（履歴は古い順に並んでいる）。
+    // 泡の粒子ごとに呼ばれるので、航跡が伸びて履歴がたまるほど重くなっていた
+    for (let i = historyLen - 1; i >= 0; i--) {
         const p = shipHistory[i];
+        const dt = t - p.t;
+        if (dt > 15.0) break;
+        if (dt <= 0) continue;
         const absSpeed = Math.abs(p.speed);
         if (absSpeed < 0.5) continue;
 
-        const dt = t - p.t;
-        if (dt <= 0 || dt > 15.0) continue;
-
         // Quick bounding-box reject before computing per-source trig
         const dxp = x - p.x, dzp = z - p.z;
-        if (dxp * dxp + dzp * dzp > (maxDist + L) * (maxDist + L)) continue;
+        const dp2 = dxp * dxp + dzp * dzp;
+        if (dp2 > (maxDist + L) * (maxDist + L)) continue;
+
+        // 波が立つのは波源からの「波の輪」（半径 waveSpeed·dt、幅 ±1.5波長）の中だけ。
+        // 船首・船尾の波源は中心から±L なので、どちらの輪にも入らなければ寄与なし
+        // （GPU版 wakeContribution と同じ先回りの判定）
+        {
+            const ring = (3.0 + absSpeed * 0.2) * scaleRatio * dt;
+            const band = (5.0 + absSpeed * 0.3) * scaleRatio * bandFull;
+            const dp = Math.sqrt(dp2);
+            if (dp + L < ring - band || dp - L > ring + band) continue;
+        }
 
         // 履歴1件ごとの向きの sin/cos は変わらないので、1回だけ計算して持っておく
         if (p._sinH === undefined) { p._sinH = Math.sin(p.headingRad); p._cosH = Math.cos(p.headingRad); }
@@ -256,10 +273,11 @@ function getWakeHeight(x, z, t) {
         const cosH = p._cosH;
 
         // v103/v104: 船体内側マスク（実喫水線輪郭ベース）
+        // 半幅の探索は、船体の前後の範囲内のときだけ行う（範囲外ではマスクは 1）
         const lateralDist = Math.abs(dxp * cosH - dzp * sinH);
         const alongDist = dxp * sinH + dzp * cosH;
         let hullMask = 1.0;
-        if (hullReady) {
+        if (hullReady && Math.abs(alongDist) < hullHalfLen * 1.08) {
             const alongNorm = THREE.MathUtils.clamp(alongDist / Math.max(0.01, hullHalfLen), -1, 1);
             const hullW = _hullHalfWidthAtNorm(alongNorm) * physics.scale;
             const withinHullLen = 1.0 - smoothstepJS(hullHalfLen * 0.98, hullHalfLen * 1.08, Math.abs(alongDist));
@@ -343,7 +361,8 @@ function getWakeHeight(x, z, t) {
             }
         }
     }
-    return { y: wakeY, foam: Math.min(1.0, wakeFoam) };
+    _wakeHRes.y = wakeY; _wakeHRes.foam = Math.min(1.0, wakeFoam);
+    return _wakeHRes;
 }
 
 // GLSLのsmoothstepと同じ定義（THREE.MathUtils.smoothstepは引数順が異なるため専用ヘルパーを用意）

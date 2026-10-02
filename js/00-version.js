@@ -116,7 +116,9 @@
 // 0.03.013.014  画質（内部解像度）を変えると排煙・喫水線のしぶき・岩のしぶきの大きさが変わっていたのを直す（端末のいちばん高い画質の見た目にそろえる）。
 // 0.03.013.015  岩のしぶきを、排煙のように薄い幕が一瞬だけ広くバッと立つ形に（濃い塊にしない）。浅瀬の白い泡は、ごく浅い帯で波の山のときだけ薄く。
 //               浅瀬の白波の点は遠くだけ・小さく。しぶき・泡・白波・タグの排煙を、曇天や夜には海の泡の色に合わせて暗く（白く光って見えないように）。
-var APP_VERSION = '0.03.013.015';
+// 0.03.013.016  軽量化：引き波が伸びると重くなるのを直す（泡の粒子の引き波の高さの計算を間引き・速く、海面の引き波は届く範囲の頂点だけ計算）。
+//               船内判定の地図を毎秒作り直していたのを直す。喫水線のしぶき・泡の寿命を半分以下に。
+var APP_VERSION = '0.03.013.016';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

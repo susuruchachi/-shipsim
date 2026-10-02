@@ -118,7 +118,7 @@ const perf = {
     // 3なら3フレームに1回だけ計算し、それ以外のフレームは前回の速度で
     // そのまま位置を進める（波の上下運動はゆっくりなので、数フレーム間引いても
     // 見た目にはほぼ気付かれない）。
-    foamUpdateInterval: 1
+    foamUpdateInterval: 4
 };
 let normalsFrameCounter = 0;
 
@@ -147,12 +147,16 @@ const PERF_PRESETS = {
     // 2.5〜3台あるため、上限1.5だと内部解像度が画面ネイティブより低いまま引き伸ばされ、
     // 全体的に少しぼやけた/粗い見え方になっていた(実際に使われる値はこことdevicePixelRatio
     // のMath.minなので、DPIが低い端末では今まで通り軽いまま)。
-    high:    { smokeCap: 2000, normalsInterval: 1, historyMax: 60, pixelRatio: 2.0,  shadowsEnabled: true,  shadowMapSize: 2048, foamUpdateInterval: 1 },
-    medium:  { smokeCap: 1000, normalsInterval: 3, historyMax: 35, pixelRatio: 1.0,  shadowsEnabled: true,  shadowMapSize: 2048, foamUpdateInterval: 2 },
-    low:     { smokeCap: 600,  normalsInterval: 4, historyMax: 22, pixelRatio: 0.85, shadowsEnabled: true,  shadowMapSize: 1024, foamUpdateInterval: 3 },
-    verylow: { smokeCap: 300,  normalsInterval: 6, historyMax: 14, pixelRatio: 0.75, shadowsEnabled: true,  shadowMapSize: 512,  foamUpdateInterval: 4 },
+    // （引き波の泡の高さ（foamUpdateInterval）を毎フレーム計算していた「高」では、伸びた引き波の泡の数だけ
+    //   1 フレームに 500 回以上も引き波の高さを計算し、引き波が伸びるほど重くなっていた。泡の上下はゆっくりなので
+    //   数フレームに 1 回で十分。引き波の記録（historyMax）は 0.4 秒おきで、15 秒より古いものは波を立てない
+    //   （02 / 04）ので、40 件（16 秒）より多く持っても使われない）
+    high:    { smokeCap: 2000, normalsInterval: 1, historyMax: 40, pixelRatio: 2.0,  shadowsEnabled: true,  shadowMapSize: 2048, foamUpdateInterval: 4 },
+    medium:  { smokeCap: 1000, normalsInterval: 3, historyMax: 35, pixelRatio: 1.0,  shadowsEnabled: true,  shadowMapSize: 2048, foamUpdateInterval: 5 },
+    low:     { smokeCap: 600,  normalsInterval: 4, historyMax: 22, pixelRatio: 0.85, shadowsEnabled: true,  shadowMapSize: 1024, foamUpdateInterval: 6 },
+    verylow: { smokeCap: 300,  normalsInterval: 6, historyMax: 14, pixelRatio: 0.75, shadowsEnabled: true,  shadowMapSize: 512,  foamUpdateInterval: 8 },
     // 内部解像度をさらに落として(0.55倍)CSSで引き延ばす、最も軽い設定。影も完全にOFF。
-    ultralow:{ smokeCap: 150,  normalsInterval: 8, historyMax: 10, pixelRatio: 0.55, shadowsEnabled: false, shadowMapSize: 512,  foamUpdateInterval: 4 }
+    ultralow:{ smokeCap: 150,  normalsInterval: 8, historyMax: 10, pixelRatio: 0.55, shadowsEnabled: false, shadowMapSize: 512,  foamUpdateInterval: 8 }
 };
 
 function applyPerfPreset(name) {

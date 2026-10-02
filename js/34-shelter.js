@@ -39,22 +39,29 @@ window.shelterUniforms = shelterUniforms;
 window.shelterIndoor = 0;   // 0（屋外）〜1（船内）
 
 const shelter = {
-    key: '', data: null, nx: 0, nz: 0, minX: 0, minZ: 0, cell: 1,
-    gen: null, pendingKey: '', keyCheckAt: 0, lastT: -1,
+    key: null, data: null, nx: 0, nz: 0, minX: 0, minZ: 0, cell: 1,
+    gen: null, pendingKey: null, keyCheckAt: 0, lastT: -1,
 };
 const _shInv = new THREE.Matrix4();
 const _shRel = new THREE.Matrix4();
 const _shV = new THREE.Vector3();
 
 // 地図を作り直すべきかの目印：モデルと、船に対するモデルの置き方
+// （置き方は数で持って、ごくわずかな差は同じとみなす。文字にして比べると
+//   計算の誤差で 0.000 と -0.000 が入れ替わり、毎秒作り直してしまっていた）
 function _shelterKey() {
-    if (typeof importedModelGroup === 'undefined' || !importedModelGroup || !shipGroup) return '';
+    if (typeof importedModelGroup === 'undefined' || !importedModelGroup || !shipGroup) return null;
     shipGroup.updateWorldMatrix(true, false);
     importedModelGroup.updateWorldMatrix(true, false);
     _shRel.copy(shipGroup.matrixWorld).invert().multiply(importedModelGroup.matrixWorld);
     let n = 0;
     importedModelGroup.traverse((o) => { if (o.isMesh) n++; });
-    return importedModelGroup.uuid + ':' + n + ':' + _shRel.elements.map(v => v.toFixed(3)).join(',');
+    return { id: importedModelGroup.uuid + ':' + n, m: _shRel.elements.slice() };
+}
+function _shelterKeySame(a, b) {
+    if (!a || !b || a.id !== b.id) return false;
+    for (let i = 0; i < 16; i++) if (Math.abs(a.m[i] - b.m[i]) > 2e-3) return false;
+    return true;
 }
 
 // 地図作り（少しずつ進める）
@@ -167,7 +174,7 @@ function updateShelter(t) {
     if (t >= shelter.keyCheckAt) {
         shelter.keyCheckAt = t + 1.0;
         const key = _shelterKey();
-        if (key && key !== shelter.key && key !== shelter.pendingKey) {
+        if (key && !_shelterKeySame(key, shelter.key) && !_shelterKeySame(key, shelter.pendingKey)) {
             shelter.pendingKey = key;
             shelter.gen = _shelterBuild();
         }
@@ -179,7 +186,7 @@ function updateShelter(t) {
         if (r.done) {
             shelter.gen = null;
             shelter.key = shelter.pendingKey;
-            shelter.pendingKey = '';
+            shelter.pendingKey = null;
             if (r.value) _shelterInstall(r.value);
         }
     }

@@ -882,6 +882,12 @@ function updateWaterReflection() {
     // 反射カメラの絵には描かない（反射では見当違いの所で隠れてしまうため）
     const haloWasVisible = (typeof glowHaloPoints !== 'undefined' && glowHaloPoints) ? glowHaloPoints.visible : null;
     if (haloWasVisible !== null) glowHaloPoints.visible = false;
+    // 引き波の泡・スクリューの泡は水面に浮いているので、反射の絵には描かない
+    // （引き波が伸びると数千個になり、反射を撮るたびにもう一度描くぶん重くなっていた）
+    const wakePtsWas = (typeof wakeParticlePoints !== 'undefined' && wakeParticlePoints) ? wakeParticlePoints.visible : null;
+    if (wakePtsWas !== null) wakeParticlePoints.visible = false;
+    const bubPtsWas = (typeof bubblePoints !== 'undefined' && bubblePoints) ? bubblePoints.visible : null;
+    if (bubPtsWas !== null) bubblePoints.visible = false;
 
     try {
         _reflHideSmall(waterReflectionCamera, waterReflectionRT.height, -_reflClipPlane.constant);
@@ -898,6 +904,8 @@ function updateWaterReflection() {
         // 例外が発生してもクリップ平面・waterMesh の状態を必ず元に戻す
         waterMesh.visible = wasVisible;
         if (haloWasVisible !== null) glowHaloPoints.visible = haloWasVisible;
+        if (wakePtsWas !== null) wakeParticlePoints.visible = wakePtsWas;
+        if (bubPtsWas !== null) bubblePoints.visible = bubPtsWas;
         _reflShowSmall();
         renderer.clippingPlanes = [];
         renderer.localClippingEnabled = false;
@@ -1067,8 +1075,15 @@ function updateWater(t) {
     const MAX_WAKE = window._MAX_WAKE || 32;
     const wArr = uni.wakeXZTH.value;
     const wSpd = uni.wakeSpeed.value;
-    const wCount = Math.min(shipHistory.length, MAX_WAKE);
-    const startIdx = shipHistory.length - wCount;
+    // 波を立てない履歴（止まっている・15 秒より古い）は渡さない（GPU の頂点ごとの繰り返しを減らす）
+    const _wkLive = [];
+    for (let i = shipHistory.length - 1; i >= 0 && _wkLive.length < MAX_WAKE; i--) {
+        const p = shipHistory[i], age = t - p.t;
+        if (age > 15) break;
+        if (Math.abs(p.speed) >= 0.5 && age > 0) _wkLive.push(p);
+    }
+    _wkLive.reverse();
+    const wCount = _wkLive.length;
     // 各履歴点は記録時点の「重心」ワールド座標(p.x/p.z)。GPU側シェーダーは
     // これを船体ローカル原点として扱いbow/stern位置を計算するため、
     // cgOffset.x/zが(0,0)でないと解析的な引き波(SWE無効時のフォールバック)
@@ -1086,8 +1101,12 @@ function updateWater(t) {
     // 座標系側にryが織り込まれていたため、素通しでも結果的に辻褄が合って
     // いたが、v119でスキャン座標系からryを除去したことで、ここも明示的な
     // 補正が必要になった）。
+    // 引き波が届く範囲（すべての波源の、波源から maxDist＋船の半長の円を囲む四角）。
+    // 頂点シェーダーはこの外の頂点では引き波を計算しない（大半の頂点は引き波から遠い）
+    const _wkReach = Math.sqrt(8000) * (uni.physScaleU.value / 12) + (uni.hullHalfLenU.value || 0) + 5;
+    let _bx0 = Infinity, _bz0 = Infinity, _bx1 = -Infinity, _bz1 = -Infinity;
     for (let i = 0; i < wCount; i++) {
-        const p = shipHistory[startIdx + i];
+        const p = _wkLive[i];
         let px = p.x, pz = p.z;
         if (typeof _hullOriginWorld === 'function') {
             const _o = _hullOriginWorld(p.x, p.z, p.headingRad, _wakePhysScale);
@@ -1096,7 +1115,10 @@ function updateWater(t) {
         const _wRad = (typeof _wakeAxisRad === 'function') ? _wakeAxisRad(p.headingRad) : p.headingRad;
         wArr[i].set(px, pz, p.t, _wRad);
         wSpd[i] = p.speed;
+        _bx0 = Math.min(_bx0, px - _wkReach); _bx1 = Math.max(_bx1, px + _wkReach);
+        _bz0 = Math.min(_bz0, pz - _wkReach); _bz1 = Math.max(_bz1, pz + _wkReach);
     }
+    if (uni.wakeBox) { if (wCount) uni.wakeBox.value.set(_bx0, _bz0, _bx1, _bz1); else uni.wakeBox.value.set(0, 0, -1, -1); }
     uni.wakeCount.value = wCount;
 
     // ── 船体に密着した波しぶき帯用のウォーターラインポリゴン更新 ──
