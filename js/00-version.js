@@ -99,7 +99,8 @@
 //               そこから船の外形の半幅＋1.5m に付ける（オリンピック：QEII で 8.5m → 3m ほど、46 番で 1m）。
 // 0.03.013.006  遠くの海が地形の海底（灰色の模様）に見えていたのを直す：遠くの水面（44-world-terrain.js）に対数深度と
 //               色の変換（トーンマッピング・出力）を入れ、距離に応じた細かさの格子にし、海底を透かさない普通の海の色にした。
-var APP_VERSION = '0.03.013.006';
+// 0.03.013.007  海底の透け方を弱める（水深 12m より浅い所だけ、うっすら）。海底のまだら模様が海面に出ない。
+var APP_VERSION = '0.03.013.007';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

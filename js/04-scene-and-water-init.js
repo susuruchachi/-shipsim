@@ -1769,7 +1769,8 @@ function createWater() {
                         vec2 wob = n.xz * min(sd0, 40.0) * 0.15 / seabedRect.z;     // ゆらぎ[m]→テクスチャ座標
                         vec4 sb = texture2D(seabedTex, suv + wob);
                         float sd = sb.a * 200.0;
-                        float vis = pow(clamp(1.0 - sd / 200.0, 0.0, 1.0), 1.8) * 0.9;
+                        // 海底は水深 12m より浅い所でだけ、うっすら（深さ 200m まで見えていた頃は海面が透けすぎで、まだら模様も目立った）
+                        float vis = pow(clamp(1.0 - sd / 12.0, 0.0, 1.0), 2.0) * 0.35;
                         // 絵の端（計算した範囲の外側）へ向かって、少しずつ普通の海の色へ戻す（44-world-terrain.js の遠くの水面と同じ）
                         vis *= smoothstep(0.0, 0.18, min(min(suv.x, suv.y), min(1.0 - suv.x, 1.0 - suv.y)));
                         // 波の水面の端（±1.8km）に近づくほど普通の海の色へ：その外の遠くの水面（44-world-terrain.js）は
