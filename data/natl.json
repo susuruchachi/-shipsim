@@ -1,0 +1,10 @@
+{
+ "lat0": 24.30208333333333,
+ "lat1": 61.00208333333333,
+ "lon0": -81.99791666666667,
+ "lon1": 3.0020833333333314,
+ "rows": 1469,
+ "cols": 3401,
+ "cell": 0.025,
+ "source": "NOAA NCEI ETOPO 2022 15 arc-second (public domain), via ERDDAP coastwatch.pfeg.noaa.gov, every 6th point (1.5 arc-minute)"
+}

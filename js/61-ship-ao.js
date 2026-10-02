@@ -126,7 +126,7 @@ function _aoPatchMaterial(mat) {
             .replace(/\}\s*$/, '    if (uAODebug > 0.5) gl_FragColor = vec4(vec3(vSkyAO), 1.0);\n}\n');
     };
     mat.customProgramCacheKey = function () { return 'skyAO|' + ((typeof prevKey === 'function') ? prevKey.call(this) : ''); };
-    mat.defaultAttributeValues = Object.assign({}, mat.defaultAttributeValues || {}, { aSky: 1 });
+    mat.defaultAttributeValues = Object.assign({}, mat.defaultAttributeValues || {}, { aSky: [1] });
     mat.needsUpdate = true;
 }
 function updateShipAO() {

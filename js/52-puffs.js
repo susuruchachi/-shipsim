@@ -157,7 +157,10 @@ function _sprayScanStep(budget) {
             }
             if (!deep) continue;
             const L = Math.hypot(wx, wz) || 1;
-            sc.out.push({ x, z, nx: wx / L, nz: wz / L, rock: h > 2 || deep > 6 ? 1 : 0.5, prev: 0, cool: 0 });
+            // 作り込んだ港の中（岸壁・ドック）か：港の中は波が穏やかなので、もやは掛けない
+            let hd = false;
+            if (typeof _rwDetailOf === 'function' && typeof _RW !== 'undefined' && _RW && _RW.hd) { const ll = worldUnitToLatLon(worldLocalToUnit(x, z)); hd = !!_rwDetailOf(ll.lat, ll.lon); }
+            sc.out.push({ x, z, nx: wx / L, nz: wz / L, rock: h > 2 || deep > 6 ? 1 : 0.5, prev: 0, cool: 0, hd });
         }
         sc.j++;
     }
@@ -234,22 +237,49 @@ function _rockFxUpdate(t, dt) {
 }
 // 波が 1 つ当たったときのしぶき（k：強さ 0〜3）。
 // 煙突の排煙のように、薄いしぶきの幕が一瞬だけ広くバッと立って消える（ふわっとした粒を広く・薄く・短く）。
-// 細かい水滴（喫水線のしぶきと同じ粒）は少しだけ。濃い塊にならないよう、どれも薄く
+// 同じ所・同じ大きさで繰り返し出ると、そこに灯りがあるように見えるので、出る所（岸に沿って・沖へ）・
+// 大きさ・寿命を毎回ばらつかせる。細かい水滴（喫水線のしぶきと同じ粒）は光の点に見えやすいので、強い時だけ少し
 function _rockSplash(p, k, rough, t, wy) {
-    const up = 2.5 + rough * 1.6 * k;                    // 立ち上がる速さ[m/s]
+    const sz = 0.45 + Math.random() * 1.3;              // 大きさのばらつき
+    const up = (2.5 + rough * 1.6 * k) * (0.7 + 0.5 * sz);   // 立ち上がる速さ[m/s]
     const j = () => Math.random() - 0.5;
     const tx = -p.nz, tz = p.nx;                          // 岸に沿う向き
-    const w = 10 + 6 * k;                                 // 岸に沿って広がる幅[m]
-    for (let q = 0, n = 3 + Math.round(2 * k); q < n; q++) {
-        const u = j() * w, c = 0.88 + Math.random() * 0.08;
-        puffEmit({ x: p.x + p.nx * (2 + Math.random() * 4) + tx * u, y: wy + 0.5, z: p.z + p.nz * (2 + Math.random() * 4) + tz * u,
+    // 出る所：調べた点（20m おき）から岸に沿って・沖へずらす
+    const ox = p.x + tx * j() * SPRAY_STEP * 1.2 + p.nx * Math.random() * 5, oz = p.z + tz * j() * SPRAY_STEP * 1.2 + p.nz * Math.random() * 5;
+    const w = (6 + 6 * k) * sz;                           // 岸に沿って広がる幅[m]
+    for (let q = 0, n = 2 + Math.round((1 + 1.5 * k) * sz); q < n; q++) {
+        const u = j() * w, c = 0.86 + Math.random() * 0.08;
+        puffEmit({ x: ox + p.nx * (1 + Math.random() * 4) + tx * u, y: wy + 0.5, z: oz + p.nz * (1 + Math.random() * 4) + tz * u,
             vx: p.nx * (0.5 + Math.random()) + tx * j() * 2, vy: up * (0.6 + Math.random() * 0.5), vz: p.nz * (0.5 + Math.random()) + tz * j() * 2,
-            life: 1.1 + Math.random() * 0.8, s0: 3 + 1.5 * k, s1: 10 + 6 * k, r: c, g: c, b: c, a: 0.16 + 0.05 * Math.min(2, k),
+            life: 0.5 + Math.random() * 0.9, s0: (2.5 + 1.5 * k) * sz, s1: (8 + 6 * k) * sz, r: c, g: c, b: c, a: (0.12 + 0.05 * Math.min(2, k)) * (0.7 + 0.5 * Math.random()),
             rise: 0, drag: 0.9, grav: 0.25 });
     }
-    for (let q = 0, n = 2 + Math.round(2 * k); q < n; q++)
-        _rockEmit(p.x + p.nx * 2 + tx * j() * w, wy + 0.3, p.z + p.nz * 2 + tz * j() * w,
-            p.nx * (1 + Math.random() * 1.5) + j() * 2, up * (0.6 + Math.random() * 0.6), p.nz * (1 + Math.random() * 1.5) + j() * 2, 1, t);
+    if (k > 1.2) for (let q = 0, n = Math.round(Math.random() * (k - 0.5)); q < n; q++)
+        _rockEmit(ox + p.nx * 2 + tx * j() * w, wy + 0.3, oz + p.nz * 2 + tz * j() * w,
+            p.nx * (1 + Math.random() * 1.5) + j() * 2, up * (0.5 + Math.random() * 0.6), p.nz * (1 + Math.random() * 1.5) + j() * 2, 1, t);
+}
+// 岩礁・波打ち際全体にかかる、砕けた波のもや（ぼやっと薄く、風下へ流れる）。
+// 波打ち際の点からでたらめに選んで（波が当たる向きの岸を多めに）、大きく薄い粒をゆっくり出し続ける
+function _reefHaze(t, dt, rough) {
+    const S = sprayState, N = S.pts.length;
+    S.hazeAcc = (S.hazeAcc || 0) + dt * Math.min(36, 4 + N * 0.015) * Math.min(1, (rough - 0.2) * 1.5);
+    if (S.hazeAcc > 6) S.hazeAcc = 6;
+    const wr = (physics.windDir || 0) * Math.PI / 180, wx = Math.sin(wr), wz = Math.cos(wr);
+    let tries = 12;
+    while (S.hazeAcc >= 1 && tries-- > 0) {
+        const p = S.pts[(Math.random() * N) | 0];
+        if (p.hd) { S.hazeAcc -= 0.5; continue; }
+        // 波は風上から来るので、沖が風上を向く岸ほど多く
+        if (Math.random() > 0.2 + 0.8 * Math.max(0, -(p.nx * wx + p.nz * wz))) continue;
+        S.hazeAcc -= 1;
+        const tx = -p.nz, tz = p.nx, u = (Math.random() - 0.5) * SPRAY_STEP * 1.5, o = Math.random() * 8 - 2;
+        const x = p.x + tx * u + p.nx * o, z = p.z + tz * u + p.nz * o;
+        const sz = (0.6 + Math.random() * 0.8) * (0.6 + 0.4 * Math.min(1.5, rough)) * (0.7 + 0.3 * p.rock), c = 0.84 + Math.random() * 0.08;
+        puffEmit({ x, y: getOceanHeight(x, z, t) + 1 + Math.random() * 2, z,
+            vx: p.nx * 0.4, vy: 0.4 + Math.random() * 0.6, vz: p.nz * 0.4,
+            life: 1.5 + Math.random() * 3.5, s0: 10 * sz, s1: 32 * sz, r: c, g: c, b: c, a: 0.04 + Math.random() * 0.035,
+            rise: 0.12, drag: 0.5, grav: 0 });
+    }
 }
 function updateShoreSpray(t, dt) {
     _rockFxUpdate(t, dt);
@@ -274,10 +304,13 @@ function updateShoreSpray(t, dt) {
         p.prev = wh;
         if (p.cool > t) continue;
         if (!crossed || budget <= 0) continue;
+        // 波が来るたび毎回ではなく、ときどき（同じ所で決まった間隔で光って見えないように）
+        if (Math.random() < 0.35) { p.cool = t + Math.random() * 2; continue; }
         budget--;
-        p.cool = t + 2.5;                                   // 同じ所は続けて打ち上げない
-        const k = Math.min(3, wh / Math.max(0.3, rough)) * p.rock;
+        p.cool = t + 1 + Math.random() * 4;                 // 同じ所は 1〜5 秒は打ち上げない
+        const k = Math.min(3, wh / Math.max(0.3, rough)) * p.rock * (0.6 + Math.random() * 0.6);
         _rockSplash(p, k, rough, t, getOceanHeight(p.x, p.z, t));
     }
+    _reefHaze(t, dt, rough);
 }
 window.updateShoreSpray = updateShoreSpray;

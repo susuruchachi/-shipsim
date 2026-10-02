@@ -154,7 +154,7 @@ function _trWorker() {
             postMessage({ id: q.id, which: q.which, H }, [H.buffer]);
         };`;
     terrain.worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
-    worldWorkerSync(terrain.worker);
+    worldWorkerSync(terrain.worker, terrain.rwWin = worldWorkerWindow());
     terrain.worker.onmessage = (ev) => _trOnHeights(ev.data);
     return terrain.worker;
 }
@@ -1263,6 +1263,14 @@ function updateWorldTerrain(t, dt) {
     // 船の位置をときどき覚えておく
     if (!(t - (terrain.lastSave || 0) < 5)) { terrain.lastSave = t; _worldSave(); }
     const cx = physics.cgWorldX || 0, cz = physics.cgWorldZ || 0;
+    // 北大西洋：地形のワーカーには船のまわりの地形だけを渡してあるので、船が離れたら渡し直す
+    if (_RW && _RW.grids && terrain.worker) {
+        const W = terrain.rwWin, ll = worldShipLatLon();
+        if (!W || Math.abs(ll.lat - W.c.lat) > 0.6 || Math.abs(ll.lon - W.c.lon) * Math.cos(ll.lat * Math.PI / 180) > 0.6) {
+            worldWorkerSync(terrain.worker, terrain.rwWin = worldWorkerWindow());
+            terrain._dirty = true;
+        }
+    }
     if (terrain._dirty || !terrain.center || Math.hypot(cx - terrain.center.x, cz - terrain.center.z) > TR_RECENTER) {
         terrain._dirty = false;
         _trUpdatePorts();
