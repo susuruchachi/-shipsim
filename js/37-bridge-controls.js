@@ -1002,6 +1002,13 @@ function _drawWheel(ctx, S, design, wheelDeg, rudder, order, text) {
         }
         ctx.fillStyle = '#6e7a86'; ctx.fillText('AZIMUTH', cx, cy + R * 0.42);
         ctx.textAlign = 'start';
+        // 今のポッドの向き（ポッドは決まった速さでしか回らないので、レバーに遅れて付いてくる）
+        const podAz = (typeof bridgeAzimuthLever === 'function' && bridgeAzimuthLever() !== null && typeof maneuverPodAzNow === 'function') ? maneuverPodAzNow() : null;
+        if (podAz !== null) {
+            const a = _deg(podAz);
+            ctx.strokeStyle = '#00ffcc'; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.sin(a) * R * 0.82, cy - Math.cos(a) * R * 0.82); ctx.stroke();
+        }
         // レバー
         ctx.save(); ctx.translate(cx, cy); ctx.rotate(rot);
         ctx.fillStyle = _chrome(ctx, -S * 0.03, 0, S * 0.03, -R);
@@ -1163,7 +1170,7 @@ function _setupWheelInput(cv) {
         if (d > Math.PI) d -= Math.PI * 2;
         if (d < -Math.PI) d += Math.PI * 2;
         _br.wheelDrag.a = a;
-        const lock = WHEEL_LOCK_DEG[bridgeUI.wheel] || 360;
+        const lock = _wheelLock();
         _br.wheelDeg = Math.max(-lock, Math.min(lock, _br.wheelDeg + d * 180 / Math.PI));
         _br.dirtyW = true;
     });
@@ -1175,6 +1182,18 @@ function _setupWheelInput(cv) {
 // 舵輪を使うときは、舵は舵輪の指示を保つ（17-main-loop.js が呼ぶ）
 function bridgeWheelActive() { return bridgeUI.wheel !== 'buttons'; }
 window.bridgeWheelActive = bridgeWheelActive;
+// アジポッドの船で「アジポッド用の旋回レバー」を使っているときは、レバーの向き＝ポッドの向き（58-maneuvering.js）。
+// レバーは 360° 回る（片側 180°）。そうでなければ null
+function bridgeAzimuthLever() {
+    if (bridgeUI.wheel !== 'azipod' || typeof azipodActive !== 'function' || !azipodActive()) return null;
+    return _br.wheelDeg;
+}
+window.bridgeAzimuthLever = bridgeAzimuthLever;
+// 舵輪を端から端まで回せる角度（片側）
+function _wheelLock() {
+    if (bridgeUI.wheel === 'azipod' && typeof azipodActive === 'function' && azipodActive()) return 180;
+    return WHEEL_LOCK_DEG[bridgeUI.wheel] || 360;
+}
 function bridgeHelmRate() { return HELM_RATE; }
 window.bridgeHelmRate = bridgeHelmRate;
 
@@ -1212,7 +1231,7 @@ function updateBridge(t) {
     if (Math.abs(da) > 0.001) { _br.answer += _sweep(da, dt, 3.2); _br.dirtyT = true; }
 
     // 舵輪：A/Dキーで回す
-    const lock = WHEEL_LOCK_DEG[bridgeUI.wheel] || 360;
+    const lock = _wheelLock();
     if (bridgeWheelActive()) {
         const kr = HELM_KEY_RATE_WHEEL[bridgeUI.wheel] || HELM_KEY_RATE;
         if (keys.a || keys.d || _br.wheelDrag) _br.wheelTarget = null;     // 手で回したら中央戻しはやめる
@@ -1225,7 +1244,13 @@ function updateBridge(t) {
             else _br.wheelDeg += Math.sign(d) * step;
             _br.dirtyW = true;
         }
-        physics.helmOrder = _br.wheelDeg / lock * 35;
+        // （旋回レバーでポッドを回しているときは、舵は中央のまま：58-maneuvering.js の 'lever'）
+        physics.helmOrder = bridgeAzimuthLever() !== null ? 0 : _br.wheelDeg / lock * 35;
+        // 旋回レバー：今のポッドの向きが変わったら描き直す
+        if (bridgeUI.wheel === 'azipod' && typeof maneuverPodAzNow === 'function') {
+            const az = maneuverPodAzNow();
+            if (az !== null && Math.abs(az - (_br.lastPodAz ?? 1e9)) > 0.3) { _br.lastPodAz = az; _br.dirtyW = true; }
+        }
         // 古典的な舵輪：1周ごとにベル（テレグラフと同じ音）
         if (bridgeUI.wheel === 'classic' && bridgeUI.wheelBell !== false && !_br.autoHelm) {   // 自動航行が回すときは鳴らさない
             const turn = Math.trunc(_br.wheelDeg / 360);
@@ -1248,7 +1273,8 @@ function updateBridge(t) {
     }
     if (_br.dirtyW && _whCanvas && bridgeWheelActive()) {
         _br.dirtyW = false;
-        const disp = bridgeUI.wheel === 'azipod' ? physics.helmOrder * 2 : _br.wheelDeg;   // アジポッドはレバーの向き＝ポッドの向き（見やすく2倍）
+        // アジポッドはレバーの向き＝ポッドの向き（アジポッドの船では 360°。そうでなければ舵角を見やすく2倍）
+        const disp = bridgeUI.wheel === 'azipod' ? (bridgeAzimuthLever() !== null ? _br.wheelDeg : physics.helmOrder * 2) : _br.wheelDeg;
         _drawWheel(_whCanvas.getContext('2d'), _br.size, bridgeUI.wheel, disp, physics.rudderAngle, physics.helmOrder, bridgeUI.wheelText);
     }
 }

@@ -408,6 +408,8 @@ function createWater() {
         //  seabedTex：rgb＝海底の色、a＝深さ/200m。seabedRect：左下 x,z・一辺・使うか(1/0)
         seabedTex:  { value: null },
         seabedRect: { value: new THREE.Vector4(0, 0, 1, 0) },
+        // 浅瀬・岩礁・波打ち際の白い泡の強さ（波の高さから。17-main-loop.js の updateWater で）
+        shoalFoamK: { value: 0.0 },
         normalMap1: { value: wNorm1 },
         normalMap2: { value: wNorm2 },
         normalMap3: { value: wNorm3 },
@@ -1476,6 +1478,7 @@ function createWater() {
             uniform float     uBloomDark;
             uniform sampler2D seabedTex;
             uniform vec4      seabedRect;
+            uniform float     shoalFoamK;
             // 太陽シャドウ（v83: 自前サンプリング。Three.js標準のreceiveShadowは
             // 完全自前シェーダーには自動適用されないため、手動で判定する）
             uniform sampler2D sunShadowMap;
@@ -1756,6 +1759,7 @@ function createWater() {
                 // ── とても浅い所（8m 未満）だけ、水の色が少し明るい砂色寄りになる ──
                 // 以前は深さ 200m まで海底の絵（砂・岩・海草のまだら）が透けて見えていたが、透けすぎで模様も
                 // 不自然だったので、模様は使わず深さだけで、ごく薄く色を変える。
+                float shoalFoam = 0.0;
                 if (seabedRect.w > 0.5) {
                     vec2 suv = (vWorldPos.xz - seabedRect.xy) / seabedRect.z;
                     if (suv.x > 0.001 && suv.y > 0.001 && suv.x < 0.999 && suv.y < 0.999) {
@@ -1765,8 +1769,20 @@ function createWater() {
                         vis *= smoothstep(0.0, 0.15, min(min(vUv.x, vUv.y), min(1.0 - vUv.x, 1.0 - vUv.y)));
                         float lum = dot(shallowColor, vec3(0.3, 0.5, 0.2));
                         waterBase = mix(waterBase, vec3(0.62, 0.60, 0.48) * lum * 3.0, vis);
+                        // 浅瀬・岩礁・波打ち際（深さ 6m より浅い所）は、波が砕けて白く泡立つ。
+                        // 波の山（vColor.g）が来ると強く、谷でも少し泡が残る。まだらに粒立たせる
+                        if (shoalFoamK > 0.001) {
+                            float shoal = 1.0 - smoothstep(0.5, 6.0, sd);
+                            if (shoal > 0.0) {
+                                float crestS = smoothstep(0.35, 0.85, vColor.g);
+                                float blot = hash21(floor(vWorldPos.xz * 0.45)) * 0.45 + hash21(floor(vWorldPos.xz * 1.7 + vec2(3.0, 9.0))) * 0.35 + hash21(floor(vWorldPos.xz * 6.0)) * 0.2;
+                                float sf = shoal * shoalFoamK * (0.3 + 0.7 * crestS) * smoothstep(0.35, 0.65, blot + 0.3 * crestS);
+                                shoalFoam = max(shoalFoam, sf * smoothstep(0.0, 0.15, min(min(vUv.x, vUv.y), min(1.0 - vUv.x, 1.0 - vUv.y))));
+                            }
+                        }
                     }
                 }
+                foam = max(foam, clamp(shoalFoam, 0.0, 0.9));
                 // v162: 「凹凸の深さ高さが出てる感じがしない」への対応その2。
                 // specular(下)は太陽の映り込みが鋭い点として光る成分で、凹凸の
                 // "形"そのものを陰影として見せる役割はscatterが担っている

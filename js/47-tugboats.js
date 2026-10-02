@@ -15,7 +15,8 @@
 
 const TUG_MAX = 6;
 // 全力の引く力[N]：船の大きさに合わせた港のタグ（小さい船 12 トン 〜 大きな船 70 トン）
-function _tugPullN() { return Math.max(12, Math.min(70, 10 + (physics.mass || 1))) * 9806; }
+// タグ 1 隻の引く・押す力[N]（ボラードプル。重い船ほど大きなタグが来る：15〜100 トン）
+function _tugPullN() { return Math.max(15, Math.min(100, 15 + 1.4 * (physics.mass || 1))) * 9806; }
 const TUG_LEN = 28, TUG_BEAM = 10;       // タグの大きさ[m]
 const TUG_POWERS = { low: 0.25, half: 0.55, full: 1 };
 const TUG_ACTIONS = { standby: '待機', push: '押す', pull: '引く' };
@@ -648,22 +649,22 @@ function _tugStep(t, dt, last) {
             const finalApproach = pushing && goal.x === ax && ax === tx;          // 船体に当てる最後の15mは船をよけない
             tg.steerAng = finalApproach ? Math.atan2(goal.x - tg.pos.x, goal.z - tg.pos.z) : _tugSteer(C, tg, goal.x, goal.z, 60);
         }
-        // 動き：船と一緒に動きながら目標へ（最大 7m/s ＋ 船の速さ）
+        // 動き：船と一緒に動きながら目標へ（最大 10m/s ≒ 19 ノット ＋ 船の速さ。以前は 7m/s で、呼んでから着くまでが長すぎた）
         const withShip = tg.state === 'leaving' ? 0 : 1;
         let wantVx = _tugShip.vx * withShip, wantVz = _tugShip.vz * withShip;
         if (tg.steerAng !== null && gd > 0.5) {
-            const sp2 = Math.min(7, gd * 0.35);
+            const sp2 = Math.min(10, gd * 0.45);
             wantVx += Math.sin(tg.steerAng) * sp2; wantVz += Math.cos(tg.steerAng) * sp2;
         }
-        tg.vel.x += (wantVx - tg.vel.x) * Math.min(1, dt * 1.5);
-        tg.vel.z += (wantVz - tg.vel.z) * Math.min(1, dt * 1.5);
+        tg.vel.x += (wantVx - tg.vel.x) * Math.min(1, dt * 2);
+        tg.vel.z += (wantVz - tg.vel.z) * Math.min(1, dt * 2);
         // 向き：遠いうちは進む向きへ、近づいたら持ち場の向きへ
         const relVx = tg.vel.x - _tugShip.vx * withShip, relVz = tg.vel.z - _tugShip.vz * withShip;
         const relSpeed = Math.hypot(relVx, relVz);
         const dist = Math.hypot(tx - tg.pos.x, tz - tg.pos.z);
         const wantYaw = (dist > 40 && relSpeed > 1) ? Math.atan2(relVx, relVz) : tyaw;
         const dy = Math.atan2(Math.sin(wantYaw - tg.yaw), Math.cos(wantYaw - tg.yaw));
-        const newYaw = tg.yaw + Math.max(-0.5 * dt, Math.min(0.5 * dt, dy));
+        const newYaw = tg.yaw + Math.max(-0.7 * dt, Math.min(0.7 * dt, dy));
         // 進めてみて、ぶつかるなら進まない（船に押されたときは外へ押し出す）
         let nx = tg.pos.x + tg.vel.x * dt, nz = tg.pos.z + tg.vel.z * dt;
         // （もう浅い所に入り込んでいたら（地形の細かい絵ができて浅くなった所など）、抜け出すまでは止めない）
@@ -731,7 +732,7 @@ function _tugStep(t, dt, last) {
         // 自動の離着岸（50-harbor-auto.js）のときは、強さを細かく決めてもらう
         const pw = tg.autoPower !== undefined ? tg.autoPower : TUG_POWERS[tg.power];
         const want = (tg.state === 'on' && tg.action !== 'standby') ? pw * escort : 0;
-        tg.force += (want - tg.force) * Math.min(1, dt / 4);
+        tg.force += (want - tg.force) * Math.min(1, dt / 2);
         let dirF = null, P = null;
         if (tg.action === 'pull' && hook) { dirF = tg.pullDir; P = hook; }
         else if (pushing) { dirF = tg.pushDir; P = new THREE.Vector3(tx - tg.pushDir.x * (TUG_LEN / 2), 0, tz - tg.pushDir.z * (TUG_LEN / 2)); }

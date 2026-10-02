@@ -131,14 +131,27 @@ function azipodActive() {
 }
 window.azipodActive = azipodActive;
 // 実際に使う操船の方法（自動航行・自動の離着岸の間は舵輪に連動）
+//  'lever'：「舵輪に連動」で、船橋の舵輪を「アジポッド用の旋回レバー」にしているとき。
+//           レバーの向き＝ポッドの向き（360°）、推力＝テレグラフ（機関の回転数）。舵は使わない
 function podModeNow() {
     if (!azipodActive()) return null;
     const auto = (window.autopilot && autopilot.active) || (window.harborAuto && harborAuto.mode);
-    return auto ? 'helm' : maneuver.podMode;
+    if (auto) return 'helm';
+    if (maneuver.podMode === 'helm' && typeof bridgeAzimuthLever === 'function' && bridgeAzimuthLever() !== null) return 'lever';
+    return maneuver.podMode;
 }
 window.podModeNow = podModeNow;
+// 船橋の旋回レバーに出す、今のポッドの向き（ポッドの平均[°]。無ければ null）
+function maneuverPodAzNow() {
+    if (!azipodActive() || typeof engineList !== 'function') return null;
+    const L = engineList(); if (!L.length) return null;
+    let sx = 0, sy = 0;
+    for (const E of L) { const a = _mnvPod(E).az * _mnvRad; sx += Math.sin(a); sy += Math.cos(a); }
+    return Math.atan2(sx, sy) / _mnvRad;
+}
+window.maneuverPodAzNow = maneuverPodAzNow;
 // 舵の効き（17-main-loop.js）：個別・ジョイスティックのときは舵が無い
-function maneuverRudderFactor() { const m = podModeNow(); return (m === 'indep' || m === 'joy') ? 0 : 1; }
+function maneuverRudderFactor() { const m = podModeNow(); return (m === 'indep' || m === 'joy' || m === 'lever') ? 0 : 1; }
 window.maneuverRudderFactor = maneuverRudderFactor;
 
 function _mnvPod(E) {
@@ -342,6 +355,7 @@ function updateManeuver(t, dt) {
     const sc = physics.scale || 1, HL = _mnvHL(), lf = thrusterSpeedFactor();
     // ── ポッドの向きの指示 ──
     if (mode === 'helm') for (const E of L) { const P = _mnvPod(E); P.cmd = Math.max(-35, Math.min(35, physics.rudderAngle || 0)); P.rpmT = null; }
+    else if (mode === 'lever') { const a = _mnvWrap(bridgeAzimuthLever()); for (const E of L) { const P = _mnvPod(E); P.cmd = a; P.rpmT = null; } }
     else if (mode === 'joy' && !design) {
         const D = _mnvJoyDemand(L, sc, HL, lf, dt);
         _mnvAllocate(D.Fx, D.Fy, D.Mz, L, sc, HL, lf);
@@ -574,7 +588,8 @@ function renderManeuverPanel() {
         h += `<div class="mv-sec">アジポッド</div><div class="mv-row">${[['helm', '舵輪に連動'], ['indep', '個別'], ['joy', 'ジョイスティック']].map(([k, l]) =>
             `<button onclick="maneuverSetPodMode('${k}')" class="${maneuver.podMode === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
         if (mode !== maneuver.podMode) h += `<div class="mv-note">自動航行・自動の離着岸の間は、舵輪に連動します</div>`;
-        if (mode === 'helm') h += `<div class="mv-note">ポッドの向き＝舵角。推力はテレグラフで。遅いときはポッドの横向きの推力でも回ります</div>`;
+        if (mode === 'helm') h += `<div class="mv-note">ポッドの向き＝舵角。推力はテレグラフで。遅いときはポッドの横向きの推力でも回ります。船橋の舵輪を「アジポッド用の旋回レバー」にすると、レバーで 360° 向きを変えられます</div>`;
+        if (mode === 'lever') h += `<div class="mv-note">ポッドの向き＝船橋の旋回レバー（360°）。推力はテレグラフで。舵は使いません</div>`;
         if (mode === 'indep') {
             h += `<div class="mv-dials">${L.map((E, i) => `<div class="mv-dial"><canvas id="mnv-dial-${i}" data-i="${i}" width="96" height="96"></canvas><div>${_mnvPodName(E)}</div></div>`).join('')}</div>
                 <div class="mv-row">${[0, 45, 90, 180, -90, -45].map(a => `<button onclick="maneuverSetAllAz(${a})">${a === 0 ? '前' : a === 180 ? '後' : (a > 0 ? '左' : '右') + Math.abs(a)}°</button>`).join('')}</div>

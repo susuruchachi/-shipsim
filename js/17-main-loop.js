@@ -955,6 +955,8 @@ function updateWater(t) {
     // (旧実装: 頂点数×航跡履歴数のCPUループ → 新実装: uniform数十個の更新のみ)
     uni.time.value           = t;
     uni.waveRoughnessU.value = physics.waveRoughness;
+    // 浅瀬・岩礁の白い泡（04 の水のシェーダー）：波が立つほど強く。凪では出さない
+    if (uni.shoalFoamK) uni.shoalFoamK.value = THREE.MathUtils.smoothstep(physics.waveRoughness || 0, 0.15, 0.9);
     uni.waveWidthU.value     = Math.max(0.05, physics.waveWidth);
     uni.swellStrengthU.value = (typeof physics.swellStrength === 'number') ? physics.swellStrength : 1.0;
     uni.chopStrengthU.value  = (typeof physics.chopStrength  === 'number') ? physics.chopStrength  : 1.0;

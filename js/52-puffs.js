@@ -126,9 +126,12 @@ window.updatePuffs = updatePuffs;
 
 // ── 岩・岸に打ちつける波のしぶき ──
 // カメラのまわり（±800m）の波打ち際（陸・岩と水の境で、水側がある程度深い所）を時々調べておき、
-// 波の山がそこへ来たら白いしぶきを打ち上げる。波が高いほど高く・多く。岩場（急な所）ほど派手に。
+// 波の山がそこへ「届いた瞬間」（その点の波の高さが上向きに、しきい値を越えたとき）だけ、しぶきを打ち上げる。
+// 以前は波打ち際の点をでたらめに調べ、波の山の上なら出していたので、いつもどこかでしぶきが出続けていた。
+// 見た目は船の喫水線のしぶき（03-particle-systems.js の水しぶき・波切りの筋・泡）と同じ描き方にする。
+// 打ち上げた所の沖側には泡を浮かべ、波が当たった跡が白く残るようにする。
 const SPRAY_R = 800, SPRAY_STEP = 20;
-const sprayState = { pts: [], cx: 1e12, cz: 1e12, t: -1e9, scan: null, acc: 0 };
+const sprayState = { pts: [], cx: 1e12, cz: 1e12, t: -1e9, scan: null, cur: 0 };
 function _sprayScanStep(budget) {
     const S = sprayState, sc = S.scan;
     const n = Math.floor(SPRAY_R * 2 / SPRAY_STEP);
@@ -146,13 +149,100 @@ function _sprayScanStep(budget) {
             }
             if (!deep) continue;
             const L = Math.hypot(wx, wz) || 1;
-            sc.out.push({ x, z, nx: wx / L, nz: wz / L, rock: h > 2 || deep > 6 ? 1 : 0.5 });
+            sc.out.push({ x, z, nx: wx / L, nz: wz / L, rock: h > 2 || deep > 6 ? 1 : 0.5, prev: 0, cool: 0 });
         }
         sc.j++;
     }
-    if (sc.j >= n) { S.pts = sc.out; S.scan = null; }
+    if (sc.j >= n) { S.pts = sc.out; S.cur = 0; S.scan = null; }
+}
+
+// 船の喫水線のしぶきと同じ粒（同じ絵・同じシェーダー）。大きさは船の大きさに関係なく決める
+const ROCK_MAX = 1400;
+const rockFx = { pts: null, geo: null, idx: 0, d: [] };
+function _rockFxInit() {
+    if (rockFx.pts) return true;
+    if (typeof wakeParticleMat === 'undefined' || !wakeParticleMat || typeof scene === 'undefined' || !scene) return false;
+    const geo = new THREE.BufferGeometry();
+    const pos = new Float32Array(ROCK_MAX * 3), age = new Float32Array(ROCK_MAX).fill(999);
+    for (let i = 0; i < ROCK_MAX; i++) { pos[i * 3 + 1] = -9999; rockFx.d.push({ vx: 0, vy: 0, vz: 0, type: 0, rate: 1, t0: 0 }); }
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('age', new THREE.BufferAttribute(age, 1));
+    geo.setAttribute('ptype', new THREE.BufferAttribute(new Float32Array(ROCK_MAX), 1));
+    geo.setAttribute('velocity', new THREE.BufferAttribute(new Float32Array(ROCK_MAX * 3), 3));
+    const mat = wakeParticleMat.clone();
+    // 霧は共有（clone すると値が写されるだけなので、元の入れ物を指し直す）
+    mat.uniforms.uFogColor = particleFogUniforms.uFogColor;
+    mat.uniforms.uFogDensity = particleFogUniforms.uFogDensity;
+    mat.uniforms.sizeScale.value = 1.0;
+    const pts = new THREE.Points(geo, mat);
+    pts.frustumCulled = false; pts.renderOrder = 12; pts.userData.noBloom = true; pts.name = 'RockSpray';
+    scene.add(pts);
+    Object.assign(rockFx, { pts, geo });
+    return true;
+}
+// type 0＝泡（水面に浮く）・1＝水しぶき・2＝波切りの筋
+function _rockEmit(x, y, z, vx, vy, vz, type, t) {
+    if (!_rockFxInit()) return;
+    const i = rockFx.idx; rockFx.idx = (i + 1) % ROCK_MAX;
+    const G = rockFx.geo.attributes, D = rockFx.d[i];
+    G.position.array[i * 3] = x; G.position.array[i * 3 + 1] = y; G.position.array[i * 3 + 2] = z;
+    G.age.array[i] = 0; G.ptype.array[i] = type;
+    D.vx = vx; D.vy = vy; D.vz = vz; D.type = type; D.t0 = t;
+    // 年齢の進む速さ（喫水線のしぶきと同じ：泡は長く、しぶきは一瞬）
+    // （泡は喫水線の泡より短く：大きく広がって霧の塊のように見えないように。白い泡の広がりは海面の側で：04）
+    D.rate = (type === 0 ? 0.2 : type === 2 ? 0.55 : 0.75) * (0.8 + Math.random() * 0.4);
+}
+function _rockFxUpdate(t, dt) {
+    if (!rockFx.pts) return;
+    const G = rockFx.geo.attributes, P = G.position.array, A = G.age.array, V = G.velocity.array;
+    const U = rockFx.pts.material.uniforms;
+    if (typeof wakeParticleMat !== 'undefined' && wakeParticleMat) {
+        U.lightFactor.value = wakeParticleMat.uniforms.lightFactor.value;
+        U.uAspect.value = wakeParticleMat.uniforms.uAspect.value;
+    }
+    const hasH = typeof getOceanHeight === 'function';
+    let any = false;
+    for (let i = 0; i < ROCK_MAX; i++) {
+        if (A[i] > 1) continue;
+        any = true;
+        const D = rockFx.d[i], j = i * 3;
+        A[i] += dt * D.rate;
+        if (D.type === 0) {
+            // 泡：波の上に浮いて、ゆっくり沖へ広がる
+            D.vx *= Math.exp(-dt * 0.4); D.vz *= Math.exp(-dt * 0.4);
+            P[j] += D.vx * dt; P[j + 2] += D.vz * dt;
+            P[j + 1] = (hasH ? getOceanHeight(P[j], P[j + 2], t) : 0) + 0.15;
+        } else {
+            D.vy -= 9.8 * dt;
+            P[j] += D.vx * dt; P[j + 1] += D.vy * dt; P[j + 2] += D.vz * dt;
+            // 落ちて海面に着いたら消える（出てすぐは消さない）
+            if (t - D.t0 > 0.4 && D.vy < 0 && P[j + 1] < (hasH ? getOceanHeight(P[j], P[j + 2], t) : 0)) A[i] = 999;
+        }
+        V[j] = D.vx; V[j + 1] = D.vy; V[j + 2] = D.vz;
+    }
+    if (!any) return;
+    G.position.needsUpdate = true; G.age.needsUpdate = true; G.ptype.needsUpdate = true; G.velocity.needsUpdate = true;
+}
+// 波が 1 つ当たったときのしぶき（k：強さ 0〜3）
+function _rockSplash(p, k, rough, t, wy) {
+    const up = 4 + rough * 2.5 * k;                      // 打ち上がる速さ[m/s]
+    const j = () => Math.random() - 0.5;
+    // 波切りの筋：岩に当たって立ち上がる水の幕
+    for (let q = 0, n = 2 + Math.round(2 * k); q < n; q++)
+        _rockEmit(p.x + p.nx * 2 + j() * 10, wy + 0.3, p.z + p.nz * 2 + j() * 10,
+            p.nx * (0.5 + Math.random()) + j() * 1.5, up * (0.7 + Math.random() * 0.5), p.nz * (0.5 + Math.random()) + j() * 1.5, 2, t);
+    // 水しぶき：細かい粒が高く散る
+    for (let q = 0, n = 6 + Math.round(8 * k); q < n; q++)
+        _rockEmit(p.x + p.nx * 2 + j() * 12, wy + 0.3, p.z + p.nz * 2 + j() * 12,
+            p.nx * (1 + Math.random() * 2) + j() * 3, up * (0.5 + Math.random() * 0.8), p.nz * (1 + Math.random() * 2) + j() * 3, 1, t);
+    // 泡：当たった所の沖側の水面に、白く残る
+    for (let q = 0, n = 1 + Math.round(1.5 * k); q < n; q++) {
+        const r = 2 + Math.random() * (6 + 4 * k);
+        _rockEmit(p.x + p.nx * r + j() * 14, wy + 0.15, p.z + p.nz * r + j() * 14, p.nx * (0.3 + Math.random() * 0.6) + j() * 0.4, 0, p.nz * (0.3 + Math.random() * 0.6) + j() * 0.4, 0, t);
+    }
 }
 function updateShoreSpray(t, dt) {
+    _rockFxUpdate(t, dt);
     if (!window.world || world.mode !== 'world' || typeof worldSeabedAt !== 'function' || typeof camera === 'undefined' || !camera) return;
     const S = sprayState, cx = camera.position.x, cz = camera.position.z;
     if (!S.scan && (Math.hypot(cx - S.cx, cz - S.cz) > 250 || t - S.t > 20 || t < S.t)) {
@@ -160,26 +250,24 @@ function updateShoreSpray(t, dt) {
         S.scan = { x0: cx - SPRAY_R, z0: cz - SPRAY_R, j: 0, out: [] };
     }
     if (S.scan) _sprayScanStep(2);           // 1フレームに2行ずつ（重くならないように）
-    if (!S.pts.length || typeof getOceanHeight !== 'function') return;
+    if (!S.pts.length || typeof getOceanHeight !== 'function' || !dt) return;
     const rough = physics.waveRoughness || 0;
     if (rough < 0.25) return;
-    // 1秒に調べる点の数（波が高いほど多く）。波の山（高さが大きい所）に当たった点だけ打ち上げる
-    S.acc += dt * Math.min(60, 8 + rough * 10);
-    while (S.acc >= 1) {
-        S.acc -= 1;
-        const p = S.pts[(Math.random() * S.pts.length) | 0];
+    // 波打ち際の点を順番に（1 フレームに最大 120 点）調べ、波の高さがしきい値を下から越えた点だけ打ち上げる
+    const N = S.pts.length, per = Math.min(N, 120);
+    const thr = rough * 0.55;
+    let budget = Math.round(10 + rough * 6);              // 1 フレームに打ち上げる所の数の上限（重くならないように）
+    for (let c = 0; c < per; c++) {
+        const p = S.pts[S.cur]; S.cur = (S.cur + 1) % N;
         const wh = getOceanHeight(p.x + p.nx * 6, p.z + p.nz * 6, t);
-        if (wh < rough * 0.5) continue;
+        const crossed = p.prev < thr && wh >= thr;
+        p.prev = wh;
+        if (p.cool > t) continue;
+        if (!crossed || budget <= 0) continue;
+        budget--;
+        p.cool = t + 2.5;                                   // 同じ所は続けて打ち上げない
         const k = Math.min(3, wh / Math.max(0.3, rough)) * p.rock;
-        const up = 3 + rough * 2.2 * k;
-        const nn = 3 + Math.round(4 * k);
-        for (let q = 0; q < nn; q++) {
-            const j = () => (Math.random() - 0.5);
-            const c = 0.9 + Math.random() * 0.08;
-            puffEmit({ x: p.x + p.nx * 3 + j() * 8, y: 0.5 + Math.random(), z: p.z + p.nz * 3 + j() * 8,
-                vx: -p.nx * (1 + Math.random() * 2) + j() * 2, vy: up * (0.6 + Math.random() * 0.6), vz: -p.nz * (1 + Math.random() * 2) + j() * 2,
-                life: 1.6 + Math.random() * 1.2, s0: 1.5 + k, s1: 5 + 4 * k, r: c, g: c, b: c, a: 0.6, rise: 0, drag: 0.4, grav: 1 });
-        }
+        _rockSplash(p, k, rough, t, getOceanHeight(p.x, p.z, t));
     }
 }
 window.updateShoreSpray = updateShoreSpray;

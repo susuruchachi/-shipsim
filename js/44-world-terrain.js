@@ -1001,7 +1001,8 @@ function _brkUpdate(t) {
     _brk.lastT = t;
     const geo = _brk.pts.geometry, P = geo.attributes.position.array, A = geo.attributes.aAlpha.array;
     const hs = Math.max(0, window._seaHs || 0);
-    const sea = Math.min(1.3, 0.35 + hs / 2.5);
+    const rough = physics.waveRoughness || 0;
+    const sea = Math.min(1.3, 0.35 + hs / 2.5) * THREE.MathUtils.smoothstep(rough, 0.15, 0.6);
     const cam = camera.position;
     const hasH = typeof getOceanHeight === 'function';
     _brk.pts.material.uniforms.uScale.value = (renderer.domElement.height || 800) / (2 * Math.tan(camera.fov * Math.PI / 360));
@@ -1009,9 +1010,11 @@ function _brkUpdate(t) {
         const x = _brk.xz[k * 2], z = _brk.xz[k * 2 + 1];
         const d = Math.hypot(x - cam.x, z - cam.z);
         if (d > 5000) { A[k] = 0; continue; }
-        P[k * 3 + 1] = (hasH ? getOceanHeight(x, z, t) : 0) + 0.25;
-        const pulse = 0.5 + 0.5 * Math.sin(t * 1.1 + _brk.phase[k]);
-        A[k] = _brk.base[k] * sea * (0.25 + 0.75 * pulse * pulse) * Math.min(1, (5000 - d) / 1500);
+        const wy = hasH ? getOceanHeight(x, z, t) : 0;
+        P[k * 3 + 1] = wy + 0.25;
+        // 波の山が来たときだけ白く砕ける（以前は決まった周期で明滅し、いつも白く見えていた）。凪では出さない
+        const crest = Math.max(0, Math.min(1, (wy / Math.max(0.3, rough) - 0.15) / 0.6));
+        A[k] = _brk.base[k] * sea * crest * crest * Math.min(1, (5000 - d) / 1500);
     }
     geo.attributes.position.needsUpdate = true;
     geo.attributes.aAlpha.needsUpdate = true;

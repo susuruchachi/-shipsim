@@ -616,9 +616,11 @@ function _haControl(target, dt, opt) {
     if (typeof _apHelm === 'function') _apHelm(0, dt);
     // 横と回頭：タグで
     const vS = _tugShip.vSway, r = _tugShip.yawRate + (physics.turnRate || 0) * _haRad;
-    const vSmax = Math.abs(eS) < 8 ? 0.12 : (opt.vS || 0.35);
+    // 横へ動かす速さ・回す速さの上限。以前の半分ほどの速さで、大きな船の離着岸に 20〜30 分かかっていた
+    //（呼び出し側の指定の 1.5 倍・2 倍。止めるときの減速は、タグの力で間に合う範囲）
+    const vSmax = Math.abs(eS) < 8 ? 0.15 : (opt.vS || 0.35) * 1.5;
     const vSd = Math.abs(eS) < 0.3 ? 0 : Math.max(-vSmax, Math.min(vSmax, 0.03 * eS));
-    const rMax = opt.r || 0.005;
+    const rMax = (opt.r || 0.005) * 2;
     const rd = Math.max(-rMax, Math.min(rMax, 0.04 * eY * _haRad));
     const Fs = massKg * 1.8 * 0.3 * (vSd - vS);
     const Mz = massKg * 1.5 * D.L * D.L / 12 * 0.3 * (rd - r);
