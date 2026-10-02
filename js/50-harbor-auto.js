@@ -118,11 +118,17 @@ function harborBerthPlan(port, prefHeading, asBerthed) {
         // 地形は 10m の升目なので陸の縁は階段状にでこぼこ（±4m ほど）している。見えている岸壁は滑らかな線なので、
         // 縁の位置を直線に合わせ、その 8 割の点が内側に入る線を岸壁とする（いちばん出っ張った段に合わせない）。
         // そのうえで、船底の真ん中に喫水＋0.3m、舷（丸い船底）に喫水の 7 割＋0.3m の深さがある所まで（座礁の判定と同じ見方）
+        // 縁は、沖へ続く深い所の始まり（shoreAt）から岸の方へ戻って、最初に陸（桟橋）に当たる所。
+        // 陸の側から「最初の水際」を探すと、リヴァプールのクルーズ・ターミナルのように浮き桟橋が岸から
+        // 離れている所では、桟橋の裏のすき間の岸を縁と取り違え、船を岸と桟橋の間に置いてしまっていた。
+        // （陸が 8m も続かない小さな点（係船柱の台など、升目 1 つ分）は縁にしない）
         {
             let hwWl = 0; for (let k = -10; k <= 10; k++) hwWl = Math.max(hwWl, worldHullAt(k / 10 * D.HL / (physics.scale || 1)).hw);
             const W = [];
             for (let b = bCq - D.HL; b <= bCq + D.HL + 0.1; b += 5) {
-                for (let a = -30; a <= aB; a += 0.5) if (depthAt(a, b) >= -0.3 && depthAt(a + 2, b) >= -0.3) { W.push([b, a]); break; }
+                const s = shoreAt(b);
+                if (s === null) continue;
+                for (let a = s; a >= s - 60; a -= 0.5) if (depthAt(a - 0.5, b) < -0.3 && depthAt(a - 4, b) < -0.3 && depthAt(a - 8, b) < -0.3) { W.push([b, a]); break; }
             }
             if (W.length >= 8) {
                 let n = W.length, sb = 0, sa = 0, sbb = 0, sab = 0;

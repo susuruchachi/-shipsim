@@ -103,7 +103,8 @@
 // 0.03.013.008  海底の模様（砂・岩・海草のまだら）を水面に出さない。水深 8m 未満だけ、ごく薄く色を変える。
 //               波の水面の端の 400m を遠くの水面と同じ色の式へ寄せ、四角い境目が見えないように。
 // 0.03.013.009  海面の軽量化：海面の網の頂点を約 1/3 に（遠くほど倍々に粗く、端 1800m で止める）。反射の描き直しで数画素にもならない小さな部品を描かない（650 回→約 100 回）。海面を消している間は流体シミュも止める。
-var APP_VERSION = '0.03.013.009';
+// 0.03.013.010  リヴァプールのクルーズ・ターミナル：浮き桟橋と岸の間のすき間に船を置いていたのを直し、桟橋の外側に付ける（岸壁の縁を沖の深い所の側から測る）。
+var APP_VERSION = '0.03.013.010';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
