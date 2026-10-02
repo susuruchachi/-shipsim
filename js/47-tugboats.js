@@ -21,6 +21,8 @@ const TUG_LEN = 28, TUG_BEAM = 10;       // タグの大きさ[m]
 const TUG_POWERS = { low: 0.25, half: 0.55, full: 1 };
 const TUG_ACTIONS = { standby: '待機', push: '押す', pull: '引く' };
 const TUG_DIRS = { side: '横へ', fwd: '前へ', aft: '後ろへ' };
+// 引き索の長さ（横へ：金物から 45m、前後へ：船首尾の先 40m を 1 として）。狭い所では短く
+const TUG_LINES = { long: { k: 1, label: '長' }, mid: { k: 0.55, label: '中' }, short: { k: 0.28, label: '短' } };
 
 const tugs = [];                         // { id, g, line, pos, vel, yaw, station, action, dir, power, state, force, ... }
 const _tugShip = { vSway: 0, yawRate: 0, lastX: null, lastZ: null, vx: 0, vz: 0 };
@@ -286,7 +288,7 @@ function tugSet(id, key, v) {
     else {
         t[key] = v;
         if (key === 'station') { t.engaged = false; if (t.state === 'on') t.state = 'coming'; }
-        if (key === 'action' || key === 'power' || key === 'dir') _tugToot(t, 1);
+        if (key === 'action' || key === 'power' || key === 'dir' || key === 'lineLen') _tugToot(t, 1);
     }
     renderTugPanel();
 }
@@ -589,11 +591,20 @@ function _tugStep(t, dt, last) {
             if (tg.action === 'pull' && hs) {
                 hook = _localToWorldFlat(hs.x, hs.y, hs.z);
                 const d = tg.dir === 'fwd' ? { x: F.fx, z: F.fz } : tg.dir === 'aft' ? { x: -F.fx, z: -F.fz } : (st.side ? out : { x: F.fx * Math.sign(st.z || 1), z: F.fz * Math.sign(st.z || 1) });
-                // 横へ：金物から 45m 先。前へ・後ろへ：船首（船尾）の先 40m まで出る
-                const r = (tg.dir === 'fwd' ? Math.max(0, C.HL - st.z * sc) + 40 : tg.dir === 'aft' ? Math.max(0, C.HL + st.z * sc) + 40 : 45) + TUG_LEN / 2;
-                tx = hook.x + d.x * r; tz = hook.z + d.z * r; tyaw = Math.atan2(d.x, d.z);
-                // 前へ・後ろへ引くときは、船首尾の中心線の先から
-                if (tg.dir !== 'side' && st.side) { const q = _tugFromShip(C, (tg.dir === 'fwd' ? 1 : -1) * (C.HL + 40 + TUG_LEN / 2), 0); tx = q.x; tz = q.z; }
+                // 横へ：金物から 45m 先。前へ・後ろへ：船首（船尾）の先 40m まで出る（索の長さ：長・中・短）。
+                // 引く所が陸・岸壁・浅瀬にかかるときは、索を自動で縮める（狭い埠頭の間など）
+                const k0 = (TUG_LINES[tg.lineLen] || TUG_LINES.long).k;
+                const at = (k) => {
+                    const ext = Math.max(8, (tg.dir === 'side' ? 45 : 40) * k);
+                    const r = (tg.dir === 'fwd' ? Math.max(0, C.HL - st.z * sc) + ext : tg.dir === 'aft' ? Math.max(0, C.HL + st.z * sc) + ext : ext) + TUG_LEN / 2;
+                    // 前へ・後ろへ引くときは、船首尾の中心線の先から
+                    if (tg.dir !== 'side' && st.side) return _tugFromShip(C, (tg.dir === 'fwd' ? 1 : -1) * (C.HL + ext + TUG_LEN / 2), 0);
+                    return { x: hook.x + d.x * r, z: hook.z + d.z * r };
+                };
+                let q = at(k0);
+                tg.lineAuto = false;
+                for (const f of [0.6, 0.35, 0.2]) { if (!_tugStaticBlocked(q.x, q.z)) break; const q2 = at(k0 * f); q = q2; tg.lineAuto = true; }
+                tx = q.x; tz = q.z; tyaw = Math.atan2(d.x, d.z);
                 tg.pullDir = d;
             } else if (tg.action === 'push') {
                 if (st.side) {
@@ -896,7 +907,8 @@ function renderTugPanel() {
             <div class="tg-row"><select onchange="tugSet(${t.id}, 'station', this.value)">${st.map(s => `<option value="${s.key}"${s.key === t.station ? ' selected' : ''}>${s.label}</option>`).join('')}</select></div>
             <div class="tg-row">${Object.entries(TUG_ACTIONS).map(([k, l]) => { const no = k === 'pull' && !tugPullHook(st.find(s => s.key === t.station), st); return `<button class="${t.action === k ? 'on' : ''}" ${no ? 'disabled title="この近くに索を取れる金物（クリート・索をかけてよいビット）がありません"' : ''} onclick="tugSet(${t.id}, 'action', '${k}')">${l}</button>`; }).join('')}</div>
             <div class="tg-row">${Object.entries({ low: '微', half: '半', full: '全' }).map(([k, l]) => `<button class="pw${t.power === k ? ' on' : ''}" onclick="tugSet(${t.id}, 'power', '${k}')">${l}</button>`).join('')}
-                <span class="tg-sep"></span>${t.action === 'pull' ? Object.entries(TUG_DIRS).map(([k, l]) => `<button class="dir${t.dir === k ? ' on' : ''}" onclick="tugSet(${t.id}, 'dir', '${k}')">${l}</button>`).join('') : ''}</div>` : ''}
+                <span class="tg-sep"></span>${t.action === 'pull' ? Object.entries(TUG_DIRS).map(([k, l]) => `<button class="dir${t.dir === k ? ' on' : ''}" onclick="tugSet(${t.id}, 'dir', '${k}')">${l}</button>`).join('') : ''}</div>
+            ${t.action === 'pull' ? `<div class="tg-row">索 ${Object.entries(TUG_LINES).map(([k, v]) => `<button class="pw${(t.lineLen || 'long') === k ? ' on' : ''}" onclick="tugSet(${t.id}, 'lineLen', '${k}')" title="引き索の長さ（狭い所では短く）">${v.label}</button>`).join('')}${t.lineAuto ? '<small>（狭いので縮めています）</small>' : ''}</div>` : ''}` : ''}
         </div>`).join('') : '<div class="tg-empty">「＋ 呼ぶ」でタグボートが来ます。持ち場（係船設備の金物・舷側）を選んで、押す・引くを指示します。<br>速さが5ノットを超えると力が弱まり、8ノットでは効きません。</div>'));
     if (panel.classList.contains('open') && _tugSetup.place) _tugSetup.place();
 }

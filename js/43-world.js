@@ -2002,8 +2002,7 @@ function worldMapRedraw(quick) {
                 for (const q of p.ports) {
                     const sq = _wmToScreen(q.lat, q.lon, cv);
                     g.fillStyle = PORT_TYPES[q.type].color; g.strokeStyle = '#0a1932'; g.lineWidth = 1;
-                    g.beginPath(); g.arc(sq.x, sq.y, 2.5, 0, Math.PI * 2); g.fill(); g.stroke();
-                    if (_wm.zoom >= 200) { g.fillStyle = _wm.chart ? '#16283c' : '#fff'; g.fillText(worldBerthLabel(q), sq.x + 5, sq.y); }
+                    g.beginPath(); g.arc(sq.x, sq.y, 2.5, 0, Math.PI * 2); g.fill(); g.stroke();       // （埠頭の名前は出さない：タップで一覧）
                 }
             }
             if (_wm.zoom >= 4 || T.size >= 3 || p === _wm.sel) {

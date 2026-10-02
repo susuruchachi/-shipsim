@@ -137,7 +137,10 @@
 // 0.03.013.022 プロムナードの影のまだらを減らす（空の見え方をまわりの升目となめらかに混ぜる）。晴れた昼は船の間接光を弱めて
 //               太陽の光を少し強め、甲板などの普通の影もくっきり（曇り・夜は今まで通り）。
 // 0.03.013.023 自動航行のパネルが小さな画面で下に見切れるのを直す（入らなければ TELEMETRY の左へ、それでも入らなければパネルの中をスクロール）。
-var APP_VERSION = '0.03.013.023';
+// 0.03.013.024 保存した船を他の船として（自分の船の近くの港を中心に）出す。モデルは近くで見えるときだけ読み、船ごとに出さない設定。
+//               引き波なし・排煙と航海灯あり。地図の埠頭の名前は出さない（ミニ地図は港ごとに 1 つ）。
+//               タグの引き索の長さ（長・中・短）を選べる・狭くて引く所が岸壁などにかかるときは自動で縮める。
+var APP_VERSION = '0.03.013.024';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

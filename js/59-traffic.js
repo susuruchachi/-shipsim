@@ -488,7 +488,7 @@ function _tfMakeShip(spec) {
         id: traffic.nextId++, name: spec.name || '', line: spec.line || '', cls: spec.cls, L, B, d, kn, fun, liv,
         vSea: _tfMs(kn), svc: spec.route ? { route: spec.route, i: 0 } : null,
         st: 'pending', lat: 0, lon: 0, hdg: 0, v: 0, s: 0, path: null, port: null, from: null, to: null, steps: null, t: 0,
-        acc: Math.min(0.08, Math.max(0.012, 4 / L)), seed: Math.random(),
+        acc: Math.min(0.08, Math.max(0.012, 4 / L)), seed: Math.random(), saved: spec.saved || null,
     };
     if (!S.name) S.name = _tfNewName(S);
     return S;
@@ -536,10 +536,12 @@ function _tfChooseDest(S) {
     const cands = _tfPorts().filter(p => p !== S.port && _tfSuits(S.cls, p) && _tfFits(S, p) && (!S.port || _tfGroupOf(p) !== _tfGroupOf(S.port)) && _tfDist(here, p) < maxD && _tfDist(here, p) > 3000);
     // 外洋の出入口（大きな客船・貨物船）
     const gates = world.kind === 'real' ? (TF_GATES[world.realKey] || []) : [];
-    if (gates.length && ['liner', 'container', 'tanker', 'bulk', 'steamer', 'cruise'].includes(S.cls) && Math.random() < 0.3) return { G: _tfPick(gates) };
+    if (gates.length && !S.saved && ['liner', 'container', 'tanker', 'bulk', 'steamer', 'cruise'].includes(S.cls) && Math.random() < 0.3) return { G: _tfPick(gates) };
     if (!cands.length) return gates.length ? { G: _tfPick(gates) } : null;
     // 空いている埠頭を少しひいきする。遠すぎる所は少しだけ
-    const w = cands.map(p => (_tfSlotFind(p, S.L, S.id) !== null ? 2 : 1) / (1 + _tfDist(here, p) / 800000));
+    const me = _tfPlayerLL();
+    const w = cands.map(p => (_tfSlotFind(p, S.L, S.id) !== null ? 2 : 1) / (1 + _tfDist(here, p) / 800000)
+        * (S.saved ? 1 / Math.pow(1 + _tfDist(me, p) / 80000, 2) : 1));      // 保存した船は、自分の船の近くの港を多めに
     let r = Math.random() * w.reduce((a, b) => a + b, 0);
     for (let i = 0; i < cands.length; i++) { r -= w[i]; if (r <= 0) return { P: cands[i] }; }
     return { P: cands[cands.length - 1] };
@@ -580,6 +582,11 @@ function _tfSpawnFleet() {
     _tfPlayerBerthKeep();
     const rk = world.kind === 'real' ? world.realKey : null;
     const target = Math.round(Math.max(8, Math.min(90, ports.length * TF_DENSITY[traffic.density].k)));
+    // 保存した船（自分の船のモデルは除く）
+    for (const v of _tfSavedUsed()) {
+        const S = _tfMakeShip(_tfSavedSpec(v));
+        if (ports.some(p => _tfSuits(S.cls, p) && _tfFits(S, p))) traffic.ships.push(S); else traffic.nextId--;
+    }
     // 決まった航路の船（少なめのときは、半分ほど）
     if (rk && TF_SERVICES[rk]) for (const sv of TF_SERVICES[rk]) {
         if (!_tfEraOk(sv.cls) || (traffic.density === 'few' && Math.random() < 0.5)) continue;
@@ -605,9 +612,14 @@ function _tfSeed(S) {
         const R = S.svc.route, order = R.map((_, i) => i).sort(() => Math.random() - 0.5);
         for (const i of order) { const x = _tfResolve(S, R[i]); if (x && x.P) { home = x.P; S.svc.i = i; break; } }
         if (!home) { const x = _tfResolve(S, R[0]); if (x && x.G) { S.svc.i = 0; _tfGoOff(S, x.G, _tfRand(0, 3600)); } else S.st = 'gone'; return; }
+    } else if (S.saved && ports.length) {
+        // 保存した船は、自分の船の近くの港に
+        const me = _tfPlayerLL(), near = ports.slice().sort((a, b) => _tfDist(me, a) - _tfDist(me, b)).slice(0, 6);
+        home = _tfPick(near);
     } else if (ports.length) home = _tfPick(ports);
     if (!home) { S.st = 'gone'; return; }
-    const r = Math.random();
+    // 保存した船は、すぐ近くに見えるよう、埠頭か港の航路に（海の上の途中には置かない）
+    const r = S.saved ? Math.random() * 0.82 : Math.random();
     if (r < 0.5 && _tfPlaceBerthed(S, home, Math.random())) return;
     if (r < 0.62 && _tfPlaceBerthed(S, home, 0)) return;            // もうすぐ出港
     if (r < 0.82) {
@@ -1267,6 +1279,13 @@ function _tfBuildMesh(S) {
 function _tfDropMesh(S) {
     if (!S || !S.mesh) return;
     if (typeof scene !== 'undefined' && scene) scene.remove(S.mesh);
+    if (S.mesh.userData.saved) {
+        // 保存した船：形・材質は共有なので、灯の絵だけ捨てる
+        S.mesh.traverse(o => { if (o.isSprite) o.material.dispose(); });
+        const P = _tfProto.get(S.mesh.userData.saved); if (P) P.users = Math.max(0, P.users - 1);
+        S.mesh = null;
+        return;
+    }
     S.mesh.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material && o.material.isSpriteMaterial) o.material.dispose(); });
     const M = S.mesh.userData.mats;
     if (M) for (const k in M) { const m = M[k]; if (Array.isArray(m)) m.forEach(x => x.dispose()); else if (m && m.dispose) m.dispose(); }
@@ -1276,7 +1295,17 @@ const _tfV = new THREE.Vector3(), _tfD3 = new THREE.Vector3();
 function _tfVisual(S, t, vis, night) {
     const loc = _tfLocal(S, {});
     if (!Number.isFinite(loc.x)) { _tfDropMesh(S); return; }
-    if (!S.mesh) { S.mesh = _tfBuildMesh(S); scene.add(S.mesh); }
+    if (!S.mesh) {
+        if (S.saved) {
+            // 保存した船：モデルを読み込んでから（1 つずつ）。読めなければ、ふつうの形で
+            const P = _tfProto.get(S.saved.key);
+            if (!P) { if (!_tfProtoBusy) _tfLoadProto(S.saved); return; }
+            if (P.state === 'loading') return;
+            if (P.state === 'fail') S.saved = null;
+            else { S.mesh = _tfBuildSavedMesh(S, P); scene.add(S.mesh); }
+        }
+        if (!S.mesh) { S.mesh = _tfBuildMesh(S); scene.add(S.mesh); }
+    }
     const g = S.mesh, yaw = _tfYaw(S, loc);
     const H = (x, z) => (typeof getOceanHeight === 'function') ? getOceanHeight(x, z, t) : 0;
     const fx = Math.sin(yaw), fz = Math.cos(yaw), hl = S.L * 0.35, hb = S.B * 0.5;
@@ -1305,7 +1334,7 @@ function _tfVisual(S, t, vis, night) {
         const cosA = (tx * _tfD3.x + tz * _tfD3.z) / dd, lim = Math.cos(q.half * _tfR);
         const v = q.half >= 180 ? 1 : THREE.MathUtils.smoothstep(cosA, lim - 0.05, lim + 0.05);
         q.sp.material.opacity = on * v * Math.max(0, Math.min(1, 1.6 - dd / (vis * 1.2)));
-        q.sp.scale.setScalar(0.01 + 0.012 * Math.min(1, dd / 1500));
+        q.sp.scale.setScalar((0.01 + 0.012 * Math.min(1, dd / 1500)) * (q.k || 1));
     }
     // 排煙（昔の船・近くだけ）
     if (typeof puffEmit === 'function' && S.dPl < 3500 && g.visible) {
@@ -1317,7 +1346,7 @@ function _tfVisual(S, t, vis, night) {
             S.smokeAcc -= 1;
             const f = g.userData.funnels[(Math.random() * g.userData.funnels.length) | 0];
             if (!f) break;
-            const w = g.localToWorld(_tfV.copy(f));
+            const w = (g.userData.funnelParent || g).localToWorld(_tfV.copy(f));
             const c = old ? 0.18 + Math.random() * 0.08 : 0.45 + Math.random() * 0.1;
             const vx = fx * (S.v || 0) * 0.5, vz = fz * (S.v || 0) * 0.5;
             puffEmit({ x: w.x, y: w.y, z: w.z, vx, vy: 2 + 2 * p, vz, life: 7 + Math.random() * 5, s0: Math.max(1.5, S.L * 0.012), s1: 12 + S.L * 0.06 * (old ? 1 : 0.5),
@@ -1335,7 +1364,9 @@ function updateTraffic(t, dt) {
         if (traffic.ships.length || traffic.key) { _tfClear(); traffic.key = ''; }
         return;
     }
-    const key = _tfWorldKey() + '|' + traffic.density + '|' + traffic.era;
+    // 保存した船の組み合わせ（保存の一覧を読むのは重いので、3 秒ごと）
+    if (traffic.sig === undefined || !(t - (traffic.sigT || -1e9) < 3) || t < traffic.sigT) { traffic.sigT = t; traffic.sig = _tfSavedSig(); }
+    const key = _tfWorldKey() + '|' + traffic.density + '|' + traffic.era + '|' + traffic.sig;
     if (key !== traffic.key) { _tfClear(); traffic.key = key; traffic.initT = t; }
     traffic.t = t;
     if (!traffic.ready) {
@@ -1357,6 +1388,7 @@ function updateTraffic(t, dt) {
     if (traffic.ruleAcc >= 0.5) { traffic.ruleAcc = 0; _tfRules(); }
     if (farStep) {
         _tfPlayerBerthKeep();
+        _tfProtoTick(dF);
         const going = typeof autopilot !== 'undefined' && (autopilot.active || autopilot.planning) && autopilot.dest && !autopilot.dest.point;
         const berthing = typeof harborAuto !== 'undefined' && harborAuto.mode === 'berth';
         if (!going && !berthing && traffic.player.reserve) _tfPlayerReserve(null);
@@ -1457,6 +1489,7 @@ function trafficPanelRender() {
         <div class="tf-row">数 ${seg('density', Object.entries(TF_DENSITY).map(([k, v]) => [k, v.label]), traffic.density)}</div>
         <div class="tf-row">時代 ${seg('era', Object.entries(TF_ERA), traffic.era)}</div>
         <div class="tf-row">汽笛・霧中信号 ${seg('horn', [[true, '鳴らす'], [false, '鳴らさない']], traffic.horn)}</div>
+        ${_tfSavedPanelHTML()}
         <div class="tf-list">${traffic.on ? (near.length ? near.map(S => `<div><span style="color:${TF_MAP_COLOR[S.cls]}">▲</span> <b>${S.name}</b> <small>${S.line ? S.line + '・' : ''}${_tfClassOf(S).label}・${S.L}m</small><br><small>${(S.dPl / 1852).toFixed(1)}海里　${TF_STATE_LABEL[S.st] || ''}${S.v > 0.3 ? `　${(S.v / 0.514444).toFixed(0)}ノット` : ''}${S.to && S.to.P && S.st !== 'berth' ? `　→ ${worldBerthLabel(S.to.P)}` : S.to && S.to.G ? `　→ ${S.to.G.name}` : S.st === 'berth' && S.port ? `　${worldBerthLabel(S.port)}` : ''}${S.why || S.waitWhy ? `<br>　${S.why || S.waitWhy}` : ''}</small></div>`).join('') : '<small>近く（30km 以内）には、ほかの船はいません</small>') : ''}</div>
         <div class="tf-msgs">${traffic.msgs.slice(0, 4).map(m => `<small>・${m.s}</small>`).join('<br>')}</div>`;
 }
@@ -1538,3 +1571,165 @@ function trafficAdvice(ctx) {
 }
 function _tfPlayerAsShipSafe() { try { return _tfPlayerAsShip(); } catch (e) { return null; } }
 window.trafficAdvice = trafficAdvice;
+
+// ════════════════════════════════════════════════════════════════
+//  保存した船（船体設定で保存した船：13-save-load-config.js・モデルは 27-model-store.js）を、他の船として出す
+// ════════════════════════════════════════════════════════════════
+//  ・保存した船（自分が今乗っている船のモデルは除く）を、他の船の中心に：自分の船の近くの港に置き、近くの港を多めに回る
+//  ・モデルは近くで見えるときだけ読み込み（同じモデルは 1 つを使い回す）、しばらく見えなければ捨てる
+//  ・引き波は出さない。煙突（保存した煙突の位置）からの排煙と、航海灯（保存した灯の位置）は出す
+//  ・重い船は「🚢 他の船」の一覧で、船ごとに出さないようにできる
+const TF_SAVED_OFF_KEY = 'susuru_traffic_saved_off';
+traffic.savedOn = true; traffic.savedOff = new Set();
+try {
+    const o = JSON.parse(localStorage.getItem(TF_SAVED_OFF_KEY) || 'null');
+    if (o) { traffic.savedOn = o.on !== false; traffic.savedOff = new Set(o.off || []); }
+} catch (e) { /* ignore */ }
+function _tfSavedSave() { try { localStorage.setItem(TF_SAVED_OFF_KEY, JSON.stringify({ on: traffic.savedOn, off: [...traffic.savedOff] })); } catch (e) { /* ignore */ } }
+const TF_SAVED_CLASS = { liner: 'liner', cruise: 'cruise', ferry: 'ferry', cargo: 'steamer', container: 'container', tanker: 'tanker',
+    destroyer: 'destroyer', cruiser: 'cruiser', battleship: 'dreadnought', carrier: 'carrier' };
+// 保存した船の一覧（モデルのあるもの）。own：今乗っている船のモデル
+function _tfSavedAll() {
+    if (typeof loadAllShipSaves !== 'function') return [];
+    const all = loadAllShipSaves(), cur = (typeof getCurrentModelRef === 'function') ? getCurrentModelRef() : null;
+    const out = [];
+    for (const [name, cfg] of Object.entries(all)) {
+        const ref = cfg && cfg.modelRef;
+        if (!ref || !(ref.id || ref.embedded)) continue;
+        const own = !!(cur && ((cur.id && cur.id === ref.id) || (cur.embedded && ref.embedded && cur.name === ref.name)));
+        out.push({ name, cfg, ref, own, key: ref.id || ('emb:' + ref.name) });
+    }
+    return out;
+}
+function _tfSavedUsed() { return traffic.savedOn ? _tfSavedAll().filter(v => !v.own && !traffic.savedOff.has(v.name)) : []; }
+function _tfSavedSig() { return _tfSavedUsed().map(v => v.name + ':' + v.key).join(',') + '|' + (traffic.savedOn ? 1 : 0); }
+// 保存した船 → 他の船の作り（長さはモデルの大きさから：モデルは長い辺が 12 になるよう直し、mscale と scale÷12 を掛けてある）
+function _tfSavedSpec(v) {
+    const ph = v.cfg.physics || {}, m = v.cfg.model || {};
+    const type = (v.cfg.submarine && v.cfg.submarine.type) || 'other';
+    const L = Math.max(15, Math.round((+m.mscale || 1) * (+ph.scale || 12)));     // （scale は船の長さ[m]：倍率はその 1/12）
+    let cls = TF_SAVED_CLASS[type];
+    if (!cls) cls = L > 150 ? 'liner' : L > 60 ? 'steamer' : 'fishing';
+    const C = TF_CLASSES[cls];
+    const d = Math.max(2, Math.min(12, (+ph.draftOverride > 0 ? +ph.draftOverride : C.d[0] + (C.d[1] - C.d[0]) * Math.min(1, Math.max(0, (L - C.L[0]) / Math.max(1, C.L[1] - C.L[0]))))));
+    const kn = Math.max(6, Math.min(32, +ph.maxSpeed > 0 ? +ph.maxSpeed : (C.kn[0] + C.kn[1]) / 2));
+    return { cls, name: v.name, line: '保存した船', L, B: Math.round(L / C.LB * 10) / 10, d: Math.round(d * 10) / 10, kn: Math.round(kn), saved: v };
+}
+// モデルの読み込み（同じモデルは 1 つ）
+const _tfProto = new Map();
+let _tfProtoBusy = false;
+async function _tfLoadProto(v) {
+    let P = _tfProto.get(v.key);
+    if (P) return P;
+    P = { state: 'loading', users: 0, idleT: 0 }; _tfProto.set(v.key, P);
+    _tfProtoBusy = true;
+    try {
+        let buf;
+        if (v.ref.embedded) buf = await (await fetch(v.ref.name)).arrayBuffer();
+        else buf = await modelRecordBuffer(await modelStoreGet(v.ref.id));
+        if (!buf) throw new Error('no model data');
+        const type = v.ref.type || 'glb';
+        let root;
+        if (type === 'obj') root = new THREE.OBJLoader().parse(new TextDecoder('utf-8').decode(buf));
+        else root = (await new Promise((res, rej) => new THREE.GLTFLoader().parse(buf, '', res, rej))).scene;
+        buf = null;
+        // 光源は外し（重い）、影は落とさない（軽く）
+        const lights = [];
+        root.traverse(o => { if (o.isLight) lights.push(o); if (o.isMesh) { o.castShadow = false; o.receiveShadow = true; o.userData.noLightBake = true; } });
+        for (const o of lights) if (o.parent) o.parent.remove(o);
+        // 船体設定の置き方（08-model-loading-and-lighting.js の setCustomModel・updateModelOffset と同じ）
+        const m = v.cfg.model || {}, ph = v.cfg.physics || {};
+        const b0 = new THREE.Box3().setFromObject(root), sz = new THREE.Vector3(); b0.getSize(sz);
+        const orig = Math.max(sz.x, sz.y, sz.z), auto = orig > 0 ? 12 / orig : 1;
+        root.position.set(+m.offx || 0, +m.offy || 0, +m.offz || 0);
+        root.rotation.y = (Number.isFinite(+m.roty) ? +m.roty : -90) * Math.PI / 180;
+        root.scale.setScalar(auto * (+m.mscale || 1));
+        const inner = new THREE.Group(); inner.add(root); inner.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(inner);
+        const S = (+ph.scale || 12) / 12;                 // （09-ui-setup-and-import.js：physics.scale ＝ 長さ ÷ 12）
+        const wl = (Number.isFinite(+ph.waterlineOffsetY) ? +ph.waterlineOffsetY : -0.5) + (+ph.draftOffset || 0) / S;
+        // 煙突（煙の出る所）と航海灯の位置（船の中の座標）
+        const funnels = [];
+        const fl = (v.cfg.funnels && v.cfg.funnels.list) || [], sym = v.cfg.funnels && v.cfg.funnels.symmetry;
+        for (const f of fl) { funnels.push(new THREE.Vector3(+f.x || 0, +f.y || 0, +f.z || 0)); if (sym && Math.abs(+f.x) > 0.05) funnels.push(new THREE.Vector3(-f.x, +f.y || 0, +f.z || 0)); }
+        const nl = v.cfg.navlights || {}, n = (k, d) => Number.isFinite(+nl[k]) ? +nl[k] : d;
+        const len = box.max.z - box.min.z, top = box.max.y;
+        const lamps = {
+            side: [n('sideX', (box.max.x - box.min.x) / 2), n('sideY', top * 0.6), n('sideZ', box.min.z + len * 0.6)],
+            fore: [n('mastForeX', 0), n('mastForeY', top), n('mastForeZ', box.min.z + len * 0.75)],
+            aft: [n('mastAftX', 0), n('mastAftY', top), n('mastAftZ', box.min.z + len * 0.35)],
+            stern: [n('sternX', 0), n('sternY', wl + 0.2 * (top - wl)), n('sternZ', box.min.z)],
+        };
+        Object.assign(P, { state: 'ok', obj: inner, S, wl, cx: (box.min.x + box.max.x) / 2, cz: (box.min.z + box.max.z) / 2, len, wid: box.max.x - box.min.x, keel: box.min.y, funnels, lamps });
+    } catch (e) {
+        console.warn('保存した船のモデルを読めませんでした：' + v.name, e);
+        P.state = 'fail';
+    }
+    _tfProtoBusy = false;
+    return P;
+}
+function _tfProtoDispose(key) {
+    const P = _tfProto.get(key);
+    _tfProto.delete(key);
+    if (!P || !P.obj) return;
+    P.obj.traverse(o => {
+        if (o.geometry) o.geometry.dispose();
+        const ms = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
+        for (const mt of ms) { for (const k in mt) { const t = mt[k]; if (t && t.isTexture) t.dispose(); } mt.dispose(); }
+    });
+}
+// 保存した船の形（読み込んだモデルを写す。形・材質は共有）
+function _tfBuildSavedMesh(S, P) {
+    const g = new THREE.Group(), wrap = new THREE.Group();
+    wrap.add(P.obj.clone(true));
+    wrap.position.set(-P.cx, -P.wl, -P.cz);          // 船の真ん中・喫水線が、置く点に来るように
+    g.add(wrap);
+    g.scale.setScalar(P.S);
+    const Lt = [];
+    const lamp = (hex, p, dir, half, key) => {
+        const c = new THREE.Color(hex);
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: _tugGlowTex(), color: c, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, sizeAttenuation: false, toneMapped: false }));
+        sp.position.set(p[0], p[1], p[2]); sp.renderOrder = 6; sp.userData.noBloom = true; wrap.add(sp);
+        Lt.push({ sp, dir, half, key, k: 1 / P.S });
+    };
+    const A = P.lamps;
+    lamp(0xfff4e0, A.fore, [0, 0, 1], 112.5, 'mast');
+    if (S.L > 50) lamp(0xfff4e0, A.aft, [0, 0, 1], 112.5, 'mast');
+    lamp(0xff2a1a, [Math.abs(A.side[0]), A.side[1], A.side[2]], [0.83, 0, 0.56], 56.75, 'side');
+    lamp(0x1aff6a, [-Math.abs(A.side[0]), A.side[1], A.side[2]], [-0.83, 0, 0.56], 56.75, 'side');
+    lamp(0xfff4e0, A.stern, [0, 0, -1], 67.5, 'stern');
+    lamp(0xfff4e0, [0, A.fore[1] * 0.7 + P.wl * 0.3, P.cz + P.len * 0.45], [0, 0, 1], 180, 'anchor');
+    lamp(0xfff4e0, [0, A.stern[1], P.cz - P.len * 0.45], [0, 0, -1], 180, 'anchor');
+    g.userData.lights = Lt;
+    g.userData.funnels = P.funnels.map(f => f.clone());
+    g.userData.funnelParent = wrap;
+    g.userData.saved = S.saved.key;
+    g.name = 'Traffic:' + S.name;
+    P.users++;
+    return g;
+}
+// 見えなくなった保存した船のモデルは、1 分たったら捨てる（メモリ）
+function _tfProtoTick(dt) {
+    for (const [key, P] of [..._tfProto]) {
+        if (P.state === 'loading') continue;
+        if (P.users > 0) { P.idleT = 0; continue; }
+        P.idleT += dt;
+        if (P.idleT > 60 || P.state === 'fail' && P.idleT > 600) _tfProtoDispose(key);
+    }
+}
+function trafficSavedSet(name, on) {
+    if (name === '*') traffic.savedOn = !!on;
+    else if (on) traffic.savedOff.delete(name); else traffic.savedOff.add(name);
+    _tfSavedSave(); traffic.sig = undefined; trafficPanelRender();
+}
+window.trafficSavedSet = trafficSavedSet;
+
+function _tfSavedPanelHTML() {
+    const all = _tfSavedAll();
+    if (!all.length) return '<div class="tf-row"><small>保存した船（船体設定で保存した船）があれば、その船も他の船として出ます</small></div>';
+    const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/'/g, '&#39;');
+    const sz = (v) => (typeof formatModelSize === 'function' && v.ref.size) ? formatModelSize(v.ref.size) : '';
+    return `<div class="tf-row"><b>保存した船</b><button class="${traffic.savedOn ? 'on' : ''}" onclick="trafficSavedSet('*', true)">出す</button><button class="${traffic.savedOn ? '' : 'on'}" onclick="trafficSavedSet('*', false)">出さない</button></div>
+        ${traffic.savedOn ? `<div class="tf-saved">${all.map(v => `<label><input type="checkbox" ${v.own ? 'disabled' : traffic.savedOff.has(v.name) ? '' : 'checked'} onchange="trafficSavedSet(this.dataset.n, this.checked)" data-n="${esc(v.name)}"> ${esc(v.name)} <small>${sz(v)}${v.own ? '（今乗っている船）' : ''}</small></label>`).join('')}</div>
+        <div class="tf-row"><small>重い船は、チェックを外すと出しません（変えると、他の船を並べ直します）</small></div>` : ''}`;
+}

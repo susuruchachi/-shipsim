@@ -161,6 +161,7 @@ function _mmDraw() {
         g.restore();
     }
     // 港
+    // （埠頭は点だけ。名前は港ごとに 1 つ：埠頭のまとまりの真ん中に）
     if (world.ports) {
         g.font = '9px sans-serif'; g.textBaseline = 'middle';
         for (const p of world.ports) {
@@ -170,9 +171,17 @@ function _mmDraw() {
             if (Math.hypot(q.x, q.y) > c + 10) continue;
             const Tp = PORT_TYPES[p.type];
             g.fillStyle = Tp.color; g.strokeStyle = '#0a1932'; g.lineWidth = 1;
-            g.beginPath(); g.arc(q.x, q.y, 3.5, 0, Math.PI * 2); g.fill(); g.stroke();
+            g.beginPath(); g.arc(q.x, q.y, p.group ? 2.5 : 3.5, 0, Math.PI * 2); g.fill(); g.stroke();
+        }
+        const groups = typeof worldPortGroups === 'function' ? worldPortGroups() : [];
+        for (const gr of groups) {
+            const loc = worldUnitToLocal(worldLatLonToUnit(gr.lat, gr.lon));
+            if (!Number.isFinite(loc.x)) continue;
+            const q = toS(loc.x, loc.z);
+            if (Math.hypot(q.x, q.y) > c - 4) continue;
             g.save(); g.translate(q.x, q.y); g.rotate(-rot);
-            g.fillStyle = _wm.chart ? '#16283c' : '#fff'; g.fillText(typeof worldBerthLabel === 'function' ? worldBerthLabel(p) : p.name, 6, 0);
+            g.lineWidth = 2.2; g.strokeStyle = _wm.chart ? 'rgba(255,255,255,0.85)' : 'rgba(6,24,40,0.7)'; g.strokeText(gr.name, 6, 0);
+            g.fillStyle = _wm.chart ? '#16283c' : '#fff'; g.fillText(gr.name, 6, 0);
             g.restore();
         }
     }
