@@ -704,9 +704,15 @@ function updateSmokeSettings() {
     }
 }
 
+const _smokePush = { x: 0, y: 0, z: 0 };
 function animateSmoke(t, dt) {
     if (!globalSmokeGeo) return;
-    const active = (smokeSettings.speedLinked ? Math.abs(physics.speed) > 0.3 : true) && !(typeof subSurfaceFxOff === 'function' && subSurfaceFxOff());
+    // 機関に火が入っている間（テレグラフを STAND BY（機関用意）にしてから FINISHED WITH ENGINE（機関終了）まで）は、
+    // 止まっていても（STOP でも）煙突から煙を出し続ける
+    const sp = physics.telegraphAnswerSpecial || physics.telegraphSpecial;
+    if (sp === 'standby') physics.steamUp = true;
+    else if (physics.telegraphAnswerSpecial === 'fwe') physics.steamUp = false;
+    const active = (smokeSettings.speedLinked ? (Math.abs(physics.speed) > 0.3 || !!physics.steamUp) : true) && !(typeof subSurfaceFxOff === 'function' && subSurfaceFxOff());
     const spd = smokeSettings.speed;
 
     // Wind force
@@ -734,6 +740,7 @@ function animateSmoke(t, dt) {
     globalSmokeMat.uniforms.sizeScale.value = THREE.MathUtils.clamp(physics.scale / 22.0, 0.18, 1.6);
     if (globalSmokeMat.uniforms.uResK && typeof particleResK === 'function') globalSmokeMat.uniforms.uResK.value = particleResK();   // 画質で大きさが変わらないように（03）
 
+    const solidOn = typeof shipSolidPushUp === 'function' && window.shipSolid && shipSolid.G;
     // Update existing particles
     for(let i=0; i<perf.smokeCap; i++) {
         if (ageAttr.array[i] <= 1.0) {
@@ -748,6 +755,10 @@ function animateSmoke(t, dt) {
             posAttr.array[i*3]   += (smokeData[i].vel.x + wX + turbX) * dt;
             posAttr.array[i*3+1] += (smokeData[i].vel.y + spd * 1.7 + smokeData[i].rand * 1.1) * dt;
             posAttr.array[i*3+2] += (smokeData[i].vel.z + wZ + turbZ) * dt;
+            // 船体・上部構造・煙突の中に入ったら、上へ押し出す（60-ship-solid.js。煙が船を突き抜けて見えないように）
+            if (solidOn && shipSolidPushUp(posAttr.array[i*3], posAttr.array[i*3+1], posAttr.array[i*3+2], _smokePush)) {
+                posAttr.array[i*3] = _smokePush.x; posAttr.array[i*3+1] = _smokePush.y; posAttr.array[i*3+2] = _smokePush.z;
+            }
         }
     }
 

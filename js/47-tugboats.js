@@ -34,10 +34,18 @@ function _tugMat() {
     _tugMats = {
         hull: mk(0x1e2226), bottom: mk(0x8a2c20), house: mk(0xece9e0), win: mk(0x1a2530, { roughness: 0.2, metalness: 0.4 }),
         funnel: mk(0xd9651e), black: mk(0x141414), fender: mk(0x222222, { roughness: 0.95 }), deck: mk(0x6b5a48),
-        line: new THREE.LineBasicMaterial({ color: 0xcdb892 }),
+        line: ropeMaterial(),
     };
     return _tugMats;
 }
+// 索・もやい綱：麻の茶色。線は光を受けないので、まわりの明るさ（昼・夕方・夜・曇り）に合わせて色を暗くする（毎フレーム）
+const _ropeBase = new THREE.Color().setHex(0x8b6a43).convertSRGBToLinear();
+function ropeMaterial() { return ropeMaterial.m || (ropeMaterial.m = new THREE.LineBasicMaterial({ color: _ropeBase.clone() })); }
+function ropeLightUpdate() {
+    const k = Number.isFinite(window._fxLight) ? Math.max(0.05, Math.min(1, window._fxLight * 1.05)) : 1;
+    ropeMaterial().color.copy(_ropeBase).multiplyScalar(k);
+}
+window.ropeMaterial = ropeMaterial;
 function _tugBuild() {
     const M = _tugMat();
     const g = new THREE.Group();
@@ -507,6 +515,7 @@ function _tugCrumbGoal(tg, gx, gz) {
     return tg.crumbGoal;
 }
 function updateTugs(t, dt) {
+    ropeLightUpdate();
     _tugRecordCrumb();
     // （タグがいない間は船の速さを測らないので、次に呼んだとき古い位置との差で速さが跳ねないよう、測り直す）
     // （サイドスラスター・アジポッド（58-maneuvering.js）を使っている間は、タグがいなくても横流れ・回頭を計算する）

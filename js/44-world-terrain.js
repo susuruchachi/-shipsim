@@ -820,7 +820,7 @@ function _trFarWaterMesh() {
     geo.setIndex(pos.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(idx, 1) : new THREE.Uint16BufferAttribute(idx, 1));
     const mat = new THREE.ShaderMaterial({
         uniforms: {
-            deepColor: U.deepColor, shallowColor: U.shallowColor, sunDir: U.sunDir, sunColor: U.sunColor,
+            deepColor: U.deepColor, shallowColor: U.shallowColor, sunDir: U.sunDir, sunColor: U.sunColor, skyReflColor: U.skyReflColor,
             waterFogColor: U.waterFogColor, waterFogDensity: U.waterFogDensity, uBloomDark: U.uBloomDark,
         },
         // 深度は地形・船・近くの水面と同じ対数深度（04-scene-and-water-init.js の水面と同じ式）にそろえる。
@@ -841,7 +841,7 @@ function _trFarWaterMesh() {
                 #endif
             }`,
         fragmentShader: `
-            uniform vec3 deepColor, shallowColor, sunDir, sunColor, waterFogColor;
+            uniform vec3 deepColor, shallowColor, sunDir, sunColor, waterFogColor, skyReflColor;
             uniform float waterFogDensity, uBloomDark;
             varying vec3 vW;
             void main() {
@@ -851,7 +851,7 @@ function _trFarWaterMesh() {
                 // 遠くは斜めに見るので、浅い海でも海底は透けない：普通の海の色（近くの水面の端も同じ色へ戻してある）
                 vec3 base = mix(deepColor, shallowColor, 0.6);
                 float fresnel = pow(1.0 - max(0.0, dot(n, viewDir)), 4.0);
-                vec3 skyRefl = vec3(0.30, 0.52, 0.82);
+                vec3 skyRefl = skyReflColor;
                 vec3 col = mix(base, skyRefl, 0.12 + fresnel * 0.5);
                 vec3 halfDir = normalize(sunDir + viewDir);
                 col += sunColor * pow(max(0.0, dot(n, halfDir)), 60.0) * 0.6;

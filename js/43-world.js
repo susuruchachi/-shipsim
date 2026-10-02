@@ -170,6 +170,64 @@ const REAL_WORLDS = {
             ['ロスコフ港', 'town', 48.720, -3.965], ['セント・ピーター・ポート港', 'town', 49.455, -2.535], ['オーステンデ港', 'town', 51.235, 2.925],
         ],
     },
+    // アメリカ東海岸（フロリダ〜メイン、ノヴァスコシア・バミューダ・バハマの北まで）。地形は 20 秒角（data/useast）
+    // 作り込んだ港（ニューヨークなど）の埠頭は data/harbors/<key>_berths.json から足す（_rwLoadHarbor）
+    useast: {
+        name: 'アメリカ東海岸', url: 'data/useast', center: { lat: 38.5, lon: -73.5 }, start: 'ニューヨーク港 59番埠頭（ホワイト・スター・ライン）（北側）',
+        harbors: ['newyork', 'newyork_bay', 'boston', 'philadelphia', 'baltimore', 'norfolk'],
+        ports: [
+            // フロリダ（5番目：航路が通る所。川や水道の口を順に）
+            ['キーウェスト港', 'town', 24.555, -81.805],
+            ['マイアミ港 クルーズ・ターミナル', 'passenger', 25.778, -80.175, [[25.7700, -80.1350], [25.7620, -80.1100], [25.7550, -80.0850]], { group: 'マイアミ港', berth: 'クルーズ・ターミナル（ドッジ島）' }],
+            ['マイアミ港 コンテナ・ターミナル', 'cargo', 25.770, -80.160, [[25.7700, -80.1350], [25.7620, -80.1100], [25.7550, -80.0850]], { group: 'マイアミ港', berth: 'コンテナ・ターミナル（ドッジ島）' }],
+            ['ポート・エバーグレーズ港', 'passenger', 26.090, -80.118, [[26.0935, -80.1050], [26.0920, -80.0850]]],
+            ['パーム・ビーチ港', 'town', 26.768, -80.052, [[26.7720, -80.0350]]],
+            ['ポート・カナベラル港', 'passenger', 28.410, -80.620, [[28.4080, -80.5900], [28.3950, -80.5600]]],
+            ['ジャクソンヴィル港', 'cargo', 30.405, -81.540, [[30.3950, -81.4200], [30.4000, -81.3800]]],
+            ['メイポート軍港', 'naval', 30.392, -81.415, [[30.4000, -81.3850]]],
+            ['キングズ・ベイ軍港', 'naval', 30.800, -81.515, [[30.7200, -81.4500], [30.7050, -81.4000]]],
+            ['フェルナンディナ・ビーチ漁港', 'fishing', 30.672, -81.468, [[30.7050, -81.4000]]],
+            // ジョージア・サウスカロライナ
+            ['ブランズウィック港', 'cargo', 31.135, -81.495, [[31.1200, -81.4300], [31.0600, -81.3500]]],
+            ['サヴァナ港', 'cargo', 32.125, -81.140, [[32.0810, -81.0900], [32.0350, -80.9000], [32.0200, -80.8400]]],
+            ['チャールストン港', 'cargo', 32.835, -79.890, [[32.7750, -79.9100], [32.7480, -79.8700], [32.7200, -79.8000]], { group: 'チャールストン港', berth: 'ワンド・ウェルチ（コンテナ）' }],
+            ['チャールストン港 ユニオン埠頭', 'passenger', 32.786, -79.923, [[32.7750, -79.9100], [32.7480, -79.8700], [32.7200, -79.8000]], { group: 'チャールストン港', berth: 'ユニオン埠頭（客船）' }],
+            ['チャールストン軍港', 'naval', 32.865, -79.955, [[32.8200, -79.9400], [32.7750, -79.9100], [32.7480, -79.8700], [32.7200, -79.8000]]],
+            ['ジョージタウン港', 'town', 33.360, -79.280, [[33.2200, -79.1700]]],
+            // ノースカロライナ・ヴァージニア
+            ['ウィルミントン港', 'cargo', 34.220, -77.955, [[34.1000, -77.9400], [33.9200, -78.0100], [33.8600, -78.0000]]],
+            ['モアヘッド・シティ港', 'town', 34.716, -76.695, [[34.6900, -76.6700]]],
+            ['ハッテラス漁港', 'fishing', 35.210, -75.700],
+            // ハンプトン・ローズ（ノーフォーク・ニューポート・ニューズ）の埠頭は data/harbors/norfolk_berths.json
+            ['ケープ・チャールズ漁港', 'fishing', 37.265, -76.025],
+            // チェサピーク湾・デラウェア湾
+            // ボルティモア・フィラデルフィアの埠頭は data/harbors/baltimore_berths.json・philadelphia_berths.json
+            ['アナポリス軍港', 'naval', 38.983, -76.480],
+            ['ウィルミントン港（デラウェア）', 'cargo', 39.718, -75.523, [[39.4500, -75.5500]]],
+            ['ルイス港', 'town', 38.790, -75.140], ['ケープ・メイ港', 'town', 38.950, -74.900], ['アトランティック・シティ港', 'town', 39.375, -74.420],
+            // ロング・アイランド・コネチカット・ロード・アイランド
+            ['ポート・ジェファーソン港', 'town', 40.950, -73.072], ['モントーク漁港', 'fishing', 41.073, -71.938],
+            ['ニュー・ヘイヴン港', 'cargo', 41.290, -72.910], ['ブリッジポート港', 'town', 41.170, -73.180], ['ニュー・ロンドン港', 'town', 41.355, -72.093],
+            ['グロトン軍港', 'naval', 41.395, -72.088],
+            ['プロヴィデンス港', 'cargo', 41.800, -71.390, [[41.7000, -71.3500], [41.6000, -71.3800], [41.4500, -71.3800]]],
+            ['ニューポート軍港', 'naval', 41.525, -71.325], ['フォール・リヴァー港', 'town', 41.700, -71.163, [[41.6000, -71.2200], [41.4800, -71.3300]]],
+            // マサチューセッツ（ボストンの埠頭は data/harbors/boston_berths.json）
+            ['ニュー・ベッドフォード漁港', 'fishing', 41.635, -70.920], ['ナンタケット港', 'town', 41.287, -70.095], ['ハイアニス港', 'town', 41.640, -70.280],
+            ['プロヴィンスタウン漁港', 'fishing', 42.048, -70.183], ['グロスター漁港', 'fishing', 42.608, -70.663], ['セイラム港', 'town', 42.520, -70.880],
+            // ニュー・ハンプシャー・メイン
+            ['ポーツマス軍港', 'naval', 43.080, -70.737, [[43.0700, -70.7100], [43.0500, -70.6900]]],
+            ['ポートランド港', 'city', 43.655, -70.248, [[43.6400, -70.2300], [43.6200, -70.2000]]],
+            ['バス軍港', 'naval', 43.910, -69.812, [[43.8000, -69.7900], [43.7400, -69.7900]]],
+            ['ロックランド港', 'town', 44.100, -69.105], ['バー・ハーバー港', 'town', 44.392, -68.203], ['イーストポート港', 'town', 44.905, -66.985],
+            // カナダ（ニュー・ブランズウィック・ノヴァスコシア）
+            ['セント・ジョン港', 'cargo', 45.265, -66.065], ['ヤーマス港', 'town', 43.835, -66.120], ['ルーネンバーグ漁港', 'fishing', 44.375, -64.312],
+            ['ハリファックス港', 'passenger', 44.642, -63.567, null, { group: 'ハリファックス港', berth: 'ピア21（客船）' }],
+            ['ハリファックス軍港', 'naval', 44.665, -63.588, null, { group: 'ハリファックス港', berth: 'ハリファックス海軍工廠' }],
+            // バミューダ・バハマ
+            ['ハミルトン港', 'town', 32.292, -64.785], ['ロイヤル・ネイヴァル・ドックヤード', 'passenger', 32.327, -64.834],
+            ['ナッソー港', 'passenger', 25.080, -77.340], ['フリーポート港', 'cargo', 26.520, -78.770],
+        ],
+    },
 };
 let _RW = null;
 // 作り込んだ港の細かい地形（10m おき）：その緯度・経度の高さ[m]。範囲の外は NaN
@@ -206,7 +264,16 @@ function _rwSample(lat, lon) {
         const e = Math.min((lat - d.lat0) / d.dLat, (d.lat1 - lat) / d.dLat, (lon - d.lon0) / d.dLon, (d.lon1 - lon) / d.dLon) * d.cell;
         if (e >= 250) return hd;
         const t = Math.max(0, e / 250);
-        return hd * t + _rwCoarse(lat, lon) * (1 - t);
+        // となりにも作り込んだ港があれば（ニューヨークの湾の内と外など、枠が重なっている）、そちらとつなぐ
+        let other = NaN;
+        for (let i = 0; i < R.hd.length && !(other === other); i++) {
+            const q = R.hd[i];
+            if (q !== d && lat > q.lat0 && lat < q.lat1 && lon > q.lon0 && lon < q.lon1) other = _rwDetailAt(q, lat, lon);
+        }
+        const o = other === other ? other : _rwCoarse(lat, lon);
+        // 枠の外の方が深い水（粗い格子に掘った航路など）なら、外の深さを強めに：航路が枠の縁で浅くならないように
+        const w = (hd < 0 && o < hd) ? Math.min(1, (1 - t) * 3) : 1 - t;
+        return hd * (1 - w) + o * w;
     }
     return _rwCoarse(lat, lon);
 }
@@ -263,7 +330,12 @@ function worldWorkerSource() {
         ${_rwShoalFree.toString()}
     `;
 }
-function worldWorkerSync(w) { if (w) w.postMessage({ __rw: true, rw: _RW, R: WORLD_R }); }
+// （ワーカーは高さしか使わないので、作り込んだ港の升目の種類（k）は渡さない：メモリを食うので）
+function worldWorkerSync(w) {
+    if (!w) return;
+    const rw = _RW ? Object.assign({}, _RW, { hd: _RW.hd ? _RW.hd.map(d => Object.assign({}, d, { k: null })) : null, berths: null }) : null;
+    w.postMessage({ __rw: true, rw, R: WORLD_R });
+}
 window.worldWorkerSource = worldWorkerSource;
 window.worldWorkerSync = worldWorkerSync;
 
@@ -489,7 +561,8 @@ function _rwPlacePort(def, idx) {
     let seed = 7;
     for (const ch of name) seed = (seed * 31 + ch.charCodeAt(0)) % 1000000007;
     return { id: 'r' + idx, type, name, lat, lon, u: worldLatLonToUnit(lat, lon), real: true, via: via || null,
-             seaBearing: (Math.atan2(best.se, best.sn) / RAD + 360) % 360, seed };
+             seaBearing: (Math.atan2(best.se, best.sn) / RAD + 360) % 360, seed,
+             quay: (opt && opt.quay) || null, group: (opt && opt.group) || null, berth: (opt && opt.berth) || null };
 }
 // 現実世界の港の航路（浚渫した水路）：地形の格子（460m）では、実際に掘ってある航路（サウサンプトン・
 // ウォーターやテムズ川の航路など）がならされて浅くなってしまう。そこで港の泊地から、なるべく深い所を
@@ -567,6 +640,7 @@ function _rwFairway(p) {
     };
     // 作り込んだ港の中は、細かい地形（40m にまとめる）の上で深い所をたどる（粗い格子では、本物の浅瀬を横切ってしまう）
     let pre = [], vias = (p.via || []).slice(), cur = s0;
+    let Dend = null, rEnd = null;                // 細かい地形でたどった最後の港と、そこでの終わりの点
     const Dt = _rwDetailOf(p.lat, p.lon);
     if (Dt) {
         const inBox = (v) => v[0] > Dt.lat0 && v[0] < Dt.lat1 && v[1] > Dt.lon0 && v[1] < Dt.lon1;
@@ -575,8 +649,21 @@ function _rwFairway(p) {
         // ドックの中の岸壁：ドックの入口の外（入口から DOCK_TURN_OUT m）から。航路の最初の点（自動航行が止まる所）もそこ
         const dk = _rwDockOut(p);
         const st = dk || { lat: p.lat + Math.cos(br) * 150 / mLat, lon: p.lon + Math.sin(br) * 150 / mLon };
-        const r = _rwDetailRoute(Dt, st, tgt ? { lat: tgt[0], lon: tgt[1] } : null);
+        let r = _rwDetailRoute(Dt, st, tgt ? { lat: tgt[0], lon: tgt[1] } : null);
         if (r) { pre = dk ? [dk, ...r.pts] : r.pts; cur = cellOf(r.end.lat, r.end.lon); }
+        // 次の通る所がとなりの作り込んだ港の中なら（ニューヨークの内の湾 → 外の湾など）、そこでも細かい地形で深い所をたどる
+        let D = Dt;
+        for (let g = 0; g < 3 && r && vias.length; g++) {
+            const nv = vias[0];
+            const D2 = R.hd.find(d => d !== D && nv[0] > d.lat0 && nv[0] < d.lat1 && nv[1] > d.lon0 && nv[1] < d.lon1);
+            if (!D2) break;
+            let t2 = null;
+            while (vias.length && vias[0][0] > D2.lat0 && vias[0][0] < D2.lat1 && vias[0][1] > D2.lon0 && vias[0][1] < D2.lon1) t2 = vias.shift();
+            const r2 = _rwDetailRoute(D2, r.end, t2 ? { lat: t2[0], lon: t2[1] } : null);
+            if (!r2) break;
+            pre = pre.concat(r2.pts.slice(1)); cur = cellOf(r2.end.lat, r2.end.lon); r = r2; D = D2;
+        }
+        if (r) { Dend = D; rEnd = r.end; }
     }
     // 通る所（実際の航路の目印。港ごとの via）を順に通ってから、外洋の深い所へ
     let cells = [];
@@ -589,7 +676,32 @@ function _rwFairway(p) {
     }
     const last = search(cur, (i, j) => Math.hypot((i - s0.i) * dx, (j - s0.j) * dy) > 2500 && hAt(i, j) <= -(D + 4) && openDeep(i, j));
     if (last) cells = cells.concat(cells.length ? last.slice(1) : last);
-    if (cells.length < 2) return pre.length ? { depth: D, pts: [{ lat: p.lat, lon: p.lon }, ...pre] } : null;
+    // 粗い格子の道のうち、細かい地形でたどってきた港の枠の中の所は、細かい地形でたどり直す
+    //（枠の中は細かい地形が使われ、粗い格子を掘っても効かない。粗い道が本物の浅瀬を横切ると座礁する：
+    //  ニューヨークのアンブローズ水路の沖など）
+    if (Dend && rEnd && cells.length >= 2) {
+        // 枠の縁から 300m の中（縁の 250m は粗い格子とまぜた高さなので、粗い格子を掘れば深くなる）
+        const eLat = 300 / mLat, eLon = 300 / mLon;
+        const inD = (c) => { const q = llOf(c[0], c[1]); return q.lat > Dend.lat0 + eLat && q.lat < Dend.lat1 - eLat && q.lon > Dend.lon0 + eLon && q.lon < Dend.lon1 - eLon; };
+        let q = 0;
+        while (q < cells.length && inD(cells[q])) q++;
+        // 枠の中の粗い道が、本物の地形で浅い所（13m 未満）を通るときだけ（深い所を通っているなら、そのまま）
+        let shallow = false;
+        for (let k = 0; k < Math.min(q, cells.length - 1) && !shallow; k++) {
+            const A = llOf(cells[k][0], cells[k][1]), B = llOf(cells[k + 1][0], cells[k + 1][1]);
+            for (let t = 0; t <= 1.001; t += 0.1) if (_rwSample(A.lat + (B.lat - A.lat) * t, A.lon + (B.lon - A.lon) * t) > -13) { shallow = true; break; }
+        }
+        if (shallow && q > 1) {
+            const tq = llOf(cells[q - 1][0], cells[q - 1][1]);
+            const r3 = _rwDetailRoute(Dend, rEnd, tq);
+            const e3 = r3 && r3.pts.length >= 2 ? r3.end : null;
+            if (e3 && Math.hypot((e3.lat - tq.lat) * mLat, (e3.lon - tq.lon) * mLon) < 200) {
+                pre = pre.concat(r3.pts.slice(1));
+                cells = q < cells.length ? cells.slice(q - 1) : [];
+            }
+        }
+    }
+    if (cells.length < 2) return pre.length ? { depth: D, pts: _rwUnhook([{ lat: p.lat, lon: p.lon }, ...pre]) } : null;
     // まっすぐにできる所はまっすぐに（途中がずっと水の上の範囲で。低い陸を横切ると、掘ったときに
     // ありもしない運河ができてしまう。道すじそのものが通る低い陸（狭い口）は、そのまま残る）
     // （線の両側 200m に高い陸がある所も、まっすぐにしない：掘った航路の端に陸が残る）
@@ -600,6 +712,9 @@ function _rwFairway(p) {
         for (let t = 1; t < L; t++) {
             const u = t / L, ci = A[0] + (B[0] - A[0]) * u, cj = A[1] + (B[1] - A[1]) * u, q = llOf(ci, cj);
             if (_rwSample(q.lat, q.lon) >= -1) return false;
+            // 作り込んだ港の枠の中は本物の地形なので、浅い所（12m 未満）をまっすぐ横切らない（粗い格子を掘っても効かない）
+            if (R.hd) { const Dq = _rwDetailOf(q.lat, q.lon), e = 300 / mLat, eo = 300 / mLon;
+                if (Dq && q.lat > Dq.lat0 + e && q.lat < Dq.lat1 - e && q.lon > Dq.lon0 + eo && q.lon < Dq.lon1 - eo && _rwSample(q.lat, q.lon) > -12) return false; }
             for (const k of [-1, 1]) { const r = llOf(ci + oi * k, cj + oj * k); if (_rwSample(r.lat, r.lon) >= 3) return false; }
         }
         return true;
@@ -611,7 +726,28 @@ function _rwFairway(p) {
         for (let c = cells.length - 1; c > a + 1; c--) if (clear(cells[a], cells[c])) { b = c; break; }
         simp.push(cells[b]); a = b;
     }
-    return { depth: D, pts: [{ lat: p.lat, lon: p.lon }, ...pre, ...simp.map(([i, j]) => llOf(i, j))] };
+    return { depth: D, pts: _rwUnhook([{ lat: p.lat, lon: p.lon }, ...pre, ...simp.map(([i, j]) => llOf(i, j))]) };
+}
+// 航路の短い折り返し（細かい地形の道の終わりと粗い格子の升目の真ん中の継ぎ目などで、少し戻ってから曲がる所）を除く。
+// 大きな船はそこを回りきれず、点のまわりを回り続けていた（ベルファストの出口など）。
+// 前後の点をまっすぐ結んでも水の上（12m より深い）なら、その点を省く。港の点と泊地の点（最初の 2 つ）は残す
+function _rwUnhook(pts) {
+    const RAD = Math.PI / 180, mLat = WORLD_R * RAD;
+    const brg = (a, b) => Math.atan2((b.lon - a.lon) * Math.cos(a.lat * RAD), b.lat - a.lat) / RAD;
+    const len = (a, b) => Math.hypot((b.lat - a.lat) * mLat, (b.lon - a.lon) * mLat * Math.cos(a.lat * RAD));
+    const deepLine = (a, b) => { const n = Math.max(2, Math.ceil(len(a, b) / 20)); for (let k = 1; k < n; k++) { const u = k / n; if (_rwSample(a.lat + (b.lat - a.lat) * u, a.lon + (b.lon - a.lon) * u) > -12) return false; } return true; };
+    let changed = true;
+    for (let guard = 0; changed && guard < 8; guard++) {
+        changed = false;
+        for (let i = 2; i < pts.length - 1; i++) {
+            const A = pts[i - 1], P = pts[i], B = pts[i + 1];
+            const turn = Math.abs(((brg(P, B) - brg(A, P) + 540) % 360) - 180);
+            if (!((turn > 100 && len(A, P) < 500) || (turn > 60 && len(A, P) < 120))) continue;
+            if (!deepLine(A, B)) continue;
+            pts.splice(i, 1); i--; changed = true;
+        }
+    }
+    return pts;
 }
 // 作り込んだ港の中の航路：40m の升目（中と四隅の浅い方の深さ）で、深いほど通りやすく、6m より浅い所は通らない。
 // 始まり st から、目当て tgt（無ければ港の枠の縁）まで。まっすぐ行ける所（途中がずっと 8m より深い）はまっすぐに
@@ -695,8 +831,10 @@ function _rwDetailRoute(d, st, tgt) {
     // まっすぐにできる所はまっすぐに（線の上と左右 40m を 20m おきに、12m（道すじの浅い所がそれより浅ければ、そこまで）より深いか：
     // 大きな船の幅と横ずれの分）。さらに、まっすぐにした線が、元の道すじ（水路の真ん中）と同じくらい浅い所から
     // 離れていること（道すじのその間でいちばん浅い所に近い所の 8 割。曲がり角の内側の浅瀬へ寄せない）
+    // 道すじのいちばん浅い所（始まりの 300m ほど：岸壁の前・ドックの口は浅いことがあるので除く。そこを含めると、
+    // まっすぐにする線が水路の外の浅瀬（6〜7m）を横切ってもよいことになってしまう：ボルティモアのシーガートの前など）
     let deepest = Infinity;
-    for (const k of path) deepest = Math.min(deepest, dep[k]);
+    for (let q = Math.min(8, path.length - 1); q < path.length; q++) deepest = Math.min(deepest, dep[path[q]]);
     const clr = path.map(k => clrAt(k));
     const cellAt = (la, lo) => {
         const i = Math.max(0, Math.min(nx - 1, Math.round((lo - d.lon0) / d.dLon / f - 0.5))), j = Math.max(0, Math.min(ny - 1, Math.round((d.lat1 - la) / d.dLat / f - 0.5)));
@@ -750,7 +888,8 @@ function _rwCarve(fw) {
             if (d > pad) continue;
             const k = j * R.cols + i, h = R.h[k];
             if (h >= 3) {
-                if (!(s > 0 && (d < 200 && h < 10 || d < 150 && h < 30))) continue;   // 升目の真ん中が航路の線から 150m なら、升目の大半は水路
+                // （川の中の航路は、両岸の低い陸（10m 未満）も 400m まで削る。格子が粗いので、残すとならした地形で航路の端が浅くなる：デラウェア川など）
+                if (!(s > 0 && (d < 400 && h < 10 || d < 150 && h < 30))) continue;   // 升目の真ん中が航路の線から 150m なら、升目の大半は水路
                 const lat = R.lat1 - j * R.cell, lon = R.lon0 + i * R.cell;
                 if (Math.hypot((lat - P0.lat) * mLat, (lon - P0.lon) * mLon) < 400) continue;   // 港の岸壁のまわりは残す
             }
@@ -762,7 +901,7 @@ function _rwCarve(fw) {
 function _rwBuildPorts() {
     const W = REAL_WORLDS[world.realKey];
     const out = [];
-    (W.ports || []).forEach((d, i) => { const p = _rwPlacePort(d, i); if (p) out.push(p); else console.warn('港を置けませんでした：' + d[0]); });
+    (W.ports || []).concat((_RW && _RW.berths) || []).forEach((d, i) => { const p = _rwPlacePort(d, i); if (p) out.push(p); else console.warn('港を置けませんでした：' + d[0]); });
     // 航路を探して掘る（掘った格子をワーカーにも渡し直す）
     for (const p of out) { p.fairway = _rwFairway(p); if (p.fairway) _rwCarve(p.fairway); }
     if (typeof terrain !== 'undefined') worldWorkerSync(terrain.worker);
@@ -946,9 +1085,13 @@ async function worldLoadReal(key) {
     const rw = { key, lat0: meta.lat0, lat1: meta.lat1, lon0: meta.lon0, lon1: meta.lon1, rows: meta.rows, cols: meta.cols, cell: meta.cell, h };
     // 作り込んだ港（読めなかった港は、ふつうの地形のまま）
     rw.hd = [];
+    rw.berths = [];
     for (const hk of W.harbors || []) {
         try { rw.hd.push(await _rwLoadHarbor(hk)); }
-        catch (e) { console.warn('作り込んだ港の地形を読めませんでした：' + hk, e); }
+        catch (e) { console.warn('作り込んだ港の地形を読めませんでした：' + hk, e); continue; }
+        // その港の埠頭（作るときに書き出したもの：[名前, 種類, 緯度, 経度, 通る所, { at, bearing, quay, dock, group, berth }]）
+        try { const r = await fetch('data/harbors/' + hk + '_berths.json'); if (r.ok) rw.berths.push(...(await r.json())); }
+        catch (e) { /* 埠頭の一覧の無い港 */ }
     }
     if (!rw.hd.length) rw.hd = null;
     _rwCache[key] = rw;
@@ -1392,6 +1535,7 @@ function _wmEnsureDom() {
                 <button id="wp-mode-ocean" onclick="worldSetMode('ocean')">🌊 海だけ</button>
                 <button id="wp-mode-world" onclick="worldSetMode('world')">🌍 世界を航海</button>
                 <button id="wp-mode-real" onclick="worldSetKind('real', 'britain')" title="実際の地形（NOAA ETOPO 2022）と実在の港">🇬🇧 実在：ブリテン諸島</button>
+                <button id="wp-mode-useast" onclick="worldSetKind('real', 'useast')" title="実際の地形（NOAA ETOPO 2022・CRM）と実在の港（ニューヨーク・ボストン・フィラデルフィア・ボルティモア・ハンプトン・ローズは作り込み）">🇺🇸 実在：アメリカ東海岸</button>
             </span>
             <button id="wp-chart" class="wp-chartbtn" onclick="worldMapSetChart(!_wm.chart)">📘 海図</button>
             <button id="wp-minimap" class="wp-chartbtn wp-mmbtn" onclick="minimapShow(!_mm.show)" title="右上の小さな地図">◉ ミニ地図</button>
@@ -1562,7 +1706,8 @@ function worldMapRedraw(quick) {
     const mmBtn = document.getElementById('wp-minimap'); if (mmBtn && typeof _mm !== 'undefined') mmBtn.classList.toggle('on', !!_mm.show);
     document.getElementById('wp-mode-ocean').classList.toggle('on', world.mode === 'ocean');
     document.getElementById('wp-mode-world').classList.toggle('on', world.mode === 'world' && world.kind !== 'real');
-    const rb = document.getElementById('wp-mode-real'); if (rb) rb.classList.toggle('on', world.mode === 'world' && world.kind === 'real');
+    const rb = document.getElementById('wp-mode-real'); if (rb) rb.classList.toggle('on', world.mode === 'world' && world.kind === 'real' && world.realKey === 'britain');
+    const ub = document.getElementById('wp-mode-useast'); if (ub) ub.classList.toggle('on', world.mode === 'world' && world.kind === 'real' && world.realKey === 'useast');
     const st = document.getElementById('wp-status');
     // 全体の絵
     if (!_wm.base) {

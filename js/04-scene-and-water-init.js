@@ -435,6 +435,8 @@ function createWater() {
         deepColor: { value: new THREE.Color(0.008, 0.04, 0.14) },
         shallowColor: { value: new THREE.Color(0.02, 0.12, 0.32) },
         foamColor: { value: new THREE.Color(0.92, 0.97, 1.00) },
+        // 水面に映る空の色（水平線の近くの空。昼は空色・夕方は橙・夜は暗い紺：16-daynight-and-telegraph.js が毎フレーム決める）
+        skyReflColor: { value: new THREE.Color(0.30, 0.52, 0.82) },
         // 船明かり反射
         shipLightCount:       { value: 0 },
         shipLightPositions:   { value: waterShipLightPositions },
@@ -1472,6 +1474,7 @@ function createWater() {
             uniform vec3      deepColor;
             uniform vec3      shallowColor;
             uniform vec3      foamColor;
+            uniform vec3      skyReflColor;
             // 船明かり反射
             uniform int       shipLightCount;
             uniform vec3      shipLightPositions[WATER_SHIP_LIGHT_MAX];
@@ -1811,7 +1814,7 @@ function createWater() {
                 float fresnel = pow(1.0 - max(0.0, dot(n, viewDir)), 4.0);
                 // v120: deepColor/shallowColorをv45の色合いに戻したのに合わせて、
                 // 際(フレネル)の空色もv45の値に戻す。
-                vec3 skyRefl = vec3(0.30, 0.52, 0.82);
+                vec3 skyRefl = skyReflColor;
                 waterBase = mix(waterBase, skyRefl, fresnel * 0.38);
 
                 // ── 船明かりの鏡面反射 ──
@@ -1871,7 +1874,7 @@ function createWater() {
                     if (toFar > 0.0) {
                         vec3 nf = vec3(0.0, 1.0, 0.0);
                         float frF = pow(1.0 - max(0.0, dot(nf, viewDir)), 4.0);
-                        vec3 farCol = mix(mix(deepColor, shallowColor, 0.6), vec3(0.30, 0.52, 0.82), 0.12 + frF * 0.5);
+                        vec3 farCol = mix(mix(deepColor, shallowColor, 0.6), skyReflColor, 0.12 + frF * 0.5);
                         farCol += sunColor * pow(max(0.0, dot(nf, normalize(sunDir + viewDir))), 60.0) * 0.6;
                         finalColor = mix(finalColor, farCol, toFar);
                     }

@@ -92,6 +92,7 @@ function puffEmit(o) {
 }
 window.puffEmit = puffEmit;
 
+const _puffPush = { x: 0, y: 0, z: 0 };
 function updatePuffs(t, dt) {
     if (typeof updateShoreSpray === 'function') updateShoreSpray(t, Math.min(0.1, Math.max(0, dt || 0)));
     if (!puffState.pts) return;
@@ -101,6 +102,7 @@ function updatePuffs(t, dt) {
     const wr = (physics.windDir || 0) * Math.PI / 180, ws = (physics.windSpeed || 0) * 0.5;
     const wX = Math.sin(wr) * ws, wZ = Math.cos(wr) * ws;
     let any = false;
+    const solidOn = typeof shipSolidPushUp === 'function' && window.shipSolid && shipSolid.G;
     for (let i = 0; i < PUFF_MAX; i++) {
         if (A[i] > 1) continue;
         any = true;
@@ -113,6 +115,11 @@ function updatePuffs(t, dt) {
         S[i] = puffState.s0[i] + (puffState.s1[i] - puffState.s0[i]) * Math.sqrt(u);
         // しぶきは水面より下へ落ちたら消す
         if (puffState.grav[i] > 0 && V[j + 1] < 0 && P[j + 1] < -0.5) A[i] = 2;
+        // 船の中に入ったら（60-ship-solid.js）：煙・湯気は上へ押し出し、しぶきは消す
+        else if (solidOn && shipSolidPushUp(P[j], P[j + 1], P[j + 2], _puffPush)) {
+            if (puffState.grav[i] > 0) A[i] = 2;
+            else { P[j] = _puffPush.x; P[j + 1] = _puffPush.y; P[j + 2] = _puffPush.z; if (V[j + 1] < 0) V[j + 1] = 0; }
+        }
     }
     if (!any) return;
     G.position.needsUpdate = true; G.aAge.needsUpdate = true; G.aSize.needsUpdate = true;

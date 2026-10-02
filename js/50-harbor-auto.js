@@ -647,7 +647,7 @@ function _haMakeLines(plan) {
     if (typeof mooringPoints !== 'function') return;
     const S = plan.S, Q = _haQ(S), half = S.quayLen / 2;
     const ext = plan.quayExt || [-half, half];          // 岸壁の端（作り込んだ港は測った長さ）
-    const mat = new THREE.LineBasicMaterial({ color: 0xd8c9a0 });
+    const mat = typeof ropeMaterial === 'function' ? ropeMaterial() : new THREE.LineBasicMaterial({ color: 0x8b6a43 });
     // 「索・もやい綱を直接かける」を選んでいないビット・ボラードからは取らない（クリートはいつも取れる）
     const okIt = (m) => typeof mooringTowOk !== 'function' || mooringTowOk(shipMooring.items[m.index]);
     const pts = mooringPoints().filter(m => m.side === -plan.open && okIt(m));

@@ -615,6 +615,7 @@ function animate() {
     updateSky(t);
     sanitizePhysics();
 
+    if (typeof updateShipSolid === 'function') updateShipSolid(t);   // 船の形の中（60-ship-solid.js）：煙などが船を突き抜けないように
     animateSmoke(t, dt);
     animatePropellers(t, dt);
     animateBubbles(t, dt);

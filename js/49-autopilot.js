@@ -1442,6 +1442,11 @@ function updateAutopilot(t, dt) {
         const diff = Math.abs(((rc.course - leg.course + 540) % 360) - 180);
         passed = diff > 100 && rc.dist < leg.dist;     // 目標が後ろになった
     }
+    // 点のまわりを回り続けない：同じ変針点へ向かう間に 1 回り近く（330°）回ってしまったら、その点は通ったことにする
+    //（大きな船が小さく曲がれない所。ベルファストの出口などで、いつまでもくるくる回っていた）
+    if (!autopilot.circ || autopilot.circ.leg !== autopilot.leg || autopilot.circ.R !== R) autopilot.circ = { leg: autopilot.leg, R, h: physics.heading, turned: 0 };
+    else { autopilot.circ.turned += Math.abs(((physics.heading - autopilot.circ.h + 540) % 360) - 180); autopilot.circ.h = physics.heading; }
+    if (!wp.final && autopilot.circ.turned > 330 && autopilot.leg < R.length - 1) passed = true;
     // 最後の区間：止まるまでに進む距離（機関を止めると速さは 0.3/排水量 の割合で落ちる）を見て、
     // 早めに機関停止、足りなければ後進微速。止まりかけたら到着
     let finalOrder = null;

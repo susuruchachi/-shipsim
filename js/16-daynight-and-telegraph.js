@@ -177,9 +177,20 @@ function updateDayNightCycle(dayProgress) {
             u.shallowColor.value.setRGB(b * 1.0, b * 2.0, b * 4.5);
             u.foamColor.value.setRGB(0.3 + moonPhaseFactor * 0.3, 0.35 + moonPhaseFactor * 0.35, 0.4 + moonPhaseFactor * 0.4);
         }
+        // 水面に映る空の色：水平線の近くの空（05-sky-dome.js と同じ昼・朝夕・夜の混ぜ方）。以前は昼の空色のままで、
+        // 夕方や夜に、遠くの海（斜めに見るので空がよく映る）だけ明るい青に見えていた
+        if (u.skyReflColor) {
+            const sh = sunY / sunDistance, ss = (a, b, x) => { const k = Math.max(0, Math.min(1, (x - a) / (b - a))); return k * k * (3 - 2 * k); };
+            const dayF = ss(-0.18, 0.18, sh), dawnF = ss(-0.25, 0.0, sh) * (1 - ss(0.0, 0.25, sh));
+            const mb = 0.6 + 0.8 * moonPhaseFactor;
+            const nr = 0.010 * mb, ng = 0.016 * mb, nb = 0.040 * mb;
+            const r0 = nr + (0.42 - nr) * dawnF, g0 = ng + (0.26 - ng) * dawnF, b0 = nb + (0.16 - nb) * dawnF;
+            u.skyReflColor.value.setRGB(r0 + (0.30 - r0) * dayF, g0 + (0.52 - g0) * dayF, b0 + (0.82 - b0) * dayF);
+        }
         // 曇天・荒天では海の色も暗く沈む
         const wd = (typeof wxMul.waterDark === 'number') ? wxMul.waterDark : 1;
         if (wd < 0.999) {
+            if (u.skyReflColor) u.skyReflColor.value.multiplyScalar(wd);
             u.deepColor.value.multiplyScalar(wd);
             u.shallowColor.value.multiplyScalar(wd);
             u.foamColor.value.multiplyScalar(0.55 + 0.45 * wd);

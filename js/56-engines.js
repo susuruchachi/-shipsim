@@ -221,12 +221,35 @@ function engineUpdate(dt, designMode) {
     return Math.sign(S) * Math.sqrt(Math.abs(S));
 }
 window.engineUpdate = engineUpdate;
+// 左右の位置を、左右で対になる機関どうしでそろえる。モデルのスクリューの位置が左右で少しずれていると
+// （左舷 0.45・右舷 −0.41 など）、テレグラフも馬力も同じなのに推力の差ができて、舵を切らなくても回り続けていた。
+// 真ん中（半幅の 15% 以内）は 0
+function _engPairedSides(L) {
+    const s = L.map(E => (Math.abs(E.side) < 0.15 ? 0 : E.side)), used = new Set();
+    for (let i = 0; i < L.length; i++) {
+        if (!s[i] || used.has(i)) continue;
+        let best = -1, bd = Infinity;
+        for (let j = 0; j < L.length; j++) {
+            if (j === i || used.has(j) || !s[j] || Math.sign(s[j]) === Math.sign(s[i])) continue;
+            const d = Math.abs(Math.abs(s[j]) - Math.abs(s[i]));
+            if (d < bd) { bd = d; best = j; }
+        }
+        if (best >= 0 && bd < 0.4) {
+            const a = (Math.abs(s[i]) + Math.abs(s[best])) / 2;
+            s[i] = Math.sign(s[i]) * a; s[best] = Math.sign(s[best]) * a;
+            used.add(i); used.add(best);
+        }
+    }
+    return s;
+}
 // 左右の機関の推力の差で回る速さ[度/秒]（左舷の機関が前進 → 船首は右へ＝heading が減る）
 function engineTwistDeg() {
     const L = engineList(); if (L.length < 2) return 0;
     if (typeof azipodActive === 'function' && azipodActive()) return 0;     // アジポッドは力で回す（58-maneuvering.js）
-    const w = _engWeights();
-    let m = 0; L.forEach((E, i) => { m += w[i] * E.rpm * Math.abs(E.rpm) * E.side; });
+    const w = _engWeights(), sd = _engPairedSides(L);
+    let m = 0; L.forEach((E, i) => { m += w[i] * E.rpm * Math.abs(E.rpm) * sd[i]; });
+    // 左右がそろって同じ回転・同じ馬力なら、ちょうど 0（丸めの誤差で回り続けない）
+    if (Math.abs(m) < 1e-4) return 0;
     const hp = window.hullProfile, len = ((hp && hp.ready) ? hp.halfLen * 2 : 12) * (physics.scale || 1);
     return -m * 700 / Math.max(20, len);           // 270m の船で、左右を半速の前進・後進にして毎秒 0.2° ほど
 }
