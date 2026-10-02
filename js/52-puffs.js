@@ -199,6 +199,7 @@ function _rockFxUpdate(t, dt) {
     if (typeof wakeParticleMat !== 'undefined' && wakeParticleMat) {
         U.lightFactor.value = wakeParticleMat.uniforms.lightFactor.value;
         U.uAspect.value = wakeParticleMat.uniforms.uAspect.value;
+        if (U.uResK && wakeParticleMat.uniforms.uResK) U.uResK.value = wakeParticleMat.uniforms.uResK.value;
     }
     const hasH = typeof getOceanHeight === 'function';
     let any = false;

@@ -728,6 +728,7 @@ function animateSmoke(t, dt) {
     if (bubbleMat) bubbleMat.uniforms.lightFactor.value = THREE.MathUtils.clamp(lf * 0.85, 0.05, 1.0);
     // Scale puff size relative to ship size so small ships don't get oversized "moko" blobs
     globalSmokeMat.uniforms.sizeScale.value = THREE.MathUtils.clamp(physics.scale / 22.0, 0.18, 1.6);
+    if (globalSmokeMat.uniforms.uResK && typeof particleResK === 'function') globalSmokeMat.uniforms.uResK.value = particleResK();   // 画質で大きさが変わらないように（03）
 
     // Update existing particles
     for(let i=0; i<perf.smokeCap; i++) {

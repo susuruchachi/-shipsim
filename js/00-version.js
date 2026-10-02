@@ -113,7 +113,8 @@
 //               浅瀬・岩礁・波打ち際（6m より浅い所）の海面を、波が立つと白く泡立たせる。
 //               アジポッド：船橋の「アジポッド用の旋回レバー」でポッドの向きを 360° 動かし、推力はテレグラフで（舵は使わない）。
 // 0.03.013.013  タグを使わない出港：サイドスラスターもアジポッドも無い船は、横滑りやその場の回頭をせず、船首（後進なら船尾）を沖へ振り出してから舵と機関で出る。
-var APP_VERSION = '0.03.013.013';
+// 0.03.013.014  画質（内部解像度）を変えると排煙・喫水線のしぶき・岩のしぶきの大きさが変わっていたのを直す（端末のいちばん高い画質の見た目にそろえる）。
+var APP_VERSION = '0.03.013.014';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

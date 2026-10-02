@@ -10,6 +10,18 @@ const particleFogUniforms = {
 // GLOBAL SMOKE SYSTEM VARIABLES (WORLD SPACE)
 // ----------------------------------------------------
 let globalSmokeGeo, globalSmokeMat, globalSmokePoints;
+// 画面の解像度による点の大きさの補正。点の大きさ（gl_PointSize）は描画の画素の数なので、
+// 「画質」（内部解像度）を下げると同じ数の画素が画面の大きな割合になり、排煙・しぶきが大きく見えていた。
+// その端末のいちばん高い画質（内部解像度の倍率＝devicePixelRatio、2 まで）での見た目を基準にし、
+// 画質を下げても画面に対する大きさが変わらないようにする
+function particleResK() {
+    const el = (typeof renderer !== 'undefined' && renderer) ? renderer.domElement : null;
+    if (!el || !el.clientHeight) return 1;
+    const pr = el.height / el.clientHeight;                          // 今の内部解像度の倍率
+    const full = Math.min(2, window.devicePixelRatio || 1);          // この端末の「高」の倍率
+    return Math.max(0.2, Math.min(2, pr / full));
+}
+window.particleResK = particleResK;
 const MAX_SMOKE = 2600;
 let smokeIdx = 0;
 let smokeData = [];
@@ -46,6 +58,7 @@ function createGlobalSmokeSystem() {
             color: { value: new THREE.Color(0xaaaaaa) },
             dens: { value: 0.6 },
             sizeScale: { value: 1.0 },
+            uResK: { value: 1.0 },
             lightFactor: { value: 1.0 },
             uFogColor: particleFogUniforms.uFogColor,
             uFogDensity: particleFogUniforms.uFogDensity,
@@ -60,6 +73,7 @@ function createGlobalSmokeSystem() {
             varying float vAge;
             varying float vRand;
             uniform float sizeScale;
+            uniform float uResK;
             // 対数深度バッファ対応（04-scene-and-water-init.jsのwaterMatと同じ理由。
             // depthWrite:falseでもdepthTest:trueで船体/水面と比較するため必要）。
             // v153-fix3: EXT_frag_depthに依存しない経路のみを使う。
@@ -82,7 +96,7 @@ function createGlobalSmokeSystem() {
                 float ps = baseSize * (300.0 / max(0.01, -mvPos.z));
                 // カメラのすぐ近くの煙は画面を大きく覆うだけで重いので、大きくなるほど薄くして上限で止める
                 vNear = 1.0 - smoothstep(260.0, 520.0, ps);
-                gl_PointSize = min(ps, 520.0);
+                gl_PointSize = min(ps, 520.0) * uResK;          // 解像度の補正（画質で大きさが変わらないように）
                 gl_Position = projectionMatrix * mvPos;
                 // v153-fix3: EXT_frag_depthに依存しない経路のみを使う。
                 #ifdef USE_LOGDEPTHBUF
@@ -407,6 +421,7 @@ function createWakeParticleSystem() {
             mapStreak:   { value: getStreakTex() },
             sizeScale:   { value: 1.0 },
             lightFactor: { value: 1.0 },
+            uResK:       { value: 1.0 },
             // 波切りストリークの画面空間回転を正しく計算するための画面アスペクト比。
             // animateWakeParticles()内で毎フレーム camera.aspect から更新される
             // （画面回転・リサイズにも自動追従）。
@@ -424,6 +439,7 @@ function createWakeParticleSystem() {
             attribute vec3 velocity;
             uniform float sizeScale;
             uniform float uAspect;
+            uniform float uResK;
             varying float vAge;
             varying float vType;
             varying float vAngle;
@@ -505,7 +521,7 @@ function createWakeParticleSystem() {
                 //   本当に異常な値だけを弾く緩いセーフティネット(500px)だけ残す。
                 const float MIN_DIST = 3.0;
                 float requestedSize = baseSize * (400.0 / max(-mvPos.z, MIN_DIST));
-                gl_PointSize = min(requestedSize, 500.0);
+                gl_PointSize = min(requestedSize, 500.0) * uResK;   // 解像度の補正（画質で大きさが変わらないように）
                 // 【対策】しぶきの発生点は船体表面や海面すれすれのことが多く、視点に
                 // よっては発生点そのものだけがわずかに船体/海面の裏側に回り込み、
                 // depthTestでスプライト全体が丸ごと消えてしまうことがあった
@@ -597,6 +613,7 @@ function animateWakeParticles(t, dt) {
     const spd = Math.abs(physics.speed);
     const sizeScale = THREE.MathUtils.clamp(physics.scale / 22.0, 0.3, 5.0);
     wakeParticleMat.uniforms.sizeScale.value = sizeScale;
+    wakeParticleMat.uniforms.uResK.value = particleResK();
     // 波切りストリーク(ptype=2)の画面空間回転をカメラの現在のアスペクト比に追従させる
     // （リサイズ・端末回転時も自動的に正しい向きになる）
     if (typeof camera !== 'undefined' && camera && camera.aspect) {
