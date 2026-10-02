@@ -136,7 +136,8 @@
 //               航海灯・窓明かり・排煙・地図とミニ地図・世界地図の「🚢 他の船」で設定）。自動航行も同じルールで、よける・待つ。
 // 0.03.013.022 プロムナードの影のまだらを減らす（空の見え方をまわりの升目となめらかに混ぜる）。晴れた昼は船の間接光を弱めて
 //               太陽の光を少し強め、甲板などの普通の影もくっきり（曇り・夜は今まで通り）。
-var APP_VERSION = '0.03.013.022';
+// 0.03.013.023 自動航行のパネルが小さな画面で下に見切れるのを直す（入らなければ TELEMETRY の左へ、それでも入らなければパネルの中をスクロール）。
+var APP_VERSION = '0.03.013.023';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

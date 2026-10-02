@@ -1707,10 +1707,31 @@ setInterval(() => {
     if (el) {
         const mm = document.getElementById('minimap');
         const tp = document.getElementById('telemetry-panel');
-        let top = 0;
-        if (mm && !mm.classList.contains('hidden') && !mm.classList.contains('off')) top = mm.getBoundingClientRect().bottom + 38;
-        else if (tp) top = tp.getBoundingClientRect().bottom + 8;
+        const mmOn = mm && !mm.classList.contains('hidden') && !mm.classList.contains('off');
+        const rt = tp ? tp.getBoundingClientRect() : null, rm = mmOn ? mm.getBoundingClientRect() : null;
+        let top = rt ? rt.bottom + 8 : 0, right = '';
+        // 小さな地図が TELEMETRY の下にあれば、その下へ（画面が低いと、小さな地図は TELEMETRY の左に並ぶ）
+        if (rm && (!rt || rm.top >= rt.bottom - 4)) top = rm.bottom + 38;
+        // 画面が低くて下が見切れるときは、TELEMETRY（・小さな地図）の左に並べる（上のボタンの列より下）。
+        // 左にも入らない狭い画面では、そのままの所で、パネルの中をスクロール
+        const H = window.innerHeight, need = Math.min(el.scrollHeight || 0, 220), pw = el.offsetWidth || 230;
+        if (el.classList.contains('open') && top + need > H - 8 && rt) {
+            let leftEdge = rt.left;
+            if (rm) leftEdge = Math.min(leftEdge, rm.left);
+            if (leftEdge - 8 - pw >= 4) {
+                let btnBottom = 0;
+                for (const id of ['worldmap-toggle', 'screenshot-toggle', 'viewpoint-toggle', 'camera-mode-toggle', 'lookout-toggle']) {
+                    const b = document.getElementById(id);
+                    if (b && b.offsetParent) { const q = b.getBoundingClientRect(); if (q.right > leftEdge - pw - 16) btnBottom = Math.max(btnBottom, q.bottom); }
+                }
+                right = Math.round(window.innerWidth - leftEdge + 8) + 'px';
+                top = Math.max(rt.top, btnBottom + 6);
+            }
+        }
+        el.style.right = right;
         el.style.top = Math.round(top) + 'px';
+        // それでも入らない分は、パネルの中でスクロール
+        el.style.maxHeight = Math.max(90, Math.round(H - top - 8)) + 'px';
     }
     if (autopilot.active || autopilot.planning || (typeof harborAuto !== 'undefined' && harborAuto.mode)) renderAutopilotPanel();
 }, 500);
