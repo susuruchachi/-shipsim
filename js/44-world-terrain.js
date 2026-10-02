@@ -47,7 +47,7 @@ function _portShape(p) {
     // s：海の方、l：岸沿い（s を右に90°）
     // 海の方の向き（物理の面では東が −x）
     // detail：作り込んだ港の地形の中（本物の岸壁・ドックがあるので、地形はほとんど手直ししない）
-    const detail = !!(p.real && typeof _rwDetailOf === 'function' && _RW && _RW.hd && _rwDetailOf(p.lat, p.lon));
+    const detail = !!(p.real && typeof _rwDetailBoxOf === 'function' && _RW && _rwDetailBoxOf(p.lat, p.lon));     // （細かい地形をまだ読んでいなくても）
     return { id: p.id, type: p.type, real: !!p.real, detail, x: loc.x, z: loc.z, sx: -Math.sin(br), sz: Math.cos(br),
              quayLen, apron, basin, depth: T.depth, seed: p.seed, name: p.name, chLen: worldPortChannelLen(p) };
 }
@@ -1262,6 +1262,8 @@ function updateWorldTerrain(t, dt) {
     if (world._resumeHeading !== undefined && t > 0.5) { physics.heading = world._resumeHeading; world._resumeHeading = undefined; }
     // 船の位置をときどき覚えておく
     if (!(t - (terrain.lastSave || 0) < 5)) { terrain.lastSave = t; _worldSave(); }
+    // 作り込んだ港の細かい地形：船が近づいたら読み、遠くなったら捨てる（43-world.js）
+    if (!(t - (terrain.hdTick || 0) < 3)) { terrain.hdTick = t; if (typeof worldHarborTick === 'function') worldHarborTick(); }
     const cx = physics.cgWorldX || 0, cz = physics.cgWorldZ || 0;
     // 北大西洋：地形のワーカーには船のまわりの地形だけを渡してあるので、船が離れたら渡し直す
     if (_RW && _RW.grids && terrain.worker) {

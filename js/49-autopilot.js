@@ -74,7 +74,7 @@ function worldTrueCompass() {
 window.worldTrueCompass = worldTrueCompass;
 // 舵 25° ほどでの旋回半径[m]（17-main-loop.js：回る速さ ＝ 速さ×0.514 ÷ R × 舵/35、進む速さはそのまま m/s）
 // 作り込んだ港（川・入江の奥の港）の中の区間は、実際の港と同じようにタグが付き添う
-function _apInDetail(q) { return !!(q && world.kind === 'real' && typeof _rwDetailOf === 'function' && _rwDetailOf(q.lat, q.lon)); }
+function _apInDetail(q) { return !!(q && world.kind === 'real' && typeof _rwDetailBoxOf === 'function' && _rwDetailBoxOf(q.lat, q.lon)); }
 function _apTurnRadius() { return 12 * (physics.scale || 1) * (physics.turningRadiusFactor || 5) / 0.514 * 1.4; }
 function _apHeadingForTrue(course) { return _apNorthHeading() - course; }
 
@@ -473,10 +473,11 @@ function _apWorker() {
 }
 let _apReq = 0;
 // opt.tug：タグの補助を前提に、狭い水路も通す（余裕を小さく）。返す点に narrow（その点までの区間が狭い）を付ける
+// opt.draft・opt.hw：自分の船の代わりに、その喫水[m]・半幅[m]の船の道を探す（他の船：59-traffic.js）
 function worldPlanRoute(from, to, opt) {
     opt = opt || {};
     const id = ++_apReq;
-    const draft = (typeof worldShipDraft === 'function') ? worldShipDraft() : 8;
+    const draft = opt.draft || ((typeof worldShipDraft === 'function') ? worldShipDraft() : 8);
     return new Promise((resolve, reject) => {
         const w = _apWorker();
         const on = (ev) => {
@@ -489,7 +490,7 @@ function worldPlanRoute(from, to, opt) {
         // 必要な水深：喫水＋余裕（3m）＋波で上下する分。船の幅＋横ずれの分の帯の中で調べる
         const hs = Math.max(0, window._seaHs || 0);
         const need = draft + 2 + Math.max(0.5, hs * 0.4);
-        const hwM = (typeof worldHullAt === 'function' && window.hullProfile && hullProfile.ready) ? (() => { let m = 0; for (let k = -10; k <= 10; k++) { const z = k / 10 * hullProfile.halfLen; m = Math.max(m, worldHullAt(z).hw, (typeof worldHullExtentAt === 'function' ? worldHullExtentAt(z) : 0) * (physics.scale || 1)); } return m; })() : 15;
+        const hwM = opt.hw ? opt.hw : (typeof worldHullAt === 'function' && window.hullProfile && hullProfile.ready) ? (() => { let m = 0; for (let k = -10; k <= 10; k++) { const z = k / 10 * hullProfile.halfLen; m = Math.max(m, worldHullAt(z).hw, (typeof worldHullExtentAt === 'function' ? worldHullExtentAt(z) : 0) * (physics.scale || 1)); } return m; })() : 15;
         // 出発点・目的地のそばの港の、掘ってある航路・泊地
         const ports = [];
         for (const P of worldBuildPorts()) {
@@ -497,15 +498,15 @@ function worldPlanRoute(from, to, opt) {
             const T = PORT_TYPES[P.type], br = P.seaBearing * _apRad;
             ports.push({ lat: P.lat, lon: P.lon, sx: Math.sin(br), sz: Math.cos(br), basin: T.basin, quay: T.quay, depth: T.depth, chLen: worldPortChannelLen(P) });
         }
-        const m = apMargins();
+        const m = apMargins(opt.draft);
         if (opt.tug) w.postMessage({ id, from, to, draft, need: m.needTug, band: hwM + m.bandTug, needN: m.need, bandN: hwM + m.band, tug: true, ports });
         else w.postMessage({ id, from, to, draft, need: m.need, band: hwM + m.band, ports });
     });
 }
 window.worldPlanRoute = worldPlanRoute;
 // 必要な水深と、調べる帯の幅（船の半幅に足す分）。タグの補助があれば狭くてよい
-function apMargins() {
-    const draft = (typeof worldShipDraft === 'function') ? worldShipDraft() : 8;
+function apMargins(draftOpt) {
+    const draft = draftOpt || ((typeof worldShipDraft === 'function') ? worldShipDraft() : 8);
     const hs = Math.max(0, window._seaHs || 0);
     return {
         need: draft + 2 + Math.max(0.5, hs * 0.4), band: 35,
@@ -709,6 +710,8 @@ async function autopilotStart(port) {
     autopilot.resume = null;
     autopilot.planning = true; autopilot.dest = port;
     _apMsg(`${port.name} への航路を計算しています…`);
+    // 出発する所・行き先の作り込んだ港の細かい地形を読んでおく（まだなら）
+    if (typeof worldEnsureHarbors === 'function') { await worldEnsureHarbors([worldShipLatLon(), port], 60); if (autopilot.dest !== port || !autopilot.planning) return; }
     const isPt = !!port.point;                     // 地図で指定した海域
     const T = isPt ? null : PORT_TYPES[port.type];
     const hp = window.hullProfile;
@@ -1569,6 +1572,11 @@ function updateAutopilot(t, dt) {
             autopilot.escort = '';
         }
     }
+    // 他の船（59-traffic.js）：同じルールで、よける（右へ）・速力を落とす・埠頭が空くまで待つ
+    const adv = (typeof trafficAdvice === 'function') ? trafficAdvice({ dest: autopilot.dest, remain, channel: !!wp.channel, narrow: !!wp.narrow }) : null;
+    if (adv && Number.isFinite(adv.order)) order = Math.min(order, adv.order);
+    if (adv && adv.dc && !wp.final) course = (course + adv.dc) % 360;
+    if ((adv ? adv.why : '') !== (autopilot.trafficWhy || '')) { autopilot.trafficWhy = adv ? adv.why : ''; renderAutopilotPanel(); }
     _apOrder(order);
     // 舵：針路のずれ（物理の向き）と回る速さで
     const want = _apHeadingForTrue(course);
@@ -1631,6 +1639,7 @@ function renderAutopilotPanel() {
         let line;
         if (ha && ha.mode) line = `⚓ ${ha.mode === 'berth' ? '自動着岸' : '自動離岸'}中`;
         else if (autopilot.active && autopilot.escort === 'wait') line = '🚢 タグを待っています';
+        else if (autopilot.active && autopilot.trafficWhy) line = '⚠ ' + autopilot.trafficWhy;
         else if (autopilot.active) line = `${autopilot.escort === 'on' ? '🚢' : '🧭'} ${autopilot.dest ? autopilot.dest.name : ''}　${Math.round(autopilot.course || 0).toString().padStart(3, '0')}°・残り ${_apFmtDist(autopilot.remain || 0)}`;
         else if (autopilot.planning) line = '🧭 航路を計算しています…';
         else if (autopilot.resume || (ha && ha.resume)) line = '⏸ 止まっています';
@@ -1684,6 +1693,7 @@ function renderAutopilotPanel() {
         <div class="ap-row">次：${wp.label} ${_apFmtDist(autopilot.wpDist || 0)}</div>
         <div class="ap-row">残り ${_apFmtDist(autopilot.remain || 0)}・${R.length - autopilot.leg} 区間・着くまで ${etaS}</div>
         ${autopilot.note ? `<div class="ap-row ap-msg">${autopilot.note}</div>` : ''}
+        ${autopilot.trafficWhy ? `<div class="ap-row ap-escort">⚠ ${autopilot.trafficWhy}</div>` : ''}
         ${autopilot.escort ? `<div class="ap-row ap-escort">🚢 ${{ wait: 'タグを待っています（狭い水路の手前）', ahead: 'この先は狭い水路：タグが付き添います', on: 'タグの付き添いで狭い水路を微速で通っています' }[autopilot.escort]}</div>` : ''}
         <div class="ap-row">${Object.entries({ full: '全速', half: '半速', slow: '微速' }).map(([k, l]) => `<button class="${autopilot.cruise === k ? 'on' : ''}" onclick="autopilotSetCruise('${k}')">${l}</button>`).join('')}
             <button class="ap-off" onclick="autopilotStop('自動航行を切りました')">解除</button></div>

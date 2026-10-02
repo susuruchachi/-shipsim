@@ -159,7 +159,7 @@ function _sprayScanStep(budget) {
             const L = Math.hypot(wx, wz) || 1;
             // 作り込んだ港の中（岸壁・ドック）か：港の中は波が穏やかなので、もやは掛けない
             let hd = false;
-            if (typeof _rwDetailOf === 'function' && typeof _RW !== 'undefined' && _RW && _RW.hd) { const ll = worldUnitToLatLon(worldLocalToUnit(x, z)); hd = !!_rwDetailOf(ll.lat, ll.lon); }
+            if (typeof _rwDetailBoxOf === 'function' && typeof _RW !== 'undefined' && _RW) { const ll = worldUnitToLatLon(worldLocalToUnit(x, z)); hd = !!_rwDetailBoxOf(ll.lat, ll.lon); }
             sc.out.push({ x, z, nx: wx / L, nz: wz / L, rock: h > 2 || deep > 6 ? 1 : 0.5, prev: 0, cool: 0, hd });
         }
         sc.j++;

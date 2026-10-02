@@ -266,6 +266,14 @@ function _rwDetailOf(lat, lon) {
     }
     return null;
 }
+// その所が作り込んだ港の枠の中なら、その港の枠（地形をまだ読んでいなくても。{ key, lat0, lat1, lon0, lon1 }）
+function _rwDetailBoxOf(lat, lon) {
+    const D = _RW && (_RW.hdMeta || _RW.hd);
+    if (!D) return null;
+    for (const d of D) if (lat > d.lat0 && lat < d.lat1 && lon > d.lon0 && lon < d.lon1) return d;
+    return null;
+}
+window._rwDetailBoxOf = _rwDetailBoxOf;
 // その緯度・経度の高さ[m]（格子の 4 点から直線で補う）。範囲の外は低い陸（行き止まり）。
 // 作り込んだ港の中はその細かい地形（縁の 250m で、粗い地形となめらかにつなぐ）
 function _rwSample(lat, lon) {
@@ -976,9 +984,19 @@ function _rwCarveGrid(fw, R) {
 function _rwBuildPorts() {
     const W = REAL_WORLDS[world.realKey];
     const out = [];
-    (W.ports || []).concat((_RW && _RW.berths) || []).forEach((d, i) => { const p = _rwPlacePort(d, i); if (p) out.push(p); else console.warn('港を置けませんでした：' + d[0]); });
+    // 前もって探しておいた港の置き場所・航路があれば、それを使う（探すのは重い）
+    const C = _RW && _RW.fwCache;
+    (W.ports || []).concat((_RW && _RW.berths) || []).forEach((d, i) => {
+        const c = C && C[d[0]];
+        const p = c ? _rwPlacePort([d[0], d[1], d[2], d[3], d[4], Object.assign({}, d[5] || {}, { at: [c.lat, c.lon], bearing: c.sb })], i) : _rwPlacePort(d, i);
+        if (p) { if (c) p._fw = c; out.push(p); } else console.warn('港を置けませんでした：' + d[0]);
+    });
     // 航路を探して掘る（掘った格子をワーカーにも渡し直す）
-    for (const p of out) { p.fairway = _rwFairway(p); if (p.fairway) _rwCarve(p.fairway); }
+    for (const p of out) {
+        const c = p._fw; delete p._fw;
+        p.fairway = c ? (c.pts ? { depth: c.depth, pts: c.pts.map(([lat, lon]) => ({ lat, lon })) } : null) : _rwFairway(p);
+        if (p.fairway) _rwCarve(p.fairway);
+    }
     if (typeof terrain !== 'undefined' && terrain.worker) worldWorkerSync(terrain.worker, terrain.rwWin = worldWorkerWindow());
     if (typeof _apWorkerObj !== 'undefined') worldWorkerSync(_apWorkerObj);
     return out;
@@ -1142,6 +1160,8 @@ function _worldSave() {
 window._worldSave = _worldSave;
 // ── 現実世界の地形データを読む（PNG：高さ ＝ R×256 ＋ G − 32768）──
 const _rwCache = {};
+// 港の航路の前計算（data/<key>_fairways.json）の版：航路の探し方・地形を変えたら上げて、作り直す（worldBuildFairwayCache）
+const RW_FAIRWAY_VER = 1;
 async function _rwLoadGrid(url) {
     const meta = await (await fetch(url + '.json')).json();
     const blob = await (await fetch(url + '.png')).blob();
@@ -1174,17 +1194,22 @@ async function worldLoadReal(key) {
         }
         rw.grids.push(base);
     }
-    // 作り込んだ港（読めなかった港は、ふつうの地形のまま）
+    // 作り込んだ港：ここでは枠（範囲）と埠頭の一覧だけ。細かい地形は、船が近づいたら読む（worldEnsureHarbors）
+    //（全部を読むと、北大西洋では 3000 万点・メモリ 100MB ほどになり、スマートフォンで止まってしまう）
     rw.hd = [];
+    rw.hdMeta = [];
     rw.berths = [];
     for (const hk of W.harbors || []) {
-        try { rw.hd.push(await _rwLoadHarbor(hk)); }
-        catch (e) { console.warn('作り込んだ港の地形を読めませんでした：' + hk, e); continue; }
+        try { const m = await (await fetch('data/harbors/' + hk + '.json')).json(); rw.hdMeta.push({ key: hk, name: m.name, lat0: m.lat0, lat1: m.lat1, lon0: m.lon0, lon1: m.lon1 }); }
+        catch (e) { console.warn('作り込んだ港の範囲を読めませんでした：' + hk, e); continue; }
         // その港の埠頭（作るときに書き出したもの：[名前, 種類, 緯度, 経度, 通る所, { at, bearing, quay, dock, group, berth }]）
         try { const r = await fetch('data/harbors/' + hk + '_berths.json'); if (r.ok) rw.berths.push(...(await r.json())); }
         catch (e) { /* 埠頭の一覧の無い港 */ }
     }
-    if (!rw.hd.length) rw.hd = null;
+    // 前もって探しておいた港の航路（data/<key>_fairways.json。無ければ、その場で探す：重い）
+    rw.fwCache = null;
+    try { const r = await fetch(W.url + '_fairways.json'); if (r.ok) { const c = await r.json(); if (c.v === RW_FAIRWAY_VER) rw.fwCache = c.ports; } }
+    catch (e) { /* 無ければその場で */ }
     _rwCache[key] = rw;
     return rw;
 }
@@ -1206,6 +1231,56 @@ async function _rwLoadHarbor(hk) {
     return { key: hk, name: meta.name, lat0: meta.lat0, lat1: meta.lat1, lon0: meta.lon0, lon1: meta.lon1, rows: meta.rows, cols: meta.cols, dLat: meta.dLat, dLon: meta.dLon, cell: meta.cell, h, k };
 }
 window.worldLoadReal = worldLoadReal;
+// 作り込んだ港の細かい地形を、その点のまわり（rKm 以内に枠がある港）だけ読む。読んだら地形・ワーカーを作り直す
+const _rwHdLoading = new Map();
+async function worldEnsureHarbors(pts, rKm) {
+    if (!_RW || !_RW.hdMeta) return;
+    const R = _RW, need = [];
+    const mLat = 111.2, near = (m, q) => {
+        const dLat = Math.max(0, m.lat0 - q.lat, q.lat - m.lat1) * mLat, dLon = Math.max(0, m.lon0 - q.lon, q.lon - m.lon1) * mLat * Math.cos(q.lat * Math.PI / 180);
+        return Math.hypot(dLat, dLon) < (rKm || 150);
+    };
+    for (const m of R.hdMeta) if (!R.hd.some(d => d.key === m.key) && pts.some(q => q && near(m, q))) need.push(m);
+    if (!need.length) return;
+    await Promise.all(need.map(m => {
+        if (!_rwHdLoading.has(m.key)) _rwHdLoading.set(m.key, _rwLoadHarbor(m.key).then(d => {
+            if (_RW === R && !R.hd.some(q => q.key === d.key)) R.hd.push(d);
+        }).catch(e => console.warn('作り込んだ港の地形を読めませんでした：' + m.key, e)).finally(() => _rwHdLoading.delete(m.key)));
+        return _rwHdLoading.get(m.key);
+    }));
+    if (_RW !== R) return;
+    _rwHarborsChanged();
+}
+function _rwHarborsChanged() {
+    if (typeof terrain !== 'undefined' && terrain.worker) { worldWorkerSync(terrain.worker, terrain.rwWin = worldWorkerWindow()); terrain._dirty = true; }
+    if (typeof _apWorkerObj !== 'undefined') worldWorkerSync(_apWorkerObj);
+    if (typeof _wm !== 'undefined') { _wm.detail = null; _wm.detailKey = ''; }
+}
+// ときどき（44-world-terrain.js から）：船のまわり 150km の港を読み、600km より遠くの港は捨てる（自動航行の行き先は残す）
+function worldHarborTick() {
+    if (!_RW || !_RW.hdMeta || world.mode !== 'world') return;
+    const me = worldShipLatLon(), dest = (typeof autopilot !== 'undefined' && autopilot.dest && !autopilot.dest.point) ? autopilot.dest : null;
+    worldEnsureHarbors([me, dest], 150);
+    const far = (d, q) => !q || Math.hypot((Math.max(d.lat0, Math.min(d.lat1, q.lat)) - q.lat) * 111.2, (Math.max(d.lon0, Math.min(d.lon1, q.lon)) - q.lon) * 111.2 * Math.cos(q.lat * Math.PI / 180)) > 600;
+    const before = _RW.hd.length;
+    _RW.hd = _RW.hd.filter(d => !(far(d, me) && far(d, dest)));
+    if (_RW.hd.length !== before) _rwHarborsChanged();
+}
+window.worldEnsureHarbors = worldEnsureHarbors;
+window.worldHarborTick = worldHarborTick;
+// 港の航路を全部探し直して、前計算のファイル（data/<key>_fairways.json）の中身を返す（作り直すとき：開発用）
+async function worldBuildFairwayCache() {
+    if (!_RW) return null;
+    await worldEnsureHarbors(_RW.hdMeta.map(m => ({ lat: (m.lat0 + m.lat1) / 2, lon: (m.lon0 + m.lon1) / 2 })), 1);
+    const saved = _RW.fwCache; _RW.fwCache = null;
+    world.ports = null;
+    const ports = worldBuildPorts();
+    _RW.fwCache = saved;
+    const o = {};
+    for (const p of ports) o[p.name] = { lat: +p.lat.toFixed(7), lon: +p.lon.toFixed(7), sb: +p.seaBearing.toFixed(3), depth: p.fairway ? p.fairway.depth : 0, pts: p.fairway ? p.fairway.pts.map(q => [+q.lat.toFixed(6), +q.lon.toFixed(6)]) : null };
+    return { v: RW_FAIRWAY_VER, ports: o };
+}
+window.worldBuildFairwayCache = worldBuildFairwayCache;
 // 世界を切り替えたとき：覚えている物（港・地図・地形・ワーカー・タグ・自動の操船）をやり直す
 function _worldKindChanged() {
     world.ports = null; _wFrameCache = null;
@@ -1410,6 +1485,12 @@ setInterval(() => { const p = document.getElementById('settings-panel'); if (p &
 // 港から出航する：港の前の泊地に、海の方を向けて置く。
 // 船が深すぎて港に入れないときは、足りる深さの所まで沖へ出して置く。
 function worldStartAtPort(port) {
+    // 作り込んだ港で、細かい地形をまだ読んでいなければ、読んでから（船を置く所を本物の深さで決める）
+    if (_RW && _RW.hdMeta && _rwDetailBoxOf(port.lat, port.lon) && !_rwDetailOf(port.lat, port.lon) && !port._hdTried) {
+        port._hdTried = true;
+        worldEnsureHarbors([{ lat: port.lat, lon: port.lon }], 150).then(() => { worldStartAtPort(port); port._hdTried = false; });
+        return;
+    }
     const T = PORT_TYPES[port.type];
     const F = _worldFrame(port.lat, port.lon);
     const br = port.seaBearing * Math.PI / 180;
@@ -1466,6 +1547,8 @@ function worldStartAtPort(port) {
     window.lastShipPos = null;
     _worldSave();
     if (typeof worldTerrainModeChanged === 'function') worldTerrainModeChanged(true);
+    // 着いた港の作り込んだ地形を読む（読み終えたら地形を作り直す）
+    if (_RW && _RW.hdMeta) worldEnsureHarbors([{ lat: port.lat, lon: port.lon }], 150);
     worldMapRedraw();
 }
 window.worldStartAtPort = worldStartAtPort;
@@ -1636,6 +1719,7 @@ function _wmEnsureDom() {
             </span>
             <button id="wp-chart" class="wp-chartbtn" onclick="worldMapSetChart(!_wm.chart)">📘 海図</button>
             <button id="wp-minimap" class="wp-chartbtn wp-mmbtn" onclick="minimapShow(!_mm.show)" title="右上の小さな地図">◉ ミニ地図</button>
+            <button id="wp-traffic" class="wp-chartbtn wp-mmbtn" onclick="trafficPanelToggle()" title="港の間を行き来する他の船（表示・数・時代・汽笛）と、近くの船の一覧">🚢 他の船</button>
             <button class="wp-close" onclick="toggleWorldMap(false)">✕</button>
         </div>
         <div class="wp-body">
@@ -1648,6 +1732,7 @@ function _wmEnsureDom() {
             <div class="wp-legend"></div>
             <div id="wp-info"></div>
             <div id="wp-status"></div>
+            <div id="wp-traffic-panel" class="wp-trpanel" hidden></div>
         </div>`;
     document.body.appendChild(el);
     const lg = el.querySelector('.wp-legend');
@@ -1977,6 +2062,8 @@ function worldMapRedraw(quick) {
     };
     if (_wm.selPt) mark(_wm.selPt, false);
     if (typeof autopilot !== 'undefined' && autopilot.dest && autopilot.dest.point && (autopilot.active || autopilot.planning)) mark(autopilot.dest, true);
+    // 他の船（59-traffic.js）
+    if (world.mode === 'world' && typeof trafficDrawMap === 'function') trafficDrawMap(g, cv, W, H);
     // 船
     if (world.mode === 'world') {
         const ll = worldShipLatLon();

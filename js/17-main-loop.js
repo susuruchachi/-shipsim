@@ -671,6 +671,7 @@ function animate() {
     if (typeof updateHarborAuto === 'function') updateHarborAuto(t, physicsDt);  // タグでの自動離着岸（50-harbor-auto.js）
     if (typeof updateManeuver === 'function') updateManeuver(t, physicsDt);    // サイドスラスター・アジポッド（58-maneuvering.js）
     if (typeof updateTugs === 'function') updateTugs(t, physicsDt);          // タグボート（47-tugboats.js。物理の早送りに合わせる）
+    if (typeof updateTraffic === 'function') updateTraffic(t, physicsDt);    // 港の間を行き来する他の船（59-traffic.js）
     if (typeof updateMinimap === 'function') updateMinimap(t);               // 小さな地図（48-minimap.js）
     if (typeof updateWorldTerrain === 'function') updateWorldTerrain(t, dt);
     if (typeof updateLandmarks === 'function') updateLandmarks(t);                // 名所の建物・像（53-landmarks.js）

@@ -176,6 +176,8 @@ function _mmDraw() {
             g.restore();
         }
     }
+    // 他の船（59-traffic.js）
+    if (typeof trafficDrawMinimap === 'function' && world.mode === 'world') trafficDrawMinimap(g, toS, k, c, rot);
     // 自動航行の航路
     const rp = (typeof autopilotRoutePoints === 'function') ? autopilotRoutePoints() : null;
     if (rp && rp.length > 1) {

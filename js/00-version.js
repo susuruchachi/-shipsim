@@ -130,7 +130,11 @@
 //               地域の細かい格子を重ねる。前の版の位置はそのまま）。地形のワーカーには船のまわりだけ渡す（メモリ）。
 //               岩礁の飛沫：出る所・大きさ・間隔（1〜5 秒）・寿命をばらつかせ、波が当たる岸全体に薄いもや。
 //               空の見え方の既定値の不具合（aSky の無い形で描くと止まる）を直す。
-var APP_VERSION = '0.03.013.020';
+// 0.03.013.021 北大西洋の読み込みを軽く（港の航路・置き場所を前もって計算したファイルから。23 秒 → 1 秒ほど）、
+//               作り込んだ港の細かい地形は船が近づいたら読み、遠くなったら捨てる（メモリ）。
+//               港の間を行き来する他の船（船種に合う港・定期航路・錨地で待つ・右側通行・行き会い・横切り・追い越し・霧中信号・
+//               航海灯・窓明かり・排煙・地図とミニ地図・世界地図の「🚢 他の船」で設定）。自動航行も同じルールで、よける・待つ。
+var APP_VERSION = '0.03.013.021';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

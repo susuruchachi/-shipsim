@@ -781,6 +781,18 @@
         #world-panel .wp-close { margin-left: 0; }
         #world-panel #wp-chart { margin-left: auto; }
         #world-panel .wp-body { position: relative; flex: 1; min-height: 0; }
+        /* 他の船（59-traffic.js）：設定と近くの船の一覧 */
+        #wp-traffic-panel { position: absolute; right: 60px; top: 10px; width: min(330px, calc(100% - 80px)); max-height: calc(100% - 60px); overflow-y: auto;
+            -webkit-overflow-scrolling: touch; overscroll-behavior: contain; background: rgba(6, 20, 40, 0.94); border: 1px solid rgba(126,227,200,0.5);
+            border-radius: 6px; padding: 8px 10px; font-size: 12px; color: #cfe8ff; z-index: 2; }
+        #wp-traffic-panel[hidden] { display: none; }
+        #wp-traffic-panel .tf-row { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; margin: 0 0 6px; }
+        #wp-traffic-panel .tf-row b { margin-right: 6px; color: #7ee3c8; }
+        #wp-traffic-panel button { background: rgba(10, 30, 60, 0.9); color: #cfe8ff; border: 1px solid rgba(126,227,200,0.5); border-radius: 5px; padding: 4px 8px; font-size: 12px; cursor: pointer; font-family: inherit; }
+        #wp-traffic-panel button.on { background: #1c6b5a; color: #fff; border-color: #7ee3c8; }
+        #wp-traffic-panel .tf-list > div { border-top: 1px solid rgba(255,255,255,0.12); padding: 5px 0; }
+        #wp-traffic-panel .tf-list small, #wp-traffic-panel .tf-msgs small { color: #a9c4d8; }
+        #wp-traffic-panel .tf-msgs { margin-top: 6px; }
         #wp-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
         #world-panel .wp-tools { position: absolute; right: 10px; top: 10px; display: flex; flex-direction: column; gap: 6px; }
         #world-panel .wp-tools button { width: 40px; height: 40px; font-size: 18px; padding: 0; }
