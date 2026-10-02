@@ -112,7 +112,8 @@
 //               岩・岸のしぶきを喫水線のしぶきと同じ描き方にし、波の山が届いた瞬間だけ打ち上げる。浅瀬の白波も波の山のときだけ。
 //               浅瀬・岩礁・波打ち際（6m より浅い所）の海面を、波が立つと白く泡立たせる。
 //               アジポッド：船橋の「アジポッド用の旋回レバー」でポッドの向きを 360° 動かし、推力はテレグラフで（舵は使わない）。
-var APP_VERSION = '0.03.013.012';
+// 0.03.013.013  タグを使わない出港：サイドスラスターもアジポッドも無い船は、横滑りやその場の回頭をせず、船首（後進なら船尾）を沖へ振り出してから舵と機関で出る。
+var APP_VERSION = '0.03.013.013';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

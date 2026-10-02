@@ -688,6 +688,16 @@ async function autopilotStart(port) {
                 const T = plan.turn || null;
                 const need = T ? Math.max(32, Math.hypot(T.x - physics.cgWorldX, T.z - physics.cgWorldZ)) : Math.max(32, D.B * 0.6 + 14);
                 const ux = T ? (T.x - physics.cgWorldX) / need : Math.cos(h) * side, uz = T ? (T.z - physics.cgWorldZ) / need : -Math.sin(h) * side;
+                if (!apHasThrusters()) {
+                    // サイドスラスターもアジポッドも無い船：横へは動けないので、舵と機関で出る。
+                    // 港口の向きが前寄りなら、船首を沖へ振り出して（スプリングで船尾を岸壁に当てて）前進で、
+                    // 後ろ寄りなら、船尾を沖へ振り出して後進で船の長さほど下がってから、舵で回って出る
+                    const back = Number.isFinite(plan.hOut) && Math.abs(((plan.hOut - physics.heading + 540) % 360) - 180) > 100;
+                    const bowOut = side * (back ? -1 : 1);                 // ＋：heading を増やす（左舷へ回る）
+                    autopilot.selfDepart = { port, rudder: true, back, h1: physics.heading + bowOut * 12, out: side, moved: 0, need: back ? Math.max(60, apShipLen()) : 0, v: 0, hOut: plan.hOut };
+                    _apMsg(`もやい綱を放し、舵と機関で岸壁から離れています（${back ? '後進で下がってから' : '船首を沖へ振ってから前進で'}、${port.name} へ）`);
+                    return;
+                }
                 autopilot.selfDepart = { port, moved: 0, need, dx: ux, dz: uz, v: 0, hOut: plan.hOut };
                 _apMsg(`もやい綱を放し、サイドスラスターで岸壁から離れています（${port.name} へ）`);
                 return;
@@ -1079,6 +1089,12 @@ function _agRetreat(withTugs, prefer) {
 // 座礁から抜けて航路を引き直したあと：最初の区間の向きへ回る円（旋回径）が浅い所にかかるなら、
 // 機関は止めたまま、タグでその場で回頭してから進む（かからなければ、そのまま航路へ）。
 // 回し終えたら、座礁のときに呼んだタグは帰す。true を返す間は、ふつうの航路の操船をしない
+// サイドスラスター・アジポッドがあるか（58-maneuvering.js）。無ければタグなしの出入港は舵と機関だけで
+function apHasThrusters() {
+    if (typeof azipodActive === 'function' && azipodActive()) return true;
+    return typeof maneuver !== 'undefined' && maneuver.thrusters.some(T => T._on !== false && (+T.kW || 0) > 0);
+}
+window.apHasThrusters = apHasThrusters;
 function _apTurnFirst(dt) {
     const F = autopilot.turnFirst, R = autopilot.route;
     const noTug = !apUseTugs('narrow');               // タグを使わないなら、サイドスラスターでその場で回す
@@ -1103,6 +1119,7 @@ function _apTurnFirst(dt) {
             for (const a of [-HL, 0, HL]) for (const o of [-hw, 0, hw]) if (worldSeabedAt(X + fx * a + qx * o, Z + fz * a + qz * o) > -dr) { blocked = true; break; }
         }
         if (!blocked) return done();
+        if (noTug && !apHasThrusters()) return done();      // スラスターの無い船は、その場では回れないので舵で
         if (noTug) _apMsg('ここで向きを変えると浅い所にかかるので、サイドスラスターでその場で回します');
         else {
             if (!tugEscort.active && typeof tugEscortStart === 'function') { tugEscortStart(); F.ownTugs = true; tugEscort.t = 0; }
@@ -1312,6 +1329,34 @@ function _apAground(dt) {
 function updateAutopilot(t, dt) {
     if (!window.world || world.mode !== 'world') { if (autopilot.active) autopilotStop('世界を航海するモードではないので、自動航行を止めました'); return; }
     // タグなしの出港：岸壁から横へ離れる（ゆっくり加速し、離れたら航路を引いて出る）
+    if (autopilot.selfDepart && autopilot.selfDepart.rudder) {
+        // スラスターの無い船：スプリングで船首（後進なら船尾）を沖へ振り出し、後進なら船の長さほど下がって、舵で出る
+        const S = autopilot.selfDepart, d = Math.min(0.1, Math.max(0, dt || 0)) * (typeof physicsSpeed !== 'undefined' ? physicsSpeed : 1);
+        const e = ((S.h1 - physics.heading + 540) % 360) - 180;
+        const h = physics.heading * _apRad, fx = Math.sin(h), fz = Math.cos(h), ox = Math.cos(h) * S.out, oz = -Math.sin(h) * S.out;
+        if (Math.abs(e) > 0.3) {
+            const dh = Math.sign(e) * Math.min(Math.abs(e), 0.5 * d);
+            physics.heading += dh;
+            // 岸壁に当てた端を支点に回るので、重心は少し沖へ出る
+            const HL = apShipLen() / 2, step = HL * Math.abs(dh) * _apRad * 0.9;
+            physics.cgWorldX += ox * step; physics.cgWorldZ += oz * step;
+            physics.speed = 0;
+            return;
+        }
+        if (S.back && S.moved < S.need) {
+            S.v = Math.min(1.2, S.v + 0.05 * d, Math.max(0.2, (S.need - S.moved) * 0.05));
+            const step = Math.min(S.need - S.moved, S.v * d);
+            physics.cgWorldX -= fx * step; physics.cgWorldZ -= fz * step; S.moved += step;
+            physics.speed = 0;
+            _apMsg(`後進で岸壁から下がっています（あと ${Math.round(S.need - S.moved)}m）`);
+            return;
+        }
+        autopilot.selfDepart = null; autopilot._departGo = true;
+        // 航路を引いたら、そのまま舵で回って出る（その場では回らない）
+        Promise.resolve(autopilotStart(S.port)).then(() => { if (autopilot.active) autopilot.turnFirst = null; });
+        autopilot._departGo = false;
+        return;
+    }
     if (autopilot.selfDepart) {
         const S = autopilot.selfDepart, d = Math.min(0.1, Math.max(0, dt || 0)) * (typeof physicsSpeed !== 'undefined' ? physicsSpeed : 1);
         const left = S.need - S.moved;
