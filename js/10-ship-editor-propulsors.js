@@ -548,7 +548,7 @@ function renderPropList() {
         card.innerHTML = `
             <div class="sp-item-header">
                 <span class="sp-item-title">
-                    推進器 #${i+1}${sym && p.x !== 0 ? ' (対称)' : ''}
+                    推進器 #${i+1}${sym && p.x !== 0 ? ' (対称)' : ''} <b class="prop-unit-name" data-i="${i}" style="color:#00ffcc;font-size:11px;"></b>
                     <button class="sp-gizmo-btn" id="gizmo-prop-${i}" onclick="toggleGizmo('propulsion', ${i})">📍 ギズモ</button>
                     <button class="sp-gizmo-btn" onclick="copyPropulsor(${i})">⧉ コピー</button>
                 </span>
@@ -590,6 +590,17 @@ function renderPropList() {
         list.appendChild(card);
     });
     addFineTuneButtons(list);
+    propUnitNamesRefresh();
+}
+// 推進器ごとのスクリューの名前（機関と同じ名前。56-engines.js）。名前の所だけ書き換える
+// （入力中の欄を作り直さないように。モデルにスクリューの部品があるときは、そちらが機関になるので出さない）
+function propUnitNamesRefresh() {
+    const list = $('prop-list'); if (!list || typeof engineScrewNameFor !== 'function') return;
+    if (typeof engineListRefresh === 'function') engineListRefresh();
+    list.querySelectorAll('.prop-unit-name').forEach(el => {
+        const i = el.dataset.i;
+        el.textContent = [engineScrewNameFor('prop:' + i), engineScrewNameFor('prop:' + i + ':m')].filter(v => v !== null).join('・');
+    });
 }
 
 function buildPropMeshes() {
@@ -731,6 +742,7 @@ function buildPropMeshes() {
         }
     }
     syncSettingsVisibility();
+    propUnitNamesRefresh();
 }
 
 function updateRudder3D() {

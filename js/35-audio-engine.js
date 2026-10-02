@@ -740,8 +740,16 @@ function _audioUpdateEngine(t, dt) {
     const list = (typeof shipSound !== 'undefined' && Array.isArray(shipSound.engines)) ? shipSound.engines : [];
     if (!audio.engines) audio.engines = [];
     // 数・形式が変わったものを作り直す
+    // 機関（56-engines.js）に結び付いた音は、その機関の種類・回転数で鳴らす
+    const engs = (typeof engineList === 'function') ? engineList() : [];
+    const linkOf = (e) => (e && e.eng) ? engs.find(q => q.id === e.eng) || null : null;
+    const typeOf = (e) => {
+        if (!e || e.type === 'none') return e ? e.type : null;       // 「なし（無音）」にした音は鳴らさない
+        const q = linkOf(e); const t = q && typeof engineTypeOf === 'function' ? engineTypeOf(q) : '';
+        return t || e.type;
+    };
     for (let i = 0; i < Math.max(list.length, audio.engines.length); i++) {
-        const t0 = list[i] ? list[i].type : null;
+        const t0 = list[i] ? typeOf(list[i]) : null;
         const want = (t0 && t0 !== 'none' && ENGINE_TYPES[t0]) ? t0 : null;
         const N = audio.engines[i];
         if ((N ? N.type : null) !== want) {
@@ -758,7 +766,12 @@ function _audioUpdateEngine(t, dt) {
     audio._engLive = (audio._engLive === undefined) ? liveTarget
         : audio._engLive + (liveTarget - audio._engLive) * Math.min(1, (dt || 0) / (liveTarget ? 3 : 6));
     const live = audio._engLive;
-    list.forEach((E, i) => { const N = audio.engines[i]; if (N) _audioUpdateOneEngine(N, E, i, r, load, live); });
+    list.forEach((E, i) => {
+        const N = audio.engines[i]; if (!N) return;
+        const q = linkOf(E);
+        if (q) { const rq = Math.min(1, Math.abs(q.rpm || 0)); _audioUpdateOneEngine(N, E, i, rq, Math.min(1, rq * (0.6 + 0.8 * slip)), live); }
+        else _audioUpdateOneEngine(N, E, i, r, load, live);
+    });
 }
 
 function _audioUpdateOneEngine(N, E, idx, r, load, live) {

@@ -8,11 +8,17 @@
 //  ・テレグラフの上の「機関」ボタンで独立操作にすると、機関ごとの小さなテレグラフが並ぶ
 //   （後進できない機関のテレグラフには後進の目盛りが無い）。左右の機関を前進・後進に分けると、
 //    船はその場で回る。
+//  ・名前：スクリューとその機関は同じ名前で呼ぶ（「左舷」なら左舷スクリュー・左舷機関）。名前を決めなければ
+//    船の中の位置から付ける（同じ舷に2つあれば外側・内側）。決めた名前は、モデル内パーツ・機関の欄・
+//    独立操作のテレグラフ・機関音（36-horns.js）のどこでも同じになる。
+//  ・種類：機関ごとに形式（35-audio-engine.js の ENGINE_TYPES：蒸気レシプロ・タービン・ディーゼル…）を選べる。
+//    回転の上がり下がりの速さ・前後進を切り替えるまでの時間がその形式らしくなり、機関音もその機関の
+//    回転数・形式で鳴る（機関音の欄で、その機関の音として結び付けたもの）。
 //  ・推力：機関 i の回転数 r_i（前進全速＝1、後進全速＝−0.5）、推力の重み w_i ∝ 馬力^(2/3)。
 //    S = Σ w_i r_i|r_i|、船の出す速さ ＝ 最高速力 × sign(S)√|S|（全部同じ回転なら今までと同じ）。
 //    馬力の合計が見積もりより大きければ、加速も速い（物理の推力の強さに掛ける）。
 const ENG_RPM_OF = { 3: 1, 2: 0.6, 1: 0.3, 0: 0, '-1': -0.15, '-2': -0.3, '-3': -0.5 };
-const shipEngines = { split: false, conf: {} };     // conf[スクリューの id] = { astern, hp, name }
+const shipEngines = { split: false, conf: {} };     // conf[スクリューの id] = { astern, hp, name, type }
 window.shipEngines = shipEngines;
 const _eng = { list: [], key: '', checkT: -1, ui: null };
 
@@ -39,14 +45,15 @@ function _engScrews() {
     }
     return out;
 }
-// 船の中の左右の位置（+x＝左舷）を、船の半幅に対する割合で
-function _engSide(s) {
+// 船の中の左右の位置（+x＝左舷）を、船の半幅に対する割合で。E.x には船の座標（機関音の位置と同じ）の x を入れる
+function _engSide(s, E) {
     if (typeof shipGroup === 'undefined' || !shipGroup) return 0;
     let x = 0;
     if (s.part && typeof analyzeScrewDisc === 'function') {
         const d = analyzeScrewDisc(s.part);
         if (d) { const v = d.center.clone(); const par = s.part.object.parent || shipGroup; par.updateWorldMatrix(true, false); v.applyMatrix4(par.matrixWorld); shipGroup.worldToLocal(v); x = v.x; }
     } else if (s.mesh) x = s.mesh.position.x;
+    if (E) E.x = x;
     const hp = window.hullProfile;
     let hb = 1; if (hp && hp.ready) { hb = 0; for (const q of hp.slices) hb = Math.max(hb, q.halfWidth || 0); }
     return Math.max(-1.5, Math.min(1.5, x / (hb || 1)));
@@ -63,22 +70,79 @@ function engineList() {
             _eng.list = S.map((s, i) => {
                 const E = old.get(s.id) || { order: 0, answer: 0, answerAt: -1, rpm: 0, hold: 0 };
                 E.id = s.id; E.screw = s; E.idx = i;
-                if (!shipEngines.conf[s.id]) shipEngines.conf[s.id] = { astern: true, hp: 0, name: '' };
+                if (!shipEngines.conf[s.id]) shipEngines.conf[s.id] = { astern: true, hp: 0, name: '', type: '' };
                 E.conf = shipEngines.conf[s.id];
-                E.side = _engSide(s);
+                E.side = _engSide(s, E);
                 return E;
             });
+            _engAutoNames(_eng.list);
             _engLayoutUI();
-        } else for (const E of _eng.list) { E.side = _engSide(E.screw); E.conf = shipEngines.conf[E.id] || E.conf; }
+        } else {
+            for (const E of _eng.list) { E.side = _engSide(E.screw, E); E.conf = shipEngines.conf[E.id] || E.conf; }
+            _engAutoNames(_eng.list);
+        }
     }
     return _eng.list;
 }
 window.engineList = engineList;
+function engineById(id) { return engineList().find(E => E.id === id) || null; }
+// スクリューの数・種類を変えた直後に一覧を見るとき（1秒待たずに作り直す）
+function engineListRefresh() { _eng.checkT = -Infinity; return engineList(); }
+window.engineListRefresh = engineListRefresh;
+window.engineById = engineById;
+
+// ── 名前（スクリューと機関で同じ） ──
+// 位置から付ける名前のもと：左舷・右舷・中央。同じ舷に2つなら外側・内側、3つ以上なら外から1・2・3
+function _engAutoNames(L) {
+    if (L.length === 1) { L[0].autoBase = ''; return; }
+    const groups = { 左舷: [], 右舷: [], 中央: [] };
+    for (const E of L) groups[E.side > 0.15 ? '左舷' : E.side < -0.15 ? '右舷' : '中央'].push(E);
+    for (const [w, G] of Object.entries(groups)) {
+        G.sort((a, b) => Math.abs(b.side) - Math.abs(a.side));
+        G.forEach((E, k) => {
+            E.autoBase = G.length === 1 ? w : (G.length === 2 && w !== '中央') ? w + (k === 0 ? '外側' : '内側') : w + (k + 1);
+        });
+    }
+}
+function _engIsPod() { return typeof azipodActive === 'function' && azipodActive(); }   // アジポッドの船（58-maneuvering.js）
+// スクリューの呼び方（スクリュー・外輪・ポッド）
+function _engScrewWord(E) {
+    if (_engIsPod()) return 'ポッド';
+    const p = E.screw && E.screw.part;
+    if (p) return p.key === 'paddle' ? '外輪' : 'スクリュー';
+    const el = document.getElementById('prop-type');
+    return el && el.value === 'paddlewheel' ? '外輪' : 'スクリュー';
+}
+// 機関の名前（名前を決めていれば、それをそのまま）
 function engineName(E) {
     if (E.conf && E.conf.name) return E.conf.name;
-    const w = (typeof azipodActive === 'function' && azipodActive()) ? 'ポッド' : '機関';     // アジポッドの船（58-maneuvering.js）
-    return _eng.list.length === 1 ? w : (E.side > 0.15 ? '左舷' : E.side < -0.15 ? '右舷' : '中央') + w;
+    return (E.autoBase || '') + (_engIsPod() ? 'ポッド' : '機関');
 }
+// スクリューの名前（機関と同じ名前。決めていなければ「左舷スクリュー」など）
+function engineScrewName(E) {
+    if (E.conf && E.conf.name) return E.conf.name;
+    return (E.autoBase || '') + _engScrewWord(E);
+}
+// モデルの部品・組み込みの推進器の id から、そのスクリューの名前（機関が無ければ null）
+function engineScrewNameFor(id) { const E = engineList().find(q => q.id === id); return E ? engineScrewName(E) : null; }
+window.engineName = engineName; window.engineScrewName = engineScrewName; window.engineScrewNameFor = engineScrewNameFor;
+
+// ── 機関の形式ごとの応答（回転の上がり・下がり[全速の割合/秒]、前後進を切り替える前に止まっている時間[秒]） ──
+//  蒸気レシプロ：ゆっくり上がり、逆転は弁装置を切り替えてすぐ。タービン：重い回転子でさらにゆっくり、
+//  後進タービンへ蒸気を切り替えるのに時間がかかる。ディーゼル：速く上がり、逆転は止めてから圧縮空気で
+//  逆に掛け直す。電気推進：モーターなので速く、逆転もすぐ。
+const ENG_RESPONSE = {
+    steam_recip:   { up: 0.08, down: 0.14, rev: 3.0 },
+    combined:      { up: 0.07, down: 0.12, rev: 3.5 },
+    steam_turbine: { up: 0.05, down: 0.08, rev: 6.0 },
+    diesel_slow:   { up: 0.10, down: 0.18, rev: 4.0 },
+    diesel_medium: { up: 0.16, down: 0.25, rev: 2.5 },
+    diesel_high:   { up: 0.25, down: 0.35, rev: 2.0 },
+    gas_turbine:   { up: 0.14, down: 0.20, rev: 2.5 },
+    electric:      { up: 0.30, down: 0.40, rev: 0.5 },
+};
+function engineTypeOf(E) { const t = E && E.conf && E.conf.type; return (t && typeof ENGINE_TYPES !== 'undefined' && ENGINE_TYPES[t] && t !== 'none') ? t : ''; }
+window.engineTypeOf = engineTypeOf;
 // 機関ごとの馬力（空なら見積もりを等分）
 function engineHp(E) { const L = engineList(); return E.conf && E.conf.hp > 0 ? E.conf.hp : engineEstimateHp() / Math.max(1, L.length); }
 function _engWeights() {
@@ -142,10 +206,12 @@ function engineUpdate(dt, designMode) {
         let target = designMode ? 0 : (ov !== null ? ov : ENG_RPM_OF[_engTargetOrder(E)] || 0);
         if (E.conf && E.conf.astern === false && target < 0) target = 0;
         let r = E.rpm;
+        const R = ENG_RESPONSE[engineTypeOf(E)];
+        const up = R ? R.up : ENG_SPOOL_UP, down = R ? R.down : ENG_SPOOL_DOWN, rev = R ? R.rev : ENG_REVERSE_DELAY;
         const ap = (v, t, rate) => { const d = t - v, s = rate * dt; return Math.abs(d) <= s ? t : v + Math.sign(d) * s; };
-        if (target * r < 0) { r = ap(r, 0, ENG_SPOOL_DOWN); if (r === 0) E.hold = ENG_REVERSE_DELAY; }
+        if (target * r < 0) { r = ap(r, 0, down); if (r === 0) E.hold = rev; }
         else if (E.hold > 0 && r === 0 && target !== 0) E.hold -= dt;
-        else { E.hold = 0; r = ap(r, target, Math.abs(target) > Math.abs(r) ? ENG_SPOOL_UP : ENG_SPOOL_DOWN); }
+        else { E.hold = 0; r = ap(r, target, Math.abs(target) > Math.abs(r) ? up : down); }
         E.rpm = r;
     }
     const w = _engWeights();
@@ -249,7 +315,7 @@ function _engDrawAll() {
     U.canvases.forEach((cv, i) => {
         const E = L[i]; if (!E) return;
         // 変わったときだけ描き直す（ハンドル・針が動いている間、回転数の表示が変わったとき）
-        const key = [E.order, E.answer, Math.round(E.rpm * 100), E.conf.astern, nk, _engDesign(), cv._s].join('|');
+        const key = [E.order, E.answer, Math.round(E.rpm * 100), E.conf.astern, nk, _engDesign(), cv._s, engineName(E)].join('|');
         const moving = (Number.isFinite(E.hv) && E.hv !== E.order) || (Number.isFinite(E.av) && E.av !== E.answer) || !Number.isFinite(E.hv);
         if (!moving && cv._key === key) return;
         cv._key = key;
@@ -332,26 +398,96 @@ function renderEngineSettings() {
     const est = engineEstimateHp();
     const any = L.some(E => E.conf.hp > 0);
     let tot = 0; for (const E of L) tot += engineHp(E);
+    const inp = 'background:#0a1932;color:#00ffcc;border:1px solid #00ffcc55;border-radius:4px;padding:2px 4px;font-size:11px;';
+    const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    const typeOpts = (cur) => `<option value=""${!cur ? ' selected' : ''}>― 決めない ―</option>` + (typeof ENGINE_TYPES !== 'undefined'
+        ? Object.entries(ENGINE_TYPES).filter(([k]) => k !== 'none').map(([k, T]) => `<option value="${k}"${k === cur ? ' selected' : ''}>${T.label}</option>`).join('') : '');
     el.innerHTML = `<div class="sp-section-title">🔥 機関（スクリューごと）</div>
-        <div style="font-size:10px;color:#888;margin-bottom:6px;">スクリューごとに機関が 1 基あります。後進できない機関（タービン船の中央のスクリューなど）は、後進の指令では止まり、独立操作のテレグラフにも後進がありません。
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">スクリューごとに機関が 1 基あります。スクリューと機関は同じ名前で呼びます（名前が空なら、位置から「左舷」「右舷」「中央」など）。
+            後進できない機関（タービン船の中央のスクリューなど）は、後進の指令では止まり、独立操作のテレグラフにも後進がありません。<br>
+            「種類」を決めると、回転の上がり下がりの速さ・前後進を切り替える間合いがその機関らしくなり、機関音もその機関の回転で鳴ります（音タブの機関音が機関ごとに分かれます）。<br>
             馬力が空なら、排水量（${Math.round((physics.mass || 1.5) * 1000).toLocaleString()} トン）と最高速力（${physics.maxSpeed} ノット）から見積もった <b>${Math.round(est).toLocaleString()} 馬力</b>を等分します。</div>
-        ${L.length ? L.map((E, i) => `<div class="sp-row" style="gap:6px;flex-wrap:wrap;align-items:center;">
-            <b style="min-width:70px;">${engineName(E)}</b>
-            <input type="text" placeholder="名前" value="${(E.conf.name || '').replace(/"/g, '&quot;')}" maxlength="16" style="width:80px;background:#0a1932;color:#00ffcc;border:1px solid #00ffcc55;border-radius:4px;padding:2px 4px;font-size:11px;" onchange="engineSetConf(${i}, 'name', this.value)">
-            <label class="sp-toggle"><input type="checkbox" ${E.conf.astern !== false ? 'checked' : ''} onchange="engineSetConf(${i}, 'astern', this.checked)"> 後進できる</label>
-            <span>馬力</span><input type="number" min="0" step="100" class="sp-num-input" style="width:84px" placeholder="${Math.round(est / L.length)}" value="${E.conf.hp > 0 ? E.conf.hp : ''}" onchange="engineSetConf(${i}, 'hp', this.value)">
-            <span style="font-size:10px;color:#8ab;">${E.screw.label}</span></div>`).join('') : '<div style="font-size:11px;color:#888;">スクリューがありません</div>'}
+        ${L.length ? L.map((E, i) => `<div class="sp-item-card" style="padding:6px 8px;">
+            <div class="sp-row" style="gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:4px;">
+                <b style="min-width:70px;color:#00ffcc;">${esc(engineName(E))}</b>
+                <span style="font-size:10px;color:#8ab;">${E.screw.part ? (E.screw.part.key === 'paddle' ? '🛞 ' : '🌀 ') : ''}${esc(engineScrewName(E))}${E.screw.part ? `（モデル：${esc(E.screw.label)}）` : ''}</span>
+            </div>
+            <div class="sp-row" style="gap:6px;flex-wrap:wrap;align-items:center;">
+                <span class="sp-label" style="min-width:0;">名前:</span><input type="text" placeholder="${esc(E.autoBase || '（1基だけ）')}" value="${esc(E.conf.name || '')}" maxlength="16" style="width:90px;${inp}" onchange="engineSetConf(${i}, 'name', this.value)">
+                <span class="sp-label" style="min-width:0;">種類:</span><select style="max-width:100%;${inp}" onchange="engineSetConf(${i}, 'type', this.value)">${typeOpts(engineTypeOf(E))}</select>
+            </div>
+            <div class="sp-row" style="gap:6px;flex-wrap:wrap;align-items:center;">
+                <label class="sp-toggle"><input type="checkbox" ${E.conf.astern !== false ? 'checked' : ''} onchange="engineSetConf(${i}, 'astern', this.checked)"> 後進できる</label>
+                <span class="sp-label" style="min-width:0;">馬力:</span><input type="number" min="0" step="100" class="sp-num-input" style="width:84px" placeholder="${Math.round(est / L.length)}" value="${E.conf.hp > 0 ? E.conf.hp : ''}" onchange="engineSetConf(${i}, 'hp', this.value)">
+            </div></div>`).join('') : '<div style="font-size:11px;color:#888;">スクリューがありません</div>'}
         <div style="font-size:10px;color:#9cd;margin-top:4px;">合計 ${Math.round(tot).toLocaleString()} 馬力${any ? `（この馬力での最高速力の目安 ${engineTopSpeedForHp(tot).toFixed(1)} ノット・加速 ×${enginePowerFactor().toFixed(2)}）` : ''}</div>`;
 }
 window.renderEngineSettings = renderEngineSettings;
+// 名前・種類を変えたら、同じ名前を出している所（モデル内パーツ・推進器リスト・機関音・アジポッド）も描き直す
+function _engRefreshViews() {
+    renderEngineSettings(); _engLayoutUI();
+    if (typeof renderGlbPartsList === 'function') renderGlbPartsList();
+    if (typeof renderPropList === 'function' && document.getElementById('prop-list')) renderPropList();
+    if (typeof renderSoundPanel === 'function') renderSoundPanel();
+    if (typeof renderManeuverSettings === 'function') renderManeuverSettings();
+}
 function engineSetConf(i, k, v) {
     const E = engineList()[i]; if (!E) return;
-    if (k === 'hp') { const n = parseFloat(v); E.conf.hp = Number.isFinite(n) && n > 0 ? n : 0; }
-    else if (k === 'astern') { E.conf.astern = !!v; if (!v && E.order < 0) { E.order = E.answer = 0; } }
-    else E.conf[k] = v;
-    renderEngineSettings(); _engLayoutUI();
+    _engSetConf(E, k, v);
 }
-window.engineSetConf = engineSetConf;
+function _engSetConf(E, k, v) {
+    if (k === 'hp') { const n = parseFloat(v); E.conf.hp = Number.isFinite(n) && n > 0 ? n : 0; renderEngineSettings(); _engLayoutUI(); return; }
+    if (k === 'astern') { E.conf.astern = !!v; if (!v && E.order < 0) { E.order = E.answer = 0; } renderEngineSettings(); _engLayoutUI(); return; }
+    if (k === 'name') E.conf.name = String(v || '').trim().slice(0, 16);
+    else if (k === 'type') { E.conf.type = (typeof ENGINE_TYPES !== 'undefined' && ENGINE_TYPES[v] && v !== 'none') ? v : ''; engineSoundSync(E); }
+    else E.conf[k] = v;
+    _engRefreshViews();
+}
+// id で（モデル内パーツ・機関音の欄から）
+function engineSetConfById(id, k, v) { const E = engineById(id); if (E) _engSetConf(E, k, v); }
+window.engineSetConf = engineSetConf; window.engineSetConfById = engineSetConfById;
+
+// ── 機関音との結び付け（36-horns.js の shipSound.engines[].eng ＝ 機関の id） ──
+// 機関の種類を決めたとき、その機関の音が無ければ、今の機関音を機関ごとの音に分ける
+// （場所の高さ・前後・音量・形式は、今の機関音のうち左右の位置がいちばん近いものから引き継ぐ。
+//   左右の位置はその機関のスクリューの位置）。結び付いた音の形式は、機関の種類に合わせる。
+function engineSoundSync(E) {
+    const S = (typeof shipSound !== 'undefined') ? shipSound : null;
+    if (!S || !Array.isArray(S.engines)) return;
+    const L = engineList();
+    const ids = new Set(L.map(q => q.id));
+    const linked = S.engines.filter(e => e.eng && ids.has(e.eng));
+    if (!linked.some(e => e.eng === E.id)) {
+        const loose = S.engines.filter(e => !(e.eng && ids.has(e.eng)));
+        const keepLinked = S.engines.filter(e => e.eng && ids.has(e.eng));
+        // まだ音の無い機関ぶんを作る（既に結び付いている機関はそのまま）
+        const need = L.filter(q => !keepLinked.some(e => e.eng === q.id));
+        const near = (q) => {
+            let best = null, bd = Infinity;
+            for (const e of loose) {
+                const d = Math.min(Math.abs((q.x || 0) - (e.x || 0)), e.sym ? Math.abs((q.x || 0) + (e.x || 0)) : Infinity);
+                if (d < bd) { bd = d; best = e; }
+            }
+            return best;
+        };
+        const share = new Map();
+        need.forEach(q => { const b = near(q); if (b) share.set(b, (share.get(b) || 0) + 1); });
+        const made = need.map(q => {
+            const b = near(q);
+            const n = b ? share.get(b) : 1;
+            const type = engineTypeOf(q) || (b && b.type) || 'steam_recip';
+            return { name: '', type, volume: +(((b && Number.isFinite(b.volume)) ? b.volume : 1) / Math.sqrt(n)).toFixed(2),
+                     x: +(q.x || 0).toFixed(3), y: b ? b.y || 0 : 0, z: b ? b.z || 0 : 0, sym: false, eng: q.id };
+        });
+        // どの機関にも選ばれなかった音（補機など）は、そのまま残す
+        const used = new Set(share.keys());
+        S.engines = keepLinked.concat(made, loose.filter(e => !used.has(e)));
+        if (typeof window._soundMarkersDirtySet === 'function') window._soundMarkersDirtySet();
+    }
+    const t = engineTypeOf(E);
+    if (t) for (const e of S.engines) if (e.eng === E.id) e.type = t;
+}
+window.engineSoundSync = engineSoundSync;
 
 // ── 保存・読み込み（13-save-load-config.js） ──
 function getEngineConfig() { return JSON.parse(JSON.stringify({ split: shipEngines.split, conf: shipEngines.conf })); }

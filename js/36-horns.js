@@ -595,17 +595,30 @@ function renderSoundPanel() {
     const elist = document.getElementById('engine-list');
     if (elist) {
         elist.innerHTML = '';
+        // 機関（推進器タブ。スクリューごとに 1 基）と結び付けると、名前・種類はその機関と同じになり、その機関の回転数で鳴る
+        const engs = (typeof engineList === 'function') ? engineList() : [];
         shipSound.engines.forEach((e, i) => {
-            const typeOpts = Object.entries(ENGINE_TYPES).map(([k, T]) => `<option value="${k}"${k === e.type ? ' selected' : ''}>${T.label}</option>`).join('');
+            const link = e.eng ? engs.find(q => q.id === e.eng) : null;
+            const curType = (e.type !== 'none' && link && typeof engineTypeOf === 'function' && engineTypeOf(link)) || e.type;
+            const typeOpts = Object.entries(ENGINE_TYPES).map(([k, T]) => `<option value="${k}"${k === curType ? ' selected' : ''}>${T.label}</option>`).join('');
+            const engOpts = `<option value=""${link ? '' : ' selected'}>全部の機関（まとめて）</option>`
+                + engs.map(q => `<option value="${_esc(q.id)}"${link === q ? ' selected' : ''}>${_esc(engineName(q))}</option>`).join('');
+            const nameInput = link
+                ? `<input type="text" value="${_esc(link.conf.name || '')}" placeholder="${_esc(engineName(link))}" maxlength="16" style="${_selStyle}width:9em;" onchange="engineSetConfById('${_esc(link.id)}','name',this.value)">`
+                : `<input type="text" value="${_esc(e.name || '')}" style="${_selStyle}width:9em;" oninput="shipSound.engines[${i}].name=this.value">`;
             const card = document.createElement('div');
             card.className = 'sp-item-card';
             card.innerHTML = `
                 <div class="sp-item-header">
                     <span class="sp-item-title">⚙ #${i + 1}
-                        <input type="text" value="${_esc(e.name || '')}" style="${_selStyle}width:9em;" oninput="shipSound.engines[${i}].name=this.value">
+                        ${nameInput}
                     </span>
                     <button class="sp-remove-btn" onclick="engineRemove(${i})">✕</button>
                 </div>
+                ${engs.length ? `<div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+                    <span class="sp-label" style="min-width:0;">機関:</span>
+                    <select style="${_selStyle}max-width:100%;" onchange="engineSet(${i},'eng',this.value)">${engOpts}</select>
+                </div>` : ''}
                 <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
                     <span class="sp-label" style="min-width:0;">形式:</span>
                     <select style="${_selStyle}max-width:100%;" onchange="engineSet(${i},'type',this.value)">${typeOpts}</select>
@@ -701,6 +714,20 @@ function hornRemoveNote(i, j) {
 function engineSet(i, key, v) {
     const e = shipSound.engines[i];
     if (!e) return;
+    // 機関に結び付いた音の形式は、その機関の種類（推進器タブ）と同じもの
+    const link = (e.eng && typeof engineById === 'function') ? engineById(e.eng) : null;
+    if (key === 'eng') {
+        e.eng = v || '';
+        const q = e.eng && typeof engineById === 'function' ? engineById(e.eng) : null;
+        if (q && typeof engineTypeOf === 'function' && engineTypeOf(q)) e.type = engineTypeOf(q);
+        renderSoundPanel();
+        return;
+    }
+    if (key === 'type' && link && v !== 'none' && typeof engineSetConfById === 'function') {
+        for (const o of shipSound.engines) if (o.eng === e.eng) o.type = v;
+        engineSetConfById(e.eng, 'type', v);
+        return;
+    }
     if (key === 'type') {
         const oldLabel = ENGINE_TYPES[e.type] ? ENGINE_TYPES[e.type].label.replace(/（.*$/, '') : '';
         e.type = v;
@@ -745,6 +772,7 @@ Object.assign(window, { hornAdd, hornRemove, hornSetType, hornSetNote, hornAddNo
 //  汽笛：黄色の角錐、機関室：赤い立方体（シンメトリーのときは反対側に薄い印）
 let _soundMarkers = { horns: [], engines: [] };   // engines: [{ m, mirror }]
 let _soundMarkersDirty = true;
+window._soundMarkersDirtySet = () => { _soundMarkersDirty = true; };
 function _mkSoundMarker(color, geo) {
     const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.9 }));
     m.renderOrder = 999;

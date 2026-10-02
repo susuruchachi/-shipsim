@@ -213,11 +213,21 @@ function buildGlbPartCard(part) {
     const card = document.createElement('div');
     card.className = 'sp-item-card';
     if (part.disabled) card.style.opacity = '0.5';
+    // スクリュー・外輪は、その機関と同じ名前で呼ぶ（56-engines.js）。モデルの中の名前は小さく添える
+    const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    const engId = 'glb:' + part.id;
+    const unitName = (!part.disabled && (part.key === 'screw' || part.key === 'paddle') && typeof engineScrewNameFor === 'function') ? engineScrewNameFor(engId) : null;
+    const eng = unitName !== null && typeof engineById === 'function' ? engineById(engId) : null;
     card.innerHTML = `
         <div class="sp-item-header">
-            <span class="sp-item-title">${part.label} : <span style="color:#aaa;font-size:10px;">${part.name}</span>${part.disabled ? ' <span style="color:#ff5555;">(機能停止中)</span>' : ''}</span>
+            <span class="sp-item-title">${part.label} : ${unitName !== null ? `<b style="color:#00ffcc;">${esc(unitName)}</b> ` : ''}<span style="color:#aaa;font-size:10px;">${unitName !== null ? '（モデル：' + esc(part.name) + '）' : esc(part.name)}</span>${part.disabled ? ' <span style="color:#ff5555;">(機能停止中)</span>' : ''}</span>
             <button class="sp-remove-btn" style="${part.disabled ? 'background:rgba(0,255,204,0.1);border-color:#00ffcc;color:#00ffcc;' : ''}" onclick="toggleGlbPartDisabled('${part.id}')">${part.disabled ? '↺ 復活' : '⛔ 機能停止'}</button>
         </div>
+        ${eng ? `<div class="sp-row" style="gap:6px;margin-bottom:4px;flex-wrap:wrap;align-items:center;">
+            <span class="sp-label" style="min-width:50px;">名前:</span>
+            <input type="text" value="${esc(eng.conf.name || '')}" placeholder="${esc(eng.autoBase || '（1基だけ）')}" maxlength="16" style="width:90px;background:#0a1932;color:#00ffcc;border:1px solid #00ffcc55;border-radius:4px;padding:2px 4px;font-size:11px;" onchange="engineSetConfById('${engId}','name',this.value)">
+            <span style="font-size:10px;color:#888;">機関（下の「機関」の欄）と同じ名前になります</span>
+        </div>` : ''}
         ${GLB_PROP_KINDS[part.key] ? `<div class="sp-row" style="gap:4px;margin-bottom:4px;flex-wrap:wrap;">
             <span class="sp-label" style="min-width:50px;">種類:</span>
             ${Object.entries(GLB_PROP_KINDS).map(([k, l]) => `<button class="sp-add-btn" style="flex:none;${part.key === k ? 'background:rgba(0,255,204,0.18);border-color:#00ffcc;color:#00ffcc;' : ''}" onclick="setGlbPartKind('${part.id}','${k}')" title="名前から見分けた種類が違うときに">${l}</button>`).join('')}
@@ -263,6 +273,7 @@ function renderGlbPartsList() {
     const propParts = glbMovableParts.filter(p => p.key === 'screw' || p.key === 'paddle' || p.key === 'azipod' || p.key === 'thruster');
     const rudderParts = glbMovableParts.filter(p => p.key === 'rudder');
 
+    if (propList && propParts.length && typeof engineListRefresh === 'function') engineListRefresh();   // 名前（機関と同じ）を最新に
     if (propList) {
         if (propParts.length === 0) {
             propList.innerHTML = '<div style="font-size:10px;color:#888;">スクリュー・外輪などの名前を持つパーツは見つかりませんでした。<br>(Blenderでオブジェクト名に "Screw" / "Paddle" / "Thruster" などを含めてください)</div>';

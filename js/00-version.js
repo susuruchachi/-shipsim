@@ -118,7 +118,9 @@
 //               浅瀬の白波の点は遠くだけ・小さく。しぶき・泡・白波・タグの排煙を、曇天や夜には海の泡の色に合わせて暗く（白く光って見えないように）。
 // 0.03.013.016  軽量化：引き波が伸びると重くなるのを直す（泡の粒子の引き波の高さの計算を間引き・速く、海面の引き波は届く範囲の頂点だけ計算）。
 //               船内判定の地図を毎秒作り直していたのを直す。喫水線のしぶき・泡の寿命を半分以下に。
-var APP_VERSION = '0.03.013.016';
+// 0.03.013.017  スクリューと機関を同じ名前で呼ぶ（位置から「左舷」「右舷外側」など。決めた名前はモデル内パーツ・機関の欄・テレグラフ・機関音で共通）。
+//               機関ごとに種類（蒸気レシプロ・タービン・ディーゼル・電気など）を選べるように（回転の上がり下がり・逆転の間合い、その機関の回転で鳴る機関音）。
+var APP_VERSION = '0.03.013.017';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
