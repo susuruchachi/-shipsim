@@ -609,7 +609,8 @@ function animate() {
     }
 
     updateWaterReflection();
-    if (typeof updateSWE === 'function') updateSWE(dt, t); // SWE流体シミュ
+    // SWE流体シミュ（海面を消しているときは結果を使わないので止める）
+    if (typeof updateSWE === 'function' && !(waterMesh && !waterMesh.visible)) updateSWE(dt, t);
     updateWater(t);
     updateSky(t);
     sanitizePhysics();
@@ -742,6 +743,62 @@ const _reflBiasMatrix = new THREE.Matrix4().set(
     0.0, 0.0, 0.0, 1.0
 );
 const _reflTextureMatrix = new THREE.Matrix4();
+// 反射の絵に描かない小さな物。反射の描き直しは場面全体をもう一度描くので、オリンピックでは
+// 1 回に 650 回ほどの描画になっていた（海面を消すと凄く軽くなる原因の一つ）。そのうち 8割以上は
+// 手すり・窓枠・ボートの金具などの小さな部品で、反射の絵（長辺 512 画素、しかも波で揺らす）の
+// 上では 1〜2 画素にしかならない。これらと、丸ごと水面の下にある物は、反射を描く間だけ隠す。
+// 光る物（電球・窓の灯りなど）は小さくても夜の海に点々と映るので、画素に乗らないほど小さい時だけ隠す。
+const _reflCull = { list: [], glow: [], count: 0, hidden: [] };
+const _reflSph = new THREE.Sphere();
+const REFL_MIN_PX      = 2.0;   // 反射の絵の上で、この半径[画素]より小さく見える物は描かない
+const REFL_MIN_PX_GLOW = 0.6;   // 光る物はこれより小さい時だけ
+function _reflIsGlow(m) {
+    const one = (q) => !!q && (!!q.emissiveMap || (!!q.emissive && q.emissive.getHex() !== 0));
+    return Array.isArray(m) ? m.some(one) : one(m);
+}
+function _reflCullTargets() {
+    // 候補の一覧は 30 回に 1 回だけ作り直す（毎回シーン全体をたどると重い）
+    if ((_reflCull.count++ % 30) === 0) {
+        const L = [], G = [];
+        scene.traverse(o => {
+            if (!o.isMesh || o === waterMesh || o.isInstancedMesh || o.isSkinnedMesh) return;
+            if (o.children.length || o.frustumCulled === false || !o.geometry) return;
+            const m = o.material;
+            if (!m || (Array.isArray(m) ? m.some(q => q && q.isShaderMaterial) : m.isShaderMaterial)) return;
+            L.push(o);
+            G.push(_reflIsGlow(m));
+        });
+        _reflCull.list = L;
+        _reflCull.glow = G;
+    }
+    return _reflCull.list;
+}
+function _reflHideSmall(cam, rtH, clipY) {
+    const hidden = _reflCull.hidden;
+    hidden.length = 0;
+    const pxPerRad = (rtH * 0.5) / Math.tan(cam.fov * Math.PI / 360);
+    const cp = cam.position;
+    const list = _reflCullTargets(), glow = _reflCull.glow;
+    for (let i = 0; i < list.length; i++) {
+        const o = list[i];
+        if (!o.visible) continue;
+        const g = o.geometry;
+        if (!g.boundingSphere) g.computeBoundingSphere();
+        if (!g.boundingSphere) continue;
+        _reflSph.copy(g.boundingSphere).applyMatrix4(o.matrixWorld);
+        const d = Math.max(1e-3, _reflSph.center.distanceTo(cp));
+        const minPx = glow[i] ? REFL_MIN_PX_GLOW : REFL_MIN_PX;
+        if (_reflSph.radius * pxPerRad < minPx * d || _reflSph.center.y + _reflSph.radius < clipY) {
+            o.visible = false;
+            hidden.push(o);
+        }
+    }
+}
+function _reflShowSmall() {
+    const hidden = _reflCull.hidden;
+    for (let i = 0; i < hidden.length; i++) hidden[i].visible = true;
+    hidden.length = 0;
+}
 function updateWaterReflection() {
     if (!waterReflectionRT || !waterReflectionCamera || !waterMesh) return;
     // 海面を非表示にしているときは反射も要らない（以前は船ごと描き直し続けていた）
@@ -827,6 +884,7 @@ function updateWaterReflection() {
     if (haloWasVisible !== null) glowHaloPoints.visible = false;
 
     try {
+        _reflHideSmall(waterReflectionCamera, waterReflectionRT.height, -_reflClipPlane.constant);
         // 反射RTにレンダリング（bloom無しで直接render）
         // bloomComposer.render() が内部で autoClear を false にする場合があるため
         // ここで明示的に true に保証し、RTが毎回確実にクリアされるようにする。
@@ -840,6 +898,7 @@ function updateWaterReflection() {
         // 例外が発生してもクリップ平面・waterMesh の状態を必ず元に戻す
         waterMesh.visible = wasVisible;
         if (haloWasVisible !== null) glowHaloPoints.visible = haloWasVisible;
+        _reflShowSmall();
         renderer.clippingPlanes = [];
         renderer.localClippingEnabled = false;
     }

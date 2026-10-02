@@ -200,10 +200,18 @@ function init() {
 //  船周辺が細かく、遠方が粗い「同心矩形LODグリッド」をゼロから生成する。
 //
 //  【リング設計】
-//   Ring0: 半径   0 〜  r0  → innerSegs × innerSegs の均一グリッド（最高密度）
-//   Ring1: 半径  r0 〜  r1  → セル幅 r0 の2倍でタイル展開
-//   Ring2: 半径  r1 〜  r2  → セル幅 r0 の6倍
-//   Ring3: 半径  r2 〜  r3  → セル幅 r0 の18倍
+//   Ring0: 半径 0 〜 r0 → innerSegs × innerSegs の均一グリッド（最高密度）
+//   Ring k: 半径 r0·2^(k-1) 〜 r0·2^k → セル幅 Ring0 の 2^k 倍（外へ行くほど倍々に粗く）
+//   最後のリングは海面の端（約 1800）で止める。
+//
+//  以前は Ring1〜2 の外縁を r0 の 4倍・16倍にしていたため、大きい船では外縁が海面の端
+//  （1800）を大きく越え（オリンピックで約 2600）、そこを細かいセルで埋めていた。
+//  オリンピックで約 33万頂点、小さい船では 100万頂点を超え、頂点シェーダー（波・引き波
+//  32本・船体の型抜き）が本描画とブルーム抽出の 2回ずつ全頂点で走るので、
+//  「海面を消すと凄く軽くなる」原因の一つになっていた。
+//  倍々にすると、どのリングも画面上の見かけの細かさがほぼ同じになる（遠いほど
+//  小さく見えるぶん粗くてよい）ので、見た目を変えずにオリンピックで約 10万頂点に減る。
+//  セルの幅が隣のリングのちょうど 2倍なので、境目の頂点も 1つおきに揃う。
 //
 //  innerSegs を増やすほど Ring0 が細かくなる（遠方コストはほぼ変わらない）。
 //  waterMesh.position を毎フレーム船座標に追従させているため、
@@ -211,7 +219,8 @@ function init() {
 //  ワールド座標に変換する。（既存の wx = vx + waterMesh.position.x と同じ方式）
 // ─────────────────────────────────────────
 function createLodWaterGeometry(innerSegs) {
-    const IS = Math.max(8, Math.round(innerSegs)); // Ring0 の格子数（辺）
+    // Ring0 の格子数（辺）。4 の倍数にしておくと、外側のリングの境目の頂点がぴったり揃う
+    const IS = Math.max(8, Math.round(innerSegs / 4) * 4);
 
     // Ring0 の半幅: 船体スケールに応じて動的に決定。
     // physics.scale と hullProfile から現在の船の「見た目半長」を取得し、
@@ -228,25 +237,32 @@ function createLodWaterGeometry(innerSegs) {
     // IS セルを船体幅方向に細かく割り当てる。
     // ただし船体全長も Ring0 に収まる必要があるので halfLen*1.2 も考慮し大きい方を採用。
     // 最低15unit は確保（小型船でも破綻しない）。
-    const r0 = Math.max(15, Math.max(hullHalfBeam_ws * 3.0, hullHalfLen_ws * 1.2));
-
-    const r1 = r0  * 4.0;               // Ring1 外縁
-    const r2 = r1  * 4.0;               // Ring2 外縁
-    const r3 = 1800;                     // Ring3 外縁（海面の端）
-
+    const R_EDGE = 1800;                 // 海面の端（この先は 44-world-terrain.js の遠くの水面）
+    const r0 = Math.min(R_EDGE / 2, Math.max(15, Math.max(hullHalfBeam_ws * 3.0, hullHalfLen_ws * 1.2)));
     const cellW0 = (r0 * 2) / IS;        // Ring0 セル幅
-    const cellW1 = cellW0 * 2;           // Ring1 セル幅（2倍粗い）
-    const cellW2 = cellW0 * 6;           // Ring2 セル幅（6倍粗い）
-    const cellW3 = cellW0 * 18;          // Ring3 セル幅（18倍粗い）
+
+    // リングの組み立て（外縁はセル幅のちょうど整数倍にして、隣のリングと頂点を揃える）
+    const rings = [];
+    {
+        let inner = r0, cell = cellW0 * 2;
+        for (;;) {
+            // 外縁 = 内縁の 2倍（IS/4 セル）。それが端の近くまで届くなら、そのリングを端まで伸ばして終わる
+            // （次のリングが細い帯だけになるのを避ける）
+            const last = inner * 2 >= R_EDGE * 0.85;
+            const n = last ? Math.max(1, Math.round((R_EDGE - inner) / cell)) : Math.round(inner / cell);
+            const outer = inner + n * cell;
+            rings.push({ inner, outer, cell, n });
+            if (last) break;
+            inner = outer; cell *= 2;
+        }
+    }
+    const R = rings.length ? rings[rings.length - 1].outer : r0;   // 実際の海面の端（UV の基準）
 
     const positions = [];
-    const colors    = [];
     const uvs       = [];
-    const ringIds   = [];   // 各頂点のリング番号 (0=Ring0, 1=Ring1, 2=Ring2, 3=Ring3)
     const indices   = [];
 
     let vtxCount = 0;
-    let _currentRing = 0;  // addPatch呼び出し時にセットするリング番号
 
     // 矩形パッチ1枚を追加する内部ヘルパー
     // x0,z0: 左下隅（ローカル）  x1,z1: 右上隅（ローカル）  nX,nZ: 格子分割数
@@ -260,9 +276,7 @@ function createLodWaterGeometry(innerSegs) {
                 const px = x0 + xi * dx;
                 const pz = z0 + zi * dz;
                 positions.push(px, 0, pz);
-                colors.push(0.0, 0.08, 0.22);
-                uvs.push((px + r3) / (r3 * 2), (pz + r3) / (r3 * 2));
-                ringIds.push(_currentRing);
+                uvs.push((px + R) / (R * 2), (pz + R) / (R * 2));
                 vtxCount++;
             }
         }
@@ -278,48 +292,29 @@ function createLodWaterGeometry(innerSegs) {
     }
 
     // Ring0: 中央の高密度正方形（−r0〜+r0）
-    _currentRing = 0;
     addPatch(-r0, -r0, r0, r0, IS, IS);
 
-    // Ring1〜3: 中心正方形を囲むL字形を8方向パッチで構成
-    // 各リングは外縁まで埋める（角パッチ4枚 + 辺パッチ4枚）
-    function addRing(inner, outer, cellW, ringId) {
-        _currentRing = ringId;
-        const nSide = Math.max(1, Math.round((outer - inner) / cellW));
-
-        // 上辺・下辺（フルwidth）
-        const nTop = Math.max(1, Math.round(outer * 2 / cellW));
-        addPatch(-outer,  inner,  outer, outer, nTop, nSide); // 上
-        addPatch(-outer, -outer,  outer, -inner, nTop, nSide); // 下
-        // 左辺・右辺（inner〜inner の高さ）
-        const nLR = Math.max(1, Math.round(inner * 2 / cellW));
-        addPatch(-outer, -inner, -inner,  inner, nSide, nLR); // 左
-        addPatch( inner, -inner,  outer,  inner, nSide, nLR); // 右
+    // Ring1〜: 内側の正方形を囲む額縁を4枚のパッチで構成（上・下は角まで含む全幅、左・右はその間）
+    for (const g of rings) {
+        const { inner, outer, cell, n } = g;
+        const nTop = Math.max(1, Math.round(outer * 2 / cell));
+        addPatch(-outer,  inner,  outer, outer, nTop, n); // 上
+        addPatch(-outer, -outer,  outer, -inner, nTop, n); // 下
+        const nLR = Math.max(1, Math.round(inner * 2 / cell));
+        addPatch(-outer, -inner, -inner,  inner, n, nLR); // 左
+        addPatch( inner, -inner,  outer,  inner, n, nLR); // 右
     }
-
-    addRing(r0, r1, cellW1, 1);
-    addRing(r1, r2, cellW2, 2);
-    addRing(r2, r3, cellW3, 3);
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geo.setAttribute('color',    new THREE.Float32BufferAttribute(colors, 3));
     geo.setAttribute('uv',       new THREE.Float32BufferAttribute(uvs, 2));
-    // ringId は更新スキップ判定に使う（シェーダーには渡さない）
-    geo.setAttribute('ringId',   new THREE.Uint8BufferAttribute(new Uint8Array(ringIds), 1));
-    geo.setIndex(indices);
-    geo.computeVertexNormals();
-    // r0をuserDataに保存（updateWaterでのWAKE_R計算に使う）
+    // 法線・色は頂点シェーダーが自前で求める（属性は使わない）ので持たない
+    geo.setIndex(vtxCount > 65535 ? new THREE.Uint32BufferAttribute(indices, 1) : new THREE.Uint16BufferAttribute(indices, 1));
     geo.userData.r0 = r0;
-    // XZ座標をFlat32Arrayにキャッシュ（updateWaterでgetX/getZの低速アクセスを避ける）
-    const _xzCache = new Float32Array(vtxCount * 2);
-    for (let i = 0; i < vtxCount; i++) {
-        _xzCache[i * 2]     = positions[i * 3];      // x
-        _xzCache[i * 2 + 1] = positions[i * 3 + 2];  // z
-    }
-    geo.userData._xzCache = _xzCache;
+    // 頂点は y=0 の平面だが、波で上下するので境界球は少し厚めに（視錐台の外判定で消えないように）
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), R * Math.SQRT2 + 50);
 
-    console.log(`[LOD Water] innerSegs=${IS} r0=${r0.toFixed(0)} r1=${r1.toFixed(0)} r2=${r2.toFixed(0)} vtx=${vtxCount} tri=${indices.length/3}`);
+    console.log(`[LOD Water] innerSegs=${IS} r0=${r0.toFixed(0)} rings=${rings.map(g => g.outer.toFixed(0)).join('/')} vtx=${vtxCount} tri=${indices.length/3}`);
     return geo;
 }
 
