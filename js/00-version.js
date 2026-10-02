@@ -95,7 +95,9 @@
 //               出なかったのを直す（たたんでいても、決めることが待っているときはボタンを出す）。
 // 0.03.013.004  岸壁と船が離れすぎていたのを直す：岸壁の縁から、船の外形の半幅＋防舷材 1.5m の所を基準にし、
 //               船底の真ん中・舷に座礁の判定と同じだけの深さがある所まで（以前は岸壁の前の斜面の分、5〜10m 離れていた）。
-var APP_VERSION = '0.03.013.004';
+// 0.03.013.005  岸壁の縁は地形の升目で階段状なので、縁の位置を直線に合わせ（出っ張った段の 2 割は除く）、
+//               そこから船の外形の半幅＋1.5m に付ける（オリンピック：QEII で 8.5m → 3m ほど、46 番で 1m）。
+var APP_VERSION = '0.03.013.005';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

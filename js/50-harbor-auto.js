@@ -114,23 +114,34 @@ function harborBerthPlan(port, prefHeading, asBerthed) {
         }
         aQ = worst; aB = aQ + D.hw + 2.5;
         // 岸壁に寄せる所：上の aQ（喫水より深くなり始める所）から測ると、岸壁の前の斜面の分（5〜10m）
-        // 離れすぎていた。岸壁（陸の縁）から、船の外形の半幅＋防舷材 1.5m の所から始めて、
-        // 船底の真ん中に喫水＋0.5m、舷（丸い船底）に喫水の 7 割＋0.3m の深さがある所まで（座礁の判定と同じ見方）
+        // 離れすぎていた。岸壁（陸の縁）から、船の外形の半幅＋防舷材 1.5m の所を基準にする。
+        // 地形は 10m の升目なので陸の縁は階段状にでこぼこ（±4m ほど）している。見えている岸壁は滑らかな線なので、
+        // 縁の位置を直線に合わせ、その 8 割の点が内側に入る線を岸壁とする（いちばん出っ張った段に合わせない）。
+        // そのうえで、船底の真ん中に喫水＋0.3m、舷（丸い船底）に喫水の 7 割＋0.3m の深さがある所まで（座礁の判定と同じ見方）
         {
             let hwWl = 0; for (let k = -10; k <= 10; k++) hwWl = Math.max(hwWl, worldHullAt(k / 10 * D.HL / (physics.scale || 1)).hw);
-            let aNeed = -Infinity, ok = true;
-            for (let b = bCq - D.HL; b <= bCq + D.HL + 0.1 && ok; b += 10) {
-                let wall = null;
-                for (let a = -30; a <= aB; a += 0.5) if (depthAt(a, b) >= -0.3 && depthAt(a + 2, b) >= -0.3) { wall = a; break; }
-                if (wall === null) { ok = false; break; }
-                let need = null;
-                for (let a = wall + D.hw + 1.5; a <= aB; a += 0.5) {
-                    if (depthAt(a, b) >= draft + 0.5 && depthAt(a - hwWl * 0.5, b) >= draft * 0.85 && depthAt(a - hwWl - 0.4, b) >= draft * 0.7 + 0.3) { need = a; break; }
-                }
-                if (need === null) { ok = false; break; }
-                aNeed = Math.max(aNeed, need);
+            const W = [];
+            for (let b = bCq - D.HL; b <= bCq + D.HL + 0.1; b += 5) {
+                for (let a = -30; a <= aB; a += 0.5) if (depthAt(a, b) >= -0.3 && depthAt(a + 2, b) >= -0.3) { W.push([b, a]); break; }
             }
-            if (ok && Number.isFinite(aNeed)) aB = Math.min(aB, aNeed);
+            if (W.length >= 8) {
+                let n = W.length, sb = 0, sa = 0, sbb = 0, sab = 0;
+                for (const [b, a] of W) { sb += b; sa += a; sbb += b * b; sab += a * b; }
+                const m = (n * sab - sb * sa) / ((n * sbb - sb * sb) || 1), c = (sa - m * sb) / n;
+                const res = W.map(([b, a]) => a - (c + m * b)).sort((x, y) => x - y);
+                const off = res[Math.min(res.length - 1, Math.floor(res.length * 0.8))];
+                let aNeed = -Infinity, ok = true;
+                for (let b = bCq - D.HL; b <= bCq + D.HL + 0.1 && ok; b += 10) {
+                    const wall = c + m * b + off;
+                    let need = null;
+                    for (let a = wall + D.hw + 1.5; a <= aB; a += 0.5) {
+                        if (depthAt(a, b) >= draft + 0.3 && depthAt(a - hwWl - 0.4, b) >= draft * 0.7 + 0.3) { need = a; break; }
+                    }
+                    if (need === null) { ok = false; break; }
+                    aNeed = Math.max(aNeed, need);
+                }
+                if (ok && Number.isFinite(aNeed)) aB = Math.min(aB, aNeed);
+            }
         }
     }
     // 回す所：船首が岸壁（a＝6）に、船尾が沖の防波堤（44-world-terrain.js：岸から basin×0.95×0.8 の所）に
