@@ -134,7 +134,9 @@
 //               作り込んだ港の細かい地形は船が近づいたら読み、遠くなったら捨てる（メモリ）。
 //               港の間を行き来する他の船（船種に合う港・定期航路・錨地で待つ・右側通行・行き会い・横切り・追い越し・霧中信号・
 //               航海灯・窓明かり・排煙・地図とミニ地図・世界地図の「🚢 他の船」で設定）。自動航行も同じルールで、よける・待つ。
-var APP_VERSION = '0.03.013.021';
+// 0.03.013.022 プロムナードの影のまだらを減らす（空の見え方をまわりの升目となめらかに混ぜる）。晴れた昼は船の間接光を弱めて
+//               太陽の光を少し強め、甲板などの普通の影もくっきり（曇り・夜は今まで通り）。
+var APP_VERSION = '0.03.013.022';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

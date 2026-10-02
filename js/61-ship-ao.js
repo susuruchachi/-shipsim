@@ -10,7 +10,7 @@
 //  にその値を掛ける。太陽の直接の光は今まで通り影の地図で、焼き込んだ照明（40-light-bake.js）はそのまま。
 //  計算は少しずつ（1 フレームに 6ms ほど）。船のモデル・形が変わったら（升目を作り直したら）やり直す。
 
-const shipAO = { grid: null, field: null, job: null, meshesDone: new WeakMap(), strength: 0.85, checkT: 0 };
+const shipAO = { grid: null, field: null, job: null, meshesDone: new WeakMap(), strength: 0.7, contrast: 1, checkT: 0 };
 window.shipAO = shipAO;
 // 見通す向き（球の上にほぼ均等に 40 本）
 const _AO_DIRS = (() => {
@@ -72,11 +72,26 @@ function* _aoField(G) {
 function* _aoMeshes(G, F, list) {
     const inv = new THREE.Matrix4().copy(shipGroup.matrixWorld).invert(), M = new THREE.Matrix4(), NM = new THREE.Matrix3();
     const p = new THREE.Vector3(), n = new THREE.Vector3();
-    const look = (x, y, z) => {
-        const i = Math.floor((x - G.lo.x) / G.v), j = Math.floor((y - G.lo.y) / G.v), k = Math.floor((z - G.lo.z) / G.v);
-        if (i < 0 || j < 0 || k < 0 || i >= G.nx || j >= G.ny || k >= G.nz) return -2;      // 升目の外：よく見える
-        const s = F.near.get((k * G.ny + j) * G.nx + i);
-        return s === undefined ? -1 : s;
+    // その点のまわりの 8 つの升目の値を、距離で混ぜる（1 つの升目だけ拾うと、升目の境でまだらになる）
+    //  戻り値：0〜1（混ぜられる升目が少なければ -1、升目の外は -2）
+    const look = (x, y, z, nx, ny, nz) => {
+        const fx = (x - G.lo.x) / G.v - 0.5, fy = (y - G.lo.y) / G.v - 0.5, fz = (z - G.lo.z) / G.v - 0.5;
+        const i0 = Math.floor(fx), j0 = Math.floor(fy), k0 = Math.floor(fz);
+        if (i0 < -1 || j0 < -1 || k0 < -1 || i0 >= G.nx || j0 >= G.ny || k0 >= G.nz) return -2;     // 升目の外：よく見える
+        const tx = fx - i0, ty = fy - j0, tz = fz - k0;
+        const wx = nx * nx, wy = ny * ny, wz = nz * nz, ax = nx >= 0 ? 0 : 1, ay = ny >= 0 ? 2 : 3, az = nz >= 0 ? 4 : 5;
+        let sum = 0, wsum = 0;
+        for (let c = 0; c < 8; c++) {
+            const i = i0 + (c & 1), j = j0 + ((c >> 1) & 1), k = k0 + ((c >> 2) & 1);
+            if (i < 0 || j < 0 || k < 0 || i >= G.nx || j >= G.ny || k >= G.nz) continue;
+            const sl = F.near.get((k * G.ny + j) * G.nx + i);
+            if (sl === undefined) continue;
+            const w = ((c & 1) ? tx : 1 - tx) * (((c >> 1) & 1) ? ty : 1 - ty) * (((c >> 2) & 1) ? tz : 1 - tz) + 1e-4;
+            const b = sl * 6;
+            sum += w * (wx * F.vals[b + ax] + wy * F.vals[b + ay] + wz * F.vals[b + az]) / 255;
+            wsum += w;
+        }
+        return wsum > 0.12 ? sum / wsum : -1;
     };
     const geoUsers = new Map();
     for (const m of list) geoUsers.set(m.geometry, (geoUsers.get(m.geometry) || 0) + 1);
@@ -94,13 +109,10 @@ function* _aoMeshes(G, F, list) {
         for (let i = 0; i < P.count; i++) {
             p.fromBufferAttribute(P, i).applyMatrix4(M);
             n.fromBufferAttribute(Nn, i).applyMatrix3(NM).normalize();
-            let s = -1;
-            for (const off of [0.9, 1.8, 2.7]) { s = look(p.x + n.x * G.v * off, p.y + n.y * G.v * off, p.z + n.z * G.v * off); if (s !== -1) break; }
-            if (s === -1) for (const off of [-0.9, -1.8]) { s = look(p.x + n.x * G.v * off, p.y + n.y * G.v * off, p.z + n.z * G.v * off); if (s !== -1) break; }
-            if (s < 0) { out[i] = 1; continue; }
-            const wx = n.x * n.x, wy = n.y * n.y, wz = n.z * n.z, b = s * 6;
-            const v = wx * F.vals[b + (n.x >= 0 ? 0 : 1)] + wy * F.vals[b + (n.y >= 0 ? 2 : 3)] + wz * F.vals[b + (n.z >= 0 ? 4 : 5)];
-            out[i] = v / 255;
+            let v = -1;
+            for (const off of [1.2, 2.0, 2.8]) { v = look(p.x + n.x * G.v * off, p.y + n.y * G.v * off, p.z + n.z * G.v * off, n.x, n.y, n.z); if (v !== -1) break; }
+            if (v === -1) for (const off of [-0.6, -1.4]) { v = look(p.x + n.x * G.v * off, p.y + n.y * G.v * off, p.z + n.z * G.v * off, n.x, n.y, n.z); if (v !== -1) break; }
+            out[i] = v < 0 ? 1 : v;
             if (i % 40000 === 39999) yield;
         }
         g.setAttribute('aSky', new THREE.BufferAttribute(out, 1));
@@ -109,7 +121,7 @@ function* _aoMeshes(G, F, list) {
         yield;
     }
 }
-const shipAOUniforms = { uAOStrength: { value: 0.85 }, uAODebug: { value: 0 } };    // uAODebug=1：空の見え方を白黒で表示（調整用）
+const shipAOUniforms = { uAOStrength: { value: 0.7 }, uAODebug: { value: 0 }, uIndirK: { value: 1 }, uDirectK: { value: 1 } };    // uAODebug=1：空の見え方を白黒で表示（調整用）
 function _aoPatchMaterial(mat) {
     if (!mat || mat.userData.aoPatched) return;
     if (!(mat.isMeshStandardMaterial || mat.isMeshPhongMaterial || mat.isMeshLambertMaterial)) return;
@@ -118,18 +130,31 @@ function _aoPatchMaterial(mat) {
     mat.onBeforeCompile = function (shader, r) {
         if (typeof prev === 'function') prev.call(this, shader, r);
         shader.uniforms.uAOStrength = shipAOUniforms.uAOStrength; shader.uniforms.uAODebug = shipAOUniforms.uAODebug;
+        shader.uniforms.uIndirK = shipAOUniforms.uIndirK; shader.uniforms.uDirectK = shipAOUniforms.uDirectK;
         shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nattribute float aSky;\nvarying float vSkyAO;\n')
             .replace(/\}\s*$/, '    vSkyAO = aSky;\n}\n');
         // 間接光（半球光・環境光・光のプローブ・環境マップ）に掛ける。少し強めに効くよう曲げる
-        shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uAOStrength;\nuniform float uAODebug;\nvarying float vSkyAO;\n')
-            .replace('#include <aomap_fragment>', '#include <aomap_fragment>\n    { float sk = mix(1.0, pow(clamp(vSkyAO * 1.15, 0.0, 1.0), 1.4), uAOStrength);\n      reflectedLight.indirectDiffuse *= sk; reflectedLight.indirectSpecular *= mix(1.0, sk, 0.7); }\n')
+        shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uAOStrength;\nuniform float uAODebug;\nuniform float uIndirK;\nuniform float uDirectK;\nvarying float vSkyAO;\n')
+            .replace('#include <aomap_fragment>', '#include <aomap_fragment>\n    { float sk = mix(1.0, pow(clamp(vSkyAO * 1.15, 0.0, 1.0), 1.4), uAOStrength);\n      reflectedLight.indirectDiffuse *= sk * uIndirK; reflectedLight.indirectSpecular *= mix(1.0, sk, 0.7) * uIndirK;\n      reflectedLight.directDiffuse *= uDirectK; }\n')
             .replace(/\}\s*$/, '    if (uAODebug > 0.5) gl_FragColor = vec4(vec3(vSkyAO), 1.0);\n}\n');
     };
     mat.customProgramCacheKey = function () { return 'skyAO|' + ((typeof prevKey === 'function') ? prevKey.call(this) : ''); };
     mat.defaultAttributeValues = Object.assign({}, mat.defaultAttributeValues || {}, { aSky: [1] });
     mat.needsUpdate = true;
 }
+// 日なたと日陰のくっきりさ：晴れた昼は、船の間接光（空・海からの柔らかい光）を弱め、太陽の直接光を少し強める
+//（全体の明るさはあまり変えずに、甲板の上の影・プロムナードの奥などを暗く）。曇り・夜は今まで通り
+function _aoContrastUpdate() {
+    const night = typeof lightingNightFactor === 'number' ? lightingNightFactor : 0;
+    const sun = (window.weatherLightMul && Number.isFinite(weatherLightMul.sun)) ? Math.min(1, weatherLightMul.sun) : 1;
+    const k = Math.max(0, Math.min(1, (1 - night * 1.5) * sun)) * shipAO.contrast;
+    shipAOUniforms.uIndirK.value = 1 - 0.42 * k;
+    shipAOUniforms.uDirectK.value = 1 + 0.1 * k;
+}
+function shipShadowContrast(v) { shipAO.contrast = Math.max(0, Math.min(1.5, v)); }
+window.shipShadowContrast = shipShadowContrast;
 function updateShipAO() {
+    _aoContrastUpdate();
     const G = window.shipSolid && shipSolid.G;
     if (!G || typeof shipGroup === 'undefined' || !shipGroup) return;
     if (shipAO.job) {
