@@ -113,6 +113,25 @@ function harborBerthPlan(port, prefHeading, asBerthed) {
             worst = Math.max(worst, found);
         }
         aQ = worst; aB = aQ + D.hw + 2.5;
+        // 岸壁に寄せる所：上の aQ（喫水より深くなり始める所）から測ると、岸壁の前の斜面の分（5〜10m）
+        // 離れすぎていた。岸壁（陸の縁）から、船の外形の半幅＋防舷材 1.5m の所から始めて、
+        // 船底の真ん中に喫水＋0.5m、舷（丸い船底）に喫水の 7 割＋0.3m の深さがある所まで（座礁の判定と同じ見方）
+        {
+            let hwWl = 0; for (let k = -10; k <= 10; k++) hwWl = Math.max(hwWl, worldHullAt(k / 10 * D.HL / (physics.scale || 1)).hw);
+            let aNeed = -Infinity, ok = true;
+            for (let b = bCq - D.HL; b <= bCq + D.HL + 0.1 && ok; b += 10) {
+                let wall = null;
+                for (let a = -30; a <= aB; a += 0.5) if (depthAt(a, b) >= -0.3 && depthAt(a + 2, b) >= -0.3) { wall = a; break; }
+                if (wall === null) { ok = false; break; }
+                let need = null;
+                for (let a = wall + D.hw + 1.5; a <= aB; a += 0.5) {
+                    if (depthAt(a, b) >= draft + 0.5 && depthAt(a - hwWl * 0.5, b) >= draft * 0.85 && depthAt(a - hwWl - 0.4, b) >= draft * 0.7 + 0.3) { need = a; break; }
+                }
+                if (need === null) { ok = false; break; }
+                aNeed = Math.max(aNeed, need);
+            }
+            if (ok && Number.isFinite(aNeed)) aB = Math.min(aB, aNeed);
+        }
     }
     // 回す所：船首が岸壁（a＝6）に、船尾が沖の防波堤（44-world-terrain.js：岸から basin×0.95×0.8 の所）に
     // 届かない所。回っている間は船の端が半径 HL の円を描く

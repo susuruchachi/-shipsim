@@ -93,7 +93,9 @@
 //               行ったり来たりしていた）。前後に引くタグも、行き過ぎそうなら逆へ引いて止める。
 // 0.03.013.003  自動航行のパネルを小さくたたんでいると、目的地を選んでも「今すぐ出港」「やめる」「再開」のボタンが
 //               出なかったのを直す（たたんでいても、決めることが待っているときはボタンを出す）。
-var APP_VERSION = '0.03.013.003';
+// 0.03.013.004  岸壁と船が離れすぎていたのを直す：岸壁の縁から、船の外形の半幅＋防舷材 1.5m の所を基準にし、
+//               船底の真ん中・舷に座礁の判定と同じだけの深さがある所まで（以前は岸壁の前の斜面の分、5〜10m 離れていた）。
+var APP_VERSION = '0.03.013.004';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
