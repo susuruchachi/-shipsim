@@ -100,7 +100,9 @@
 // 0.03.013.006  遠くの海が地形の海底（灰色の模様）に見えていたのを直す：遠くの水面（44-world-terrain.js）に対数深度と
 //               色の変換（トーンマッピング・出力）を入れ、距離に応じた細かさの格子にし、海底を透かさない普通の海の色にした。
 // 0.03.013.007  海底の透け方を弱める（水深 12m より浅い所だけ、うっすら）。海底のまだら模様が海面に出ない。
-var APP_VERSION = '0.03.013.007';
+// 0.03.013.008  海底の模様（砂・岩・海草のまだら）を水面に出さない。水深 8m 未満だけ、ごく薄く色を変える。
+//               波の水面の端の 400m を遠くの水面と同じ色の式へ寄せ、四角い境目が見えないように。
+var APP_VERSION = '0.03.013.008';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

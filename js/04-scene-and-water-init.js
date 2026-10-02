@@ -1758,29 +1758,18 @@ function createWater() {
 
                 float depth = vColor.g;
                 vec3 waterBase = mix(deepColor, shallowColor, depth);
-                // ── 浅い海では海底が透けて見える（深さ 200m まで）──
-                // 浅いほどはっきり、深いほど青緑の水に吸われて見えなくなる。
-                // 波の傾きで少しゆらす（光の屈折）。
+                // ── とても浅い所（8m 未満）だけ、水の色が少し明るい砂色寄りになる ──
+                // 以前は深さ 200m まで海底の絵（砂・岩・海草のまだら）が透けて見えていたが、透けすぎで模様も
+                // 不自然だったので、模様は使わず深さだけで、ごく薄く色を変える。
                 if (seabedRect.w > 0.5) {
                     vec2 suv = (vWorldPos.xz - seabedRect.xy) / seabedRect.z;
                     if (suv.x > 0.001 && suv.y > 0.001 && suv.x < 0.999 && suv.y < 0.999) {
-                        vec4 sb0 = texture2D(seabedTex, suv);
-                        float sd0 = sb0.a * 200.0;
-                        vec2 wob = n.xz * min(sd0, 40.0) * 0.15 / seabedRect.z;     // ゆらぎ[m]→テクスチャ座標
-                        vec4 sb = texture2D(seabedTex, suv + wob);
-                        float sd = sb.a * 200.0;
-                        // 海底は水深 12m より浅い所でだけ、うっすら（深さ 200m まで見えていた頃は海面が透けすぎで、まだら模様も目立った）
-                        float vis = pow(clamp(1.0 - sd / 12.0, 0.0, 1.0), 2.0) * 0.35;
-                        // 絵の端（計算した範囲の外側）へ向かって、少しずつ普通の海の色へ戻す（44-world-terrain.js の遠くの水面と同じ）
+                        float sd = texture2D(seabedTex, suv).a * 200.0;
+                        float vis = pow(clamp(1.0 - sd / 8.0, 0.0, 1.0), 2.0) * 0.22;
                         vis *= smoothstep(0.0, 0.18, min(min(suv.x, suv.y), min(1.0 - suv.x, 1.0 - suv.y)));
-                        // 波の水面の端（±1.8km）に近づくほど普通の海の色へ：その外の遠くの水面（44-world-terrain.js）は
-                        // 海底を透かさないので、継ぎ目で色がそろう
                         vis *= smoothstep(0.0, 0.15, min(min(vUv.x, vUv.y), min(1.0 - vUv.x, 1.0 - vUv.y)));
-                        // 深くなるほど赤が先に吸われて青緑になる。明るさは水の色（昼夜で変わる）に合わせる
-                        vec3 trans = exp(-sd * vec3(0.060, 0.022, 0.016));
                         float lum = dot(shallowColor, vec3(0.3, 0.5, 0.2));
-                        vec3 seen = sb.rgb * lum * 4.0 * trans + shallowColor * (1.0 - trans) * 0.8;
-                        waterBase = mix(waterBase, seen, vis);
+                        waterBase = mix(waterBase, vec3(0.62, 0.60, 0.48) * lum * 3.0, vis);
                     }
                 }
                 // v162: 「凹凸の深さ高さが出てる感じがしない」への対応その2。
@@ -1857,6 +1846,19 @@ function createWater() {
 
                 vec3 finalColor = mix(waterBase + specular + shipRefl, foamColor, foam);
                 finalColor      = mix(finalColor, reflColor, reflMix);
+                // 波の水面の端（±1.8km の四角）の 400m ほどは、その外の遠くの水面（44-world-terrain.js）と同じ色の式へ
+                // 少しずつ寄せる。細かい波模様の水面と平らな水面の境目が、四角い線になって見えないように。
+                {
+                    float edgeUv = min(min(vUv.x, vUv.y), min(1.0 - vUv.x, 1.0 - vUv.y));
+                    float toFar = 1.0 - smoothstep(0.0, 0.11, edgeUv);
+                    if (toFar > 0.0) {
+                        vec3 nf = vec3(0.0, 1.0, 0.0);
+                        float frF = pow(1.0 - max(0.0, dot(nf, viewDir)), 4.0);
+                        vec3 farCol = mix(mix(deepColor, shallowColor, 0.6), vec3(0.30, 0.52, 0.82), 0.12 + frF * 0.5);
+                        farCol += sunColor * pow(max(0.0, dot(nf, normalize(sunDir + viewDir))), 60.0) * 0.6;
+                        finalColor = mix(finalColor, farCol, toFar);
+                    }
+                }
                 // 霧：船や空と同じ FogExp2 の式。以前は水面だけ霧を受けず、霧の中でも
                 // 海だけ水平線までくっきり見えていた。
                 {
