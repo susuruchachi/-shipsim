@@ -929,7 +929,7 @@ const BRK_MAX = 2500;
 const _brk = { pts: null, xz: null, base: null, phase: null, n: 0, lastT: -1 };
 function _brkMaterial() {
     return new THREE.ShaderMaterial({
-        uniforms: { uSize: { value: 26 }, uScale: { value: 400 } },
+        uniforms: { uSize: { value: 18 }, uScale: { value: 400 }, uLight: { value: 1 } },
         vertexShader: `
             #ifdef USE_LOGDEPTHBUF
                 uniform float logDepthBufFC;
@@ -951,11 +951,12 @@ function _brkMaterial() {
             }`,
         fragmentShader: `
             varying float vA;
+            uniform float uLight;
             void main() {
                 vec2 p = gl_PointCoord * 2.0 - 1.0;
                 float r = dot(p, p);
                 if (r > 1.0) discard;
-                gl_FragColor = vec4(vec3(0.93, 0.96, 0.98), vA * (1.0 - r) * (1.0 - r));
+                gl_FragColor = vec4(vec3(0.93, 0.96, 0.98) * uLight, vA * (1.0 - r) * (1.0 - r));
             }`,
         transparent: true, depthWrite: false,
     });
@@ -1006,6 +1007,7 @@ function _brkUpdate(t) {
     const cam = camera.position;
     const hasH = typeof getOceanHeight === 'function';
     _brk.pts.material.uniforms.uScale.value = (renderer.domElement.height || 800) / (2 * Math.tan(camera.fov * Math.PI / 360));
+    _brk.pts.material.uniforms.uLight.value = window._fxLight ?? 1;      // 曇天・夜は暗く（12-bloom-...js）
     for (let k = 0; k < _brk.n; k++) {
         const x = _brk.xz[k * 2], z = _brk.xz[k * 2 + 1];
         const d = Math.hypot(x - cam.x, z - cam.z);
@@ -1014,7 +1016,8 @@ function _brkUpdate(t) {
         P[k * 3 + 1] = wy + 0.25;
         // 波の山が来たときだけ白く砕ける（以前は決まった周期で明滅し、いつも白く見えていた）。凪では出さない
         const crest = Math.max(0, Math.min(1, (wy / Math.max(0.3, rough) - 0.15) / 0.6));
-        A[k] = _brk.base[k] * sea * crest * crest * Math.min(1, (5000 - d) / 1500);
+        // 近く（波の水面の中）は水のシェーダーの泡で見せるので、点は遠くだけ（近くで大きな白い玉に見えないように）
+        A[k] = _brk.base[k] * sea * crest * crest * 0.7 * Math.min(1, (5000 - d) / 1500) * Math.min(1, Math.max(0, (d - 900) / 700));
     }
     geo.attributes.position.needsUpdate = true;
     geo.attributes.aAlpha.needsUpdate = true;

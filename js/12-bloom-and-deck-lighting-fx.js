@@ -723,9 +723,13 @@ function animateSmoke(t, dt) {
         0.16, 1.15
     );
     globalSmokeMat.uniforms.lightFactor.value = lf;
-    // 水しぶき・泡も同じ明るさ係数で暗くする
-    if (wakeParticleMat) wakeParticleMat.uniforms.lightFactor.value = THREE.MathUtils.clamp(lf * 0.9, 0.05, 1.0);
-    if (bubbleMat) bubbleMat.uniforms.lightFactor.value = THREE.MathUtils.clamp(lf * 0.85, 0.05, 1.0);
+    // 水しぶき・泡も同じ明るさ係数で暗くする。さらに海面の泡の色（曇天・夜に暗くなる：16）を上限にして、
+    // 曇りや夜にしぶきだけが白く光って見えないようにする（岩のしぶき・浅瀬の白波・タグの排煙なども同じ値：52 / 44）
+    let fl = 1;
+    if (window._waterUniforms && window._waterUniforms.foamColor) { const c = window._waterUniforms.foamColor.value; fl = c.r * 0.3 + c.g * 0.5 + c.b * 0.2; }
+    window._fxLight = THREE.MathUtils.clamp(Math.min(lf * 0.9, fl), 0.04, 1.0);
+    if (wakeParticleMat) wakeParticleMat.uniforms.lightFactor.value = window._fxLight;
+    if (bubbleMat) bubbleMat.uniforms.lightFactor.value = THREE.MathUtils.clamp(Math.min(lf * 0.85, fl), 0.04, 1.0);
     // Scale puff size relative to ship size so small ships don't get oversized "moko" blobs
     globalSmokeMat.uniforms.sizeScale.value = THREE.MathUtils.clamp(physics.scale / 22.0, 0.18, 1.6);
     if (globalSmokeMat.uniforms.uResK && typeof particleResK === 'function') globalSmokeMat.uniforms.uResK.value = particleResK();   // 画質で大きさが変わらないように（03）

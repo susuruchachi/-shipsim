@@ -1772,11 +1772,12 @@ function createWater() {
                         // 浅瀬・岩礁・波打ち際（深さ 6m より浅い所）は、波が砕けて白く泡立つ。
                         // 波の山（vColor.g）が来ると強く、谷でも少し泡が残る。まだらに粒立たせる
                         if (shoalFoamK > 0.001) {
-                            float shoal = 1.0 - smoothstep(0.5, 6.0, sd);
+                            // （浅い所一帯が真っ白にならないよう、ごく浅い帯だけ・波の山のときだけ、薄くまだらに）
+                            float shoal = 1.0 - smoothstep(0.3, 2.5, sd);
                             if (shoal > 0.0) {
-                                float crestS = smoothstep(0.35, 0.85, vColor.g);
+                                float crestS = smoothstep(0.55, 0.9, vColor.g);
                                 float blot = hash21(floor(vWorldPos.xz * 0.45)) * 0.45 + hash21(floor(vWorldPos.xz * 1.7 + vec2(3.0, 9.0))) * 0.35 + hash21(floor(vWorldPos.xz * 6.0)) * 0.2;
-                                float sf = shoal * shoalFoamK * (0.3 + 0.7 * crestS) * smoothstep(0.35, 0.65, blot + 0.3 * crestS);
+                                float sf = shoal * shoalFoamK * 0.45 * crestS * crestS * smoothstep(0.5, 0.75, blot + 0.2 * crestS);
                                 shoalFoam = max(shoalFoam, sf * smoothstep(0.0, 0.15, min(min(vUv.x, vUv.y), min(1.0 - vUv.x, 1.0 - vUv.y))));
                             }
                         }

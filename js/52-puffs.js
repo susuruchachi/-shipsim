@@ -120,7 +120,8 @@ function updatePuffs(t, dt) {
     const u = puffState.mat.uniforms;
     if (typeof camera !== 'undefined' && camera && typeof renderer !== 'undefined' && renderer)
         u.uPixelScale.value = renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
-    if (typeof globalSmokeMat !== 'undefined' && globalSmokeMat) u.uLight.value = globalSmokeMat.uniforms.lightFactor.value;
+    // 明るさ：排煙と同じ係数と、しぶき（12-bloom-...js の _fxLight：曇天・夜に暗く）の小さい方
+    if (typeof globalSmokeMat !== 'undefined' && globalSmokeMat) u.uLight.value = Math.min(globalSmokeMat.uniforms.lightFactor.value, window._fxLight ?? 1);
 }
 window.updatePuffs = updatePuffs;
 
@@ -173,7 +174,7 @@ function _rockFxInit() {
     // 霧は共有（clone すると値が写されるだけなので、元の入れ物を指し直す）
     mat.uniforms.uFogColor = particleFogUniforms.uFogColor;
     mat.uniforms.uFogDensity = particleFogUniforms.uFogDensity;
-    mat.uniforms.sizeScale.value = 1.0;
+    mat.uniforms.sizeScale.value = 0.7;
     const pts = new THREE.Points(geo, mat);
     pts.frustumCulled = false; pts.renderOrder = 12; pts.userData.noBloom = true; pts.name = 'RockSpray';
     scene.add(pts);
@@ -224,23 +225,24 @@ function _rockFxUpdate(t, dt) {
     if (!any) return;
     G.position.needsUpdate = true; G.age.needsUpdate = true; G.ptype.needsUpdate = true; G.velocity.needsUpdate = true;
 }
-// 波が 1 つ当たったときのしぶき（k：強さ 0〜3）
+// 波が 1 つ当たったときのしぶき（k：強さ 0〜3）。
+// 煙突の排煙のように、薄いしぶきの幕が一瞬だけ広くバッと立って消える（ふわっとした粒を広く・薄く・短く）。
+// 細かい水滴（喫水線のしぶきと同じ粒）は少しだけ。濃い塊にならないよう、どれも薄く
 function _rockSplash(p, k, rough, t, wy) {
-    const up = 4 + rough * 2.5 * k;                      // 打ち上がる速さ[m/s]
+    const up = 2.5 + rough * 1.6 * k;                    // 立ち上がる速さ[m/s]
     const j = () => Math.random() - 0.5;
-    // 波切りの筋：岩に当たって立ち上がる水の幕
-    for (let q = 0, n = 2 + Math.round(2 * k); q < n; q++)
-        _rockEmit(p.x + p.nx * 2 + j() * 10, wy + 0.3, p.z + p.nz * 2 + j() * 10,
-            p.nx * (0.5 + Math.random()) + j() * 1.5, up * (0.7 + Math.random() * 0.5), p.nz * (0.5 + Math.random()) + j() * 1.5, 2, t);
-    // 水しぶき：細かい粒が高く散る
-    for (let q = 0, n = 6 + Math.round(8 * k); q < n; q++)
-        _rockEmit(p.x + p.nx * 2 + j() * 12, wy + 0.3, p.z + p.nz * 2 + j() * 12,
-            p.nx * (1 + Math.random() * 2) + j() * 3, up * (0.5 + Math.random() * 0.8), p.nz * (1 + Math.random() * 2) + j() * 3, 1, t);
-    // 泡：当たった所の沖側の水面に、白く残る
-    for (let q = 0, n = 1 + Math.round(1.5 * k); q < n; q++) {
-        const r = 2 + Math.random() * (6 + 4 * k);
-        _rockEmit(p.x + p.nx * r + j() * 14, wy + 0.15, p.z + p.nz * r + j() * 14, p.nx * (0.3 + Math.random() * 0.6) + j() * 0.4, 0, p.nz * (0.3 + Math.random() * 0.6) + j() * 0.4, 0, t);
+    const tx = -p.nz, tz = p.nx;                          // 岸に沿う向き
+    const w = 10 + 6 * k;                                 // 岸に沿って広がる幅[m]
+    for (let q = 0, n = 3 + Math.round(2 * k); q < n; q++) {
+        const u = j() * w, c = 0.88 + Math.random() * 0.08;
+        puffEmit({ x: p.x + p.nx * (2 + Math.random() * 4) + tx * u, y: wy + 0.5, z: p.z + p.nz * (2 + Math.random() * 4) + tz * u,
+            vx: p.nx * (0.5 + Math.random()) + tx * j() * 2, vy: up * (0.6 + Math.random() * 0.5), vz: p.nz * (0.5 + Math.random()) + tz * j() * 2,
+            life: 1.1 + Math.random() * 0.8, s0: 3 + 1.5 * k, s1: 10 + 6 * k, r: c, g: c, b: c, a: 0.16 + 0.05 * Math.min(2, k),
+            rise: 0, drag: 0.9, grav: 0.25 });
     }
+    for (let q = 0, n = 2 + Math.round(2 * k); q < n; q++)
+        _rockEmit(p.x + p.nx * 2 + tx * j() * w, wy + 0.3, p.z + p.nz * 2 + tz * j() * w,
+            p.nx * (1 + Math.random() * 1.5) + j() * 2, up * (0.6 + Math.random() * 0.6), p.nz * (1 + Math.random() * 1.5) + j() * 2, 1, t);
 }
 function updateShoreSpray(t, dt) {
     _rockFxUpdate(t, dt);
