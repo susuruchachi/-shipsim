@@ -1,7 +1,7 @@
 // ════════════════════════════════════════════════════════════════
 //  船の形の中（ボクセル）：煙・湯気・しぶきの粒が、船体・上部構造・煙突を突き抜けないように
 // ════════════════════════════════════════════════════════════════
-//  船のモデルを読み込んだら、船の中の座標（shipGroup）で、船を細かい升目（船の大きさの 1/200 ほど）に
+//  船のモデルを読み込んだら、船の中の座標（shipGroup）で、船を細かい升目（船の大きさの 1/320 ほど）に
 //  分け、面が通る升目と、そのすき間の「外から入れない」升目（船体・部屋の中）を「中」とする。
 //  ・排煙（12-bloom-and-deck-lighting-fx.js）・タグの煙や汽笛の湯気（52-puffs.js）：中に入った粒は、
 //    上へ押し出す（船の上を越えて流れる）
@@ -41,7 +41,7 @@ function* _ssBuild(list) {
     }
     if (!Number.isFinite(lo.x)) return null;
     const ext = Math.max(hi.x - lo.x, hi.y - lo.y, hi.z - lo.z);
-    let v = ext / 200;
+    let v = ext / 320;
     lo.addScalar(-2 * v); hi.addScalar(2 * v);
     let nx = Math.ceil((hi.x - lo.x) / v), ny = Math.ceil((hi.y - lo.y) / v), nz = Math.ceil((hi.z - lo.z) / v);
     while (nx * ny * nz > 4e6) { v *= 1.2; nx = Math.ceil((hi.x - lo.x) / v); ny = Math.ceil((hi.y - lo.y) / v); nz = Math.ceil((hi.z - lo.z) / v); }

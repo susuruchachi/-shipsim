@@ -125,7 +125,8 @@
 //               短い折り返しを除く（ベルファストの出口でくるくる回るのを直す）・同じ点のまわりを1回り近く回ったら次の点へ。
 //               スタンバイ後は機関終了まで排煙。係船索を茶色に・明るさに合わせて暗く。左右の機関の位置のずれで勝手に回るのを直す。
 //               夕方・夜に遠くの海だけ明るい青になるのを直す（水面に映る空の色を時刻に合わせる）。煙・湯気・しぶきが船を突き抜けないように。
-var APP_VERSION = '0.03.013.018';
+// 0.03.013.019 プロムナードなど上がかぶさった所の環境光を暗く（船の形から空の見え方を求めて頂点に焼き込む）。
+var APP_VERSION = '0.03.013.019';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
