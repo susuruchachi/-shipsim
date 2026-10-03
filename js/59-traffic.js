@@ -1095,8 +1095,11 @@ function _tfMats(S) {
     const L = S.liv;
     const mk = (hex, o) => { const m = new THREE.MeshStandardMaterial(Object.assign({ roughness: 0.65, metalness: 0.05 }, o || {})); m.color.setHex(hex).convertSRGBToLinear(); return typeof noShipLightProbe === 'function' ? noShipLightProbe(m) : m; };
     const win = mk(0x20262c, { roughness: 0.3, emissive: new THREE.Color(0xffc77a).convertSRGBToLinear(), emissiveIntensity: 0 });
-    return { hull: mk(L.hull), boot: mk(L.boot), sup: mk(L.sup), fun: mk(L.fun), top: mk(L.top), deck: mk(L.deck || 0x8a7a60, { roughness: 0.9 }),
+    const M = { hull: mk(L.hull), boot: mk(L.boot), sup: mk(L.sup), fun: mk(L.fun), top: mk(L.top), deck: mk(L.deck || 0x8a7a60, { roughness: 0.9 }),
         dark: mk(0x2a2c2e), bands: mk(L.bands || L.top), win, gun: mk(0x55595c, { metalness: 0.3 }), box: [mk(0xb5452a), mk(0x2c5d8a), mk(0x3d7a3a), mk(0xc9a23a), mk(0x7a7f85)] };
+    // 晴れた昼の影のくっきりさを、自分の船と同じに（61-ship-ao.js：空の見え方の焼き込みは無いので、その分は 1）
+    if (typeof _aoPatchMaterial === 'function') for (const k in M) for (const m of [].concat(M[k])) _aoPatchMaterial(m);
+    return M;
 }
 // いくつもの形を、材質ごとに 1 つにまとめる（描く回数を減らす）
 function _tfMerge(parts) {
@@ -1413,6 +1416,10 @@ function updateTraffic(t, dt) {
     }
     // 形：見える範囲の船だけ
     const vis = _tfVisM(), night = typeof lightingNightFactor === 'number' ? lightingNightFactor : 0;
+    _tfProtoAOStep();
+    // 保存した船の窓の明かり：昼は消し、夜は点ける（自分の船の updateWindowGlow と同じ係数）
+    const glowK = night * ((typeof lightSettings !== 'undefined' && Number.isFinite(lightSettings.windowGlowMult)) ? lightSettings.windowGlowMult : 1);
+    for (const P of _tfProto.values()) if (P.glow && P.users > 0 && P.glowK !== glowK) { P.glowK = glowK; for (const [m, base] of P.glow) m.emissiveIntensity = base * glowK; }
     for (const S of traffic.ships) {
         if (S.dPl < Math.min(TF_SHOW, vis * 1.5 + 2000) && S.st !== 'off' && S.st !== 'gone' && S.st !== 'pending') _tfVisual(S, t, vis, night);
         else if (S.mesh && !(S.dPl < TF_SHOW + 1500)) _tfDropMesh(S);
@@ -1666,11 +1673,37 @@ async function _tfLoadProto(v) {
         const type = v.ref.type || 'glb';
         let root;
         if (type === 'obj') root = new THREE.OBJLoader().parse(new TextDecoder('utf-8').decode(buf));
-        else root = (await new Promise((res, rej) => new THREE.GLTFLoader().parse(buf, '', res, rej))).scene;
+        else {
+            const gltf = await new Promise((res, rej) => new THREE.GLTFLoader().parse(buf, '', res, rej));
+            // Blender の発光の強さ（窓の明かり）を、自分の船と同じように読む（08-model-loading-and-lighting.js）
+            if (typeof applyGltfEmissiveStrengthExt === 'function') applyGltfEmissiveStrengthExt(gltf.scene, gltf.parser && gltf.parser.json);
+            root = gltf.scene;
+        }
         buf = null;
-        // 光源は外し（重い）、影は落とさない（軽く）
-        const lights = [];
-        root.traverse(o => { if (o.isLight) lights.push(o); if (o.isMesh) { o.castShadow = false; o.receiveShadow = true; o.userData.noLightBake = true; } });
+        // 光源は外す（重い）。影は落とす（窓の発光面は落とさない）。
+        // 窓・キャビンの発光（自分の船の registerWindowGlowMaterial と同じ見分け方）は、昼は消して夜だけ点ける
+        const lights = [], glow = new Map();
+        const isGlow = (m) => {
+            if (!m || !m.emissive) return false;
+            const c = m.emissive;
+            if (c.r < 0.02 && c.g < 0.02 && c.b < 0.02) return false;
+            if ((c.r > 0.6 && c.g < 0.3 && c.b < 0.3) || (c.g > 0.6 && c.r < 0.3 && c.b < 0.3)) return false;   // 航行灯のレンズ
+            return true;
+        };
+        root.traverse(o => {
+            if (o.isLight) lights.push(o);
+            if (!o.isMesh) return;
+            const ms = Array.isArray(o.material) ? o.material : [o.material];
+            let win = false;
+            for (const m of ms) {
+                if (!m) continue;
+                m.side = THREE.DoubleSide;
+                if (isGlow(m)) { win = true; if (!glow.has(m)) glow.set(m, m.emissiveIntensity != null ? m.emissiveIntensity : 1); }
+                // 晴れた昼の影のくっきりさ（間接光を弱める）を、自分の船と同じに（61-ship-ao.js）
+                if (typeof _aoPatchMaterial === 'function') _aoPatchMaterial(m);
+            }
+            o.castShadow = !win; o.receiveShadow = true; o.userData.noLightBake = true; o.userData.noBloom = !win;
+        });
         for (const o of lights) if (o.parent) o.parent.remove(o);
         // 船体設定の置き方（08-model-loading-and-lighting.js の setCustomModel・updateModelOffset と同じ）
         const m = v.cfg.model || {}, ph = v.cfg.physics || {};
@@ -1696,7 +1729,9 @@ async function _tfLoadProto(v) {
             aft: [n('mastAftX', 0), n('mastAftY', top), n('mastAftZ', box.min.z + len * 0.35)],
             stern: [n('sternX', 0), n('sternY', wl + 0.2 * (top - wl)), n('sternZ', box.min.z)],
         };
-        Object.assign(P, { state: 'ok', obj: inner, S, wl, cx: (box.min.x + box.max.x) / 2, cz: (box.min.z + box.max.z) / 2, len, wid: box.max.x - box.min.x, keel: box.min.y, funnels, lamps });
+        // 空の見え方（プロムナードの奥などを暗く）を、自分の船と同じ方法で少しずつ焼き込む（60・61）
+        if (typeof _ssBuild === 'function' && typeof _aoField === 'function' && typeof _aoMeshes === 'function') P.aoJob = _tfProtoAO(inner, (+ph.scale || 12) / 12);
+        Object.assign(P, { state: 'ok', glow: [...glow], obj: inner, S, wl, cx: (box.min.x + box.max.x) / 2, cz: (box.min.z + box.max.z) / 2, len, wid: box.max.x - box.min.x, keel: box.min.y, funnels, lamps });
     } catch (e) {
         console.warn('保存した船のモデルを読めませんでした：' + v.name, e);
         P.state = 'fail';
@@ -1842,4 +1877,25 @@ function _tfSpawnEncounter(me) {
     S.dPl = _tfDist(me, S);
     traffic.ships.push(S);
     return true;
+}
+
+// 保存した船のモデルに、空の見え方を焼き込む（ジェネレーター：1 フレーム数 ms ずつ。形は使い回すので 1 回だけ）
+function* _tfProtoAO(root, S) {
+    const list = [];
+    root.traverse(o => { if (o.isMesh && o.geometry && o.geometry.attributes.position) list.push(o); });
+    if (!list.length) return;
+    const G = yield* _ssBuild(list, root);
+    if (!G) return;
+    G.vWorld = G.v * S;
+    const F = yield* _aoField(G);
+    yield* _aoMeshes(G, F, list, root);
+}
+function _tfProtoAOStep() {
+    const t0 = performance.now();
+    for (const P of _tfProto.values()) {
+        if (!P.aoJob) continue;
+        try { while (performance.now() - t0 < 4) { if (P.aoJob.next().done) { P.aoJob = null; break; } } }
+        catch (e) { console.warn('保存した船の空の見え方を作れませんでした', e); P.aoJob = null; }
+        return;                      // 1 つずつ
+    }
 }

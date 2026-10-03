@@ -28,10 +28,11 @@ function _ssKey(list) {
     let v = 0; for (const o of list) v += o.geometry.attributes.position.count;
     return list.length + ':' + v + ':' + (physics.scale || 1).toFixed(3);
 }
-// 升目を作る（ジェネレーター：少しずつ）
-function* _ssBuild(list) {
-    shipGroup.updateMatrixWorld(true);
-    const inv = new THREE.Matrix4().copy(shipGroup.matrixWorld).invert(), M = new THREE.Matrix4();
+// 升目を作る（ジェネレーター：少しずつ）。root：船の中の座標の元（省くと自分の船。他の船のモデルにも使う：59-traffic.js）
+function* _ssBuild(list, root) {
+    root = root || shipGroup;
+    root.updateMatrixWorld(true);
+    const inv = new THREE.Matrix4().copy(root.matrixWorld).invert(), M = new THREE.Matrix4();
     // 船の中の座標での大きさ
     const lo = new THREE.Vector3(Infinity, Infinity, Infinity), hi = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
     const mats = list.map(o => new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld));

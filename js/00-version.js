@@ -144,7 +144,9 @@
 //               外洋でも行き会う船（近くを通る港の間の航路の上、無ければ近くを通るまっすぐの航路）。
 // 0.03.013.026 煙突のない船を保存して読み込んだとき、煙突を勝手に足さない。
 // 0.03.013.027 ミニ地図・世界地図とも半径 500m まで拡大できるように。大きく拡大したら自分の船・他の船を本当の大きさの形で。
-var APP_VERSION = '0.03.013.027';
+// 0.03.013.028 他の船：保存した船も影を落とし・受け、窓の明かりは昼は消えて夜に点く（自分の船と同じ係数）。
+//               保存した船にも空の見え方を焼き込み（プロムナードの奥などを暗く）、晴れた昼の影のくっきりさを自分の船とそろえる。
+var APP_VERSION = '0.03.013.028';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

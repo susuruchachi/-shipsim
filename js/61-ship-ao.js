@@ -69,8 +69,8 @@ function* _aoField(G) {
     return { near, vals };
 }
 // 頂点ごとの値（面の向きで 6 つを混ぜる）
-function* _aoMeshes(G, F, list) {
-    const inv = new THREE.Matrix4().copy(shipGroup.matrixWorld).invert(), M = new THREE.Matrix4(), NM = new THREE.Matrix3();
+function* _aoMeshes(G, F, list, root) {
+    const inv = new THREE.Matrix4().copy((root || shipGroup).matrixWorld).invert(), M = new THREE.Matrix4(), NM = new THREE.Matrix3();
     const p = new THREE.Vector3(), n = new THREE.Vector3();
     // その点のまわりの 8 つの升目の値を、距離で混ぜる（1 つの升目だけ拾うと、升目の境でまだらになる）
     //  戻り値：0〜1（混ぜられる升目が少なければ -1、升目の外は -2）
