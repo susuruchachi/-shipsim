@@ -23,14 +23,8 @@ let glbLightAutoMode = true; // true: 日が昇ったらGLBライト(エリア/�
 // ↑デフォルトON。昼間は使わないライトをvisible=falseで完全にレンダリング対象外にし、
 //   フラグメントシェーダーのライト計算負荷(モバイルGPUの上限)を下げる。
 let windowGlowMaterials = [];    // 窓・キャビンなど常時emissiveで光らせているマテリアル（昼夜で自動ON/OFF）
-let windowGlowMeshEntries = []; // [{mesh, mat}] emissiveメッシュ一覧（PointLight配置計算用）
-let windowGlowLights = [];      // emissiveクラスタに配置したPointLight（窓灯りで周囲を照らす）
-let windowGlowLightProbe = null; // v168: 発光メッシュ群をSH係数化した環境光（PointLightだけでは
-                                  // カバーしきれない区画の「真っ暗」を防ぐための底上げ役）
-let windowGlowProbeBaseSH = null; // v168: フル点灯時のSH係数(THREE.Vector3[9])。updateWindowGlow()で
-                                   // 昼夜係数に応じてこれをスケールしてプローブへ適用する
-let promenadeLights = []; // v169: プロムナードライト等（丸い照明カバー）用の個別小型PointLight一覧。
-                           // 窓明かり(windowGlowLights)とは別枠で管理する（役割・distance設定が違うため）
+let windowGlowMeshEntries = []; // [{mesh, mat}] emissiveメッシュ一覧（発光パネルの抽出に使う。26-glow-emitters.js）
+let windowGlowLightProbe = null; // 発光メッシュ群をSH係数化した環境光（船内全体をほんのり底上げする）
 let sunLight, skyMesh;
 
 // ============================================================
@@ -68,7 +62,12 @@ let bloomComposer = null;      // EffectComposer（ブルーム抽出専用。�
 let bloomPass = null;          // UnrealBloomPass
 let bloomOverlayScene = null;  // ブルーム結果を加算合成するための全画面クアッド用シーン
 let bloomOverlayCamera = null; // 全画面クアッド用の正射影カメラ
+// ブルーム（光のにじみ）。設定パネルでON/OFFできる（既定ON）。
+// 霧・雨のときは自動で弱めて切り、窓などの発光面はにじませずにくっきり見せる
+// （霧に溶けにくい発光は 29-weather-fx.js）。ブルームを切っている間は、シーンを
+// もう一度描く処理もしないので軽い。
 let bloomEnabled = true;       // ブルームのON/OFF
+let bloomBaseStrength = 0.48;  // 設定の強さ（霧のときはここから弱める）
 let noBloomDarkMaterial = null;          // ブルーム抽出パス中、noBloom対象を塗りつぶす黒マテリアル
 const noBloomMaterialCache = new Map();  // 退避した元マテリアル（抽出パスの間だけ差し替える）
 
@@ -119,21 +118,9 @@ const perf = {
     // 3なら3フレームに1回だけ計算し、それ以外のフレームは前回の速度で
     // そのまま位置を進める（波の上下運動はゆっくりなので、数フレーム間引いても
     // 見た目にはほぼ気付かれない）。
-    foamUpdateInterval: 1,
-    // v166: 窓明かりPointLight（windowGlowLights）のシャドウマップ再計算を
-    // 間引く間隔。v165でマップ解像度は品質帯別に段階化したが、灯数自体は
-    // 最大8灯のまま（意図的に維持）。8灯すべてを毎フレーム再計算しなくても、
-    // ライトは船（modelRoot）に対して常に同じローカル座標なので、船の移動・
-    // 回転に伴うワールド位置の変化はシャドウの形そのものにはほぼ影響しない
-    // （船全体が一体で動くだけで、窓と壁の相対位置関係は変わらないため）。
-    // そこで各ライトにautoUpdate=falseを設定し、updateWindowGlow()側で
-    // 「wgShadowUpdateInterval フレームに1回、8灯のうち1灯だけ」を
-    // ローテーションで更新する（8灯 × interval フレームで一巡）。
-    // interval=1なら従来通り毎フレーム全灯更新。
-    wgShadowUpdateInterval: 1
+    foamUpdateInterval: 4
 };
 let normalsFrameCounter = 0;
-let wgShadowFrameCounter = 0; // v166: windowGlowLightsのシャドウ間引き更新用フレームカウンタ
 
 const lightSettings = {
     sunMult: 1.0,
@@ -141,6 +128,7 @@ const lightSettings = {
     hemiMult: 1.0,
     fillMult: 1.0,
     exposure: 0.85,       // v83で色空間を修正した分、全体的に明るく出るようになったため1.1→0.85へ
+    autoExposure: true,   // 見ている画面の明るさに合わせて露出を自動調整する（30-auto-exposure.js）
     fogMult: 1.0,
     glbMaster: 1.0,
     windowGlowMult: 1.0,  // 窓・キャビンなど常時emissiveマテリアルの発光強さ（ユーザー調整用）
@@ -159,20 +147,16 @@ const PERF_PRESETS = {
     // 2.5〜3台あるため、上限1.5だと内部解像度が画面ネイティブより低いまま引き伸ばされ、
     // 全体的に少しぼやけた/粗い見え方になっていた(実際に使われる値はこことdevicePixelRatio
     // のMath.minなので、DPIが低い端末では今まで通り軽いまま)。
-    // v166: wgShadowUpdateInterval = windowGlowLightsのシャドウ再計算間隔（フレーム）。
-    // medium/lowは段階的に間引く。verylow/ultralowはgetWindowGlowShadowConfig()側で
-    // シャドウ自体がenabled=falseになるため値は使われないが、一応大きめにしておく。
-    // v167: 「v147と比べてまだ重い」との報告を受け、high=1（間引きなし）だった点を見直し。
-    // v166時点ではhigh帯は従来通り8灯×6面×1024²を毎フレーム再計算しており、v148で
-    // 発生した重さがhigh帯には手つかずのまま残っていた（medium/lowだけが間引きの恩恵を
-    // 受けていた）。high=2に変更し、画質最優先の帯であることを踏まえてmedium(3)・low(6)
-    // より緩やかな間引きに留める（1灯あたりの実質更新間隔は16フレーム≒0.27秒@60fps）。
-    high:    { smokeCap: 2000, normalsInterval: 1, historyMax: 60, pixelRatio: 2.0,  shadowsEnabled: true,  shadowMapSize: 2048, foamUpdateInterval: 1, wgShadowUpdateInterval: 2 },
-    medium:  { smokeCap: 1000, normalsInterval: 3, historyMax: 35, pixelRatio: 1.0,  shadowsEnabled: true,  shadowMapSize: 2048, foamUpdateInterval: 2, wgShadowUpdateInterval: 3 },
-    low:     { smokeCap: 600,  normalsInterval: 4, historyMax: 22, pixelRatio: 0.85, shadowsEnabled: true,  shadowMapSize: 1024, foamUpdateInterval: 3, wgShadowUpdateInterval: 6 },
-    verylow: { smokeCap: 300,  normalsInterval: 6, historyMax: 14, pixelRatio: 0.75, shadowsEnabled: true,  shadowMapSize: 512,  foamUpdateInterval: 4, wgShadowUpdateInterval: 6 },
+    // （引き波の泡の高さ（foamUpdateInterval）を毎フレーム計算していた「高」では、伸びた引き波の泡の数だけ
+    //   1 フレームに 500 回以上も引き波の高さを計算し、引き波が伸びるほど重くなっていた。泡の上下はゆっくりなので
+    //   数フレームに 1 回で十分。引き波の記録（historyMax）は 0.4 秒おきで、15 秒より古いものは波を立てない
+    //   （02 / 04）ので、40 件（16 秒）より多く持っても使われない）
+    high:    { smokeCap: 2000, normalsInterval: 1, historyMax: 40, pixelRatio: 2.0,  shadowsEnabled: true,  shadowMapSize: 2048, foamUpdateInterval: 4 },
+    medium:  { smokeCap: 1000, normalsInterval: 3, historyMax: 35, pixelRatio: 1.0,  shadowsEnabled: true,  shadowMapSize: 2048, foamUpdateInterval: 5 },
+    low:     { smokeCap: 600,  normalsInterval: 4, historyMax: 22, pixelRatio: 0.85, shadowsEnabled: true,  shadowMapSize: 1024, foamUpdateInterval: 6 },
+    verylow: { smokeCap: 300,  normalsInterval: 6, historyMax: 14, pixelRatio: 0.75, shadowsEnabled: true,  shadowMapSize: 512,  foamUpdateInterval: 8 },
     // 内部解像度をさらに落として(0.55倍)CSSで引き延ばす、最も軽い設定。影も完全にOFF。
-    ultralow:{ smokeCap: 150,  normalsInterval: 8, historyMax: 10, pixelRatio: 0.55, shadowsEnabled: false, shadowMapSize: 512,  foamUpdateInterval: 4, wgShadowUpdateInterval: 6 }
+    ultralow:{ smokeCap: 150,  normalsInterval: 8, historyMax: 10, pixelRatio: 0.55, shadowsEnabled: false, shadowMapSize: 512,  foamUpdateInterval: 8 }
 };
 
 function applyPerfPreset(name) {
@@ -180,8 +164,13 @@ function applyPerfPreset(name) {
     if (!preset) return;
     perf.quality = name;
     Object.assign(perf, preset);
+    if (typeof perfResetScale === 'function') perfResetScale();   // 自動の解像度調整をやり直す（33-performance.js）
     if (renderer) {
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, perf.pixelRatio));
+        const pr = Math.min(window.devicePixelRatio || 1, perf.pixelRatio);
+        renderer.setPixelRatio(pr);
+        // ブルームの作業用バッファも同じ解像度にする（以前は画質を変えても
+        // ブルーム側だけ起動時の解像度のままだった）
+        if (typeof bloomComposer !== 'undefined' && bloomComposer && bloomComposer.setPixelRatio) bloomComposer.setPixelRatio(pr);
     }
     applyShadowQualityFromPerf();
     if (globalSmokeGeo) {
@@ -209,62 +198,8 @@ function applyShadowQualityFromPerf() {
             sunLight.shadow.map = null;
         }
     }
-    // v147: 窓灯りPointLight（windowGlowLights、08-model-loading-and-lighting.js）の
-    // 影設定も、画質プリセットが変わるたびに追従させる（モデルを読み込み直さなくても
-    // 品質スライダーの変更だけで即座に切り替わるように）。
-    const wg = getWindowGlowShadowConfig();
-    windowGlowLights.forEach((pl) => {
-        pl.castShadow = wg.enabled;
-        // v166: シャドウ更新はupdateWindowGlow()側のローテーション間引きに一任するため、
-        // ここでも常にautoUpdate=falseを保証しておく（Three.jsのデフォルトはtrueなので、
-        // 新規ライト以外の経路でここに来た場合も明示的に落としておく必要がある）。
-        pl.shadow.autoUpdate = false;
-        if (wg.enabled) {
-            if (pl.shadow.mapSize.width !== wg.mapSize) {
-                pl.shadow.mapSize.set(wg.mapSize, wg.mapSize);
-                if (pl.shadow.map) {
-                    pl.shadow.map.dispose();
-                    pl.shadow.map = null;
-                }
-            }
-            // マップが再生成されるケース（新規/dispose後/解像度変更後）に備え、
-            // 次の担当フレームを待たず即座に1回描画させる
-            pl.shadow.needsUpdate = true;
-        } else if (pl.shadow.map) {
-            // 品質を下げてOFFにした際もRenderTargetを持ち越さずすぐ解放する
-            pl.shadow.map.dispose();
-            pl.shadow.map = null;
-        }
-    });
-}
-
-// v147: windowGlowLights（窓灯りPointLight、buildWindowGlowLights参照）の
-// 影を有効にするかどうか・マップ解像度を品質設定から決める。sunLightの
-// shadowMapSizeとは別枠で管理する：PointLightの影は立方体マップ6面ぶんの
-// コストがあり、最大8灯（v147-fix2で4→8に増量）が同時にこれを使う。
-// v148: 従来は192px固定だったが、天窓ドームのような細い格子ジオメトリでは
-// 低解像度＋bias/normalBiasの組み合わせでテクセル誤差が無視できず、
-// 左右対称なはずの構造でも面ごとに影の出方が違って見える不具合があった
-// （キューブマップの6面それぞれでbiasの効き方が変わるため）。パフォーマンス
-// より見た目の一貫性を優先し、1024pxに引き上げる。
-// 注意: 8灯 × 6面 × 1024^2 の深度テクスチャは低スペック端末では
-// 重くなる可能性がある（verylow/ultralowでは従来通り丸ごと無効化）。
-// 実機で重ければこの値を下げて調整すること。
-//
-// v165: 「iPadで画質をhigh/medium/lowにすると重い、verylow/ultralowだと
-// ぬるぬる動く」という報告を受けての対応。従来はverylow/ultralow以外
-// （high/medium/low）が一律1024pxだったため、8灯×6面×1024^2という最重量級の
-// 設定がhigh〜lowの3段階すべてに掛かっていた。ここをperf.qualityに応じて
-// 段階化する（high=1024px従来通り、medium=512px、low=256px）。
-// キューブマップの深度パスコストは解像度の2乗に比例するため、512pxは1024pxの
-// 約1/4、256pxは約1/16のコストになる（6面×灯数ぶんに、この比率がそのまま掛かる）。
-function getWindowGlowShadowConfig() {
-    if (!perf.shadowsEnabled || perf.quality === 'verylow' || perf.quality === 'ultralow') {
-        return { enabled: false, mapSize: 0 };
-    }
-    if (perf.quality === 'low') return { enabled: true, mapSize: 256 };
-    if (perf.quality === 'medium') return { enabled: true, mapSize: 512 };
-    return { enabled: true, mapSize: 1024 }; // high
+    // エリアライト・発光パネルの影（25-area-lights.js）も画質設定に追従させる
+    if (typeof refreshAreaLightShadowQuality === 'function') refreshAreaLightShadowQuality();
 }
 
 // ============================================================

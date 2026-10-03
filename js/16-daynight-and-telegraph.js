@@ -1,5 +1,8 @@
 function changeTelegraph(dir) {
+    const prev = physics.telegraphState;
     physics.telegraphState = Math.max(-3, Math.min(3, physics.telegraphState + dir));
+    // ベルを鳴らし、機関室の応答を待つ（37-bridge-controls.js）
+    if (typeof onTelegraphOrder === 'function') onTelegraphOrder(prev, physics.telegraphState);
 }
 
 function onWindowResize() {
@@ -30,51 +33,13 @@ function updateWindowGlow(factor) {
     windowGlowMaterials.forEach((mat) => {
         mat.emissiveIntensity = mat.userData.baseEmissiveIntensity * eff;
     });
-    // 同じ係数で窓グローのPointLightも連動（windowGlowMultスライダーで輝度と照明が同時に変わる）
-    windowGlowLights.forEach(pl => {
-        pl.intensity = pl.userData.wgBaseIntensity * eff;
-    });
-
-    // v169: プロムナードライト（丸い照明カバー用の個別小型PointLight）も同じ係数で連動
-    promenadeLights.forEach(pl => {
-        pl.intensity = pl.userData.wgBaseIntensity * eff;
-    });
-
-    // v168: ライトプローブの強度も同じ係数で連動させる。SH係数自体（分布の形）は
-    // buildWindowGlowLights()で焼き込み済みなので、ここではintensity(全係数への
-    // 一律乗数)を書き換えるだけ——毎フレーム呼ばれても軽い処理。
-    if (windowGlowLightProbe) {
-        // wgProbeBaseIntensityは「フル点灯時にどれくらい底上げするか」の基準値。
-        // PointLightのwgBaseIntensity(18.0)とは役割が違う（プローブは面全体への
-        // 弱い底上げ、PointLightは局所的な強いアクセント）ため、別の低めの値にする。
-        windowGlowLightProbe.intensity = 1.2 * eff;
-    }
-
-    // v166: シャドウマップの再計算はintensity更新とは別にローテーション式で間引く
-    // （明るさのフェードは毎フレーム滑らかに、影の再計算だけを間引く）。
-    // wgShadowUpdateInterval フレームごとに1灯だけneedsUpdate=trueを立てて回す。
-    // 8灯 × interval フレームで一巡するので、intervalが大きいほど1灯あたりの
-    // 更新頻度は下がる（見た目には「船の動きに対して影の追従が少し遅れる」形になるが、
-    // 窓明かりの影自体は元々コントラストの弱いディテールなので目立ちにくい）。
-    const interval = (typeof perf !== 'undefined' && perf.wgShadowUpdateInterval) || 1;
-    if (interval <= 1) {
-        // high品質など間引き不要な設定では従来通り毎フレーム全灯更新
-        windowGlowLights.forEach(pl => { if (pl.castShadow) pl.shadow.needsUpdate = true; });
-    } else {
-        // 1フレームにつき1灯だけ更新し、8灯 × interval フレームで全灯が一巡する。
-        // 例：8灯・interval=3フレームなら、24フレームで8灯すべてが1回ずつ更新される
-        // （1灯あたりの実質更新間隔は24フレーム、うち「担当フレーム」は3フレームに1回巡ってくる）。
-        const numLights = windowGlowLights.length;
-        if (numLights > 0 && wgShadowFrameCounter % interval === 0) {
-            const slotToUpdate = Math.floor(wgShadowFrameCounter / interval) % numLights;
-            windowGlowLights.forEach(pl => {
-                if (pl.castShadow && pl.userData.wgShadowSlot === slotToUpdate) {
-                    pl.shadow.needsUpdate = true;
-                }
-            });
-        }
-    }
-    wgShadowFrameCounter++;
+    // 発光パネル（窓・灯具を面光源として扱うもの、26-glow-emitters.js）の明るさも
+    // 同じ係数で連動させる。windowGlowMultスライダーで、窓の輝きと周囲を照らす
+    // 光が同時に変わる。
+    if (typeof setAreaLightGlowFactor === 'function') setAreaLightGlowFactor(eff);
+    // 船内全体をほんのり底上げする環境光プローブ。SH係数（分布の形）は
+    // 組み立て時に焼き込み済みなので、ここでは全体の強さだけを書き換える。
+    if (windowGlowLightProbe) windowGlowLightProbe.intensity = 1.2 * eff;
 }
 
 function updateDayNightCycle(dayProgress) {
@@ -82,7 +47,8 @@ function updateDayNightCycle(dayProgress) {
     const tilt = 0.4; 
     const sunDistance = 400;
 
-    const sunX = Math.cos(sunAngle) * sunDistance;
+    // 世界の座標は +x が西（43-world.js）。東から昇って南を通り、西へ沈むよう、x は -cos
+    const sunX = -Math.cos(sunAngle) * sunDistance;
     const sunY = Math.sin(sunAngle) * sunDistance * Math.cos(tilt);
     const sunZ = -Math.sin(sunAngle) * sunDistance * Math.sin(tilt);
 
@@ -92,7 +58,7 @@ function updateDayNightCycle(dayProgress) {
     // moonPhase=0→新月(太陽と同方向), 0.5→満月(太陽の反対側)
     // 月は太陽より「遅れて」公転するので、moonPhaseが増えるほど太陽より後方（西）へ移動する
     const moonAngle = sunAngle - physics.moonPhase * Math.PI * 2;
-    const moonX = Math.cos(moonAngle) * sunDistance;
+    const moonX = -Math.cos(moonAngle) * sunDistance;
     const moonY = Math.sin(moonAngle) * sunDistance * Math.cos(tilt);
     const moonZ = -Math.sin(moonAngle) * sunDistance * Math.sin(tilt);
     const moonPos = new THREE.Vector3(moonX, moonY, moonZ);
@@ -158,15 +124,29 @@ function updateDayNightCycle(dayProgress) {
     if (!sunLight.userData.currentPos) sunLight.userData.currentPos = activeLightPos.clone();
     sunLight.userData.currentPos.lerp(activeLightPos, 0.03);
     sunLight.position.copy(sunLight.userData.currentPos);
-    sunLight.intensity += (lightIntensity * lightSettings.sunMult - sunLight.intensity) * 0.05;
+    // v170: 天候による減光。時刻で決まる明るさに掛け算することで、
+    // 「曇りの朝」「快晴の夕方」が自然に両立する（どちらか一方が
+    // もう一方を上書きしてしまわない）。
+    const wxMul = window.weatherLightMul || { sun: 1, ambient: 1, hemi: 1, fog: 1, grey: 0, waterDark: 1 };
+    // 曇天・雨・霧では、空と霧の色を灰色へ寄せ、少し暗くする（青空の色のまま
+    // 暗くなるだけだと、どんよりした天気に見えないため）
+    if (wxMul.grey > 0.001) {
+        const g = wxMul.grey;
+        for (const c of [fogColor, background]) {
+            const l = (c.r * 0.3 + c.g * 0.55 + c.b * 0.15) * (1 - g * 0.35);
+            c.setRGB(c.r + (l - c.r) * g, c.g + (l - c.g) * g, c.b + (l * 1.04 - c.b) * g);
+        }
+    }
+    sunLight.intensity += (lightIntensity * lightSettings.sunMult * wxMul.sun - sunLight.intensity) * 0.05;
     sunLight.color.lerp(lightColor, 0.05);
     scene.background.lerp(background, 0.05);
     scene.fog.color.lerp(fogColor, 0.05);
-    const targetFogDensity = (isNight ? 0.00015 : 0.00025) * lightSettings.fogMult;
+    // 荒天ほど視程が落ちる（しぶき・降水・もやで霞む）
+    const targetFogDensity = (isNight ? 0.00015 : 0.00025) * lightSettings.fogMult * wxMul.fog;
     scene.fog.density += (targetFogDensity - scene.fog.density) * 0.02;
 
-    ambientLight.intensity += (ambientIntensity * lightSettings.ambientMult - ambientLight.intensity) * 0.05;
-    hemiLight.intensity += (hemiIntensity * lightSettings.hemiMult - hemiLight.intensity) * 0.05;
+    ambientLight.intensity += (ambientIntensity * lightSettings.ambientMult * wxMul.ambient - ambientLight.intensity) * 0.05;
+    hemiLight.intensity += (hemiIntensity * lightSettings.hemiMult * wxMul.hemi - hemiLight.intensity) * 0.05;
     if (fillLight) {
         const targetFill = lightIntensity * 0.3 * lightSettings.fillMult;
         fillLight.intensity += (targetFill - fillLight.intensity) * 0.05;
@@ -196,6 +176,24 @@ function updateDayNightCycle(dayProgress) {
             u.deepColor.value.setRGB(b * 0.5, b * 0.8, b * 2.0);
             u.shallowColor.value.setRGB(b * 1.0, b * 2.0, b * 4.5);
             u.foamColor.value.setRGB(0.3 + moonPhaseFactor * 0.3, 0.35 + moonPhaseFactor * 0.35, 0.4 + moonPhaseFactor * 0.4);
+        }
+        // 水面に映る空の色：水平線の近くの空（05-sky-dome.js と同じ昼・朝夕・夜の混ぜ方）。以前は昼の空色のままで、
+        // 夕方や夜に、遠くの海（斜めに見るので空がよく映る）だけ明るい青に見えていた
+        if (u.skyReflColor) {
+            const sh = sunY / sunDistance, ss = (a, b, x) => { const k = Math.max(0, Math.min(1, (x - a) / (b - a))); return k * k * (3 - 2 * k); };
+            const dayF = ss(-0.18, 0.18, sh), dawnF = ss(-0.25, 0.0, sh) * (1 - ss(0.0, 0.25, sh));
+            const mb = 0.6 + 0.8 * moonPhaseFactor;
+            const nr = 0.010 * mb, ng = 0.016 * mb, nb = 0.040 * mb;
+            const r0 = nr + (0.42 - nr) * dawnF, g0 = ng + (0.26 - ng) * dawnF, b0 = nb + (0.16 - nb) * dawnF;
+            u.skyReflColor.value.setRGB(r0 + (0.30 - r0) * dayF, g0 + (0.52 - g0) * dayF, b0 + (0.82 - b0) * dayF);
+        }
+        // 曇天・荒天では海の色も暗く沈む
+        const wd = (typeof wxMul.waterDark === 'number') ? wxMul.waterDark : 1;
+        if (wd < 0.999) {
+            if (u.skyReflColor) u.skyReflColor.value.multiplyScalar(wd);
+            u.deepColor.value.multiplyScalar(wd);
+            u.shallowColor.value.multiplyScalar(wd);
+            u.foamColor.value.multiplyScalar(0.55 + 0.45 * wd);
         }
     }
     if (skyMesh && skyMesh.material.uniforms) {

@@ -132,9 +132,26 @@ function removeFunnel(i) {
     renderFunnelList();
     buildFunnelMeshes();
 }
+// 煙突照明の付け根・傾きを数値で変える（左右対称）
+function setFunnelUplightParam(i, key, v) {
+    const f = funnels[i]; if (!f) return;
+    const P = funnelUplightParams(f);
+    const n = parseFloat(v);
+    if (!Number.isFinite(n)) return;
+    P[key] = key === 'side' ? Math.max(0, n) : n;
+    delete f.upRotL; delete f.upRotR;
+    refreshFunnelUplight(i, null);
+}
+// ギズモで動かしたとき、数値欄も合わせる
+function syncFunnelUplightInputs(i) {
+    const P = funnelUplightParams(funnels[i]);
+    ['side', 'h', 'fz', 'tiltIn', 'tiltFore'].forEach(k => { const el = $(`funnel-up-${k}-${i}`); if (el && document.activeElement !== el) el.value = P[k]; });
+}
+window.setFunnelUplightParam = setFunnelUplightParam;
+window.syncFunnelUplightInputs = syncFunnelUplightInputs;
 function copyFunnel(i) {
     const src = funnels[i];
-    funnels.push({ x: src.x, y: src.y, z: src.z, rx: src.rx, ry: src.ry });
+    funnels.push({ x: src.x, y: src.y, z: src.z, rx: src.rx, ry: src.ry, up: src.up ? Object.assign({}, src.up) : undefined });
     renderFunnelList();
     buildFunnelMeshes();
 }
@@ -144,6 +161,7 @@ function renderFunnelList() {
     const sym = $('funnel-symmetry') && $('funnel-symmetry').checked;
     list.innerHTML = '';
     funnels.forEach((f, i) => {
+        const up = funnelUplightParams(f);
         const card = document.createElement('div');
         card.className = 'sp-item-card';
         card.innerHTML = `
@@ -151,8 +169,6 @@ function renderFunnelList() {
                 <span class="sp-item-title">
                     <span class="smoke-preview" style="animation-delay:${i*0.4}s"></span>煙突 #${i+1}${sym && f.x !== 0 ? ' (対称)' : ''}
                     <button class="sp-gizmo-btn" id="gizmo-funnel-${i}" onclick="toggleGizmo('funnel', ${i})">📍 ギズモ</button>
-                    <button class="sp-gizmo-btn" id="gizmo-funnel-uplight-${i}_L" onclick="toggleGizmo('funnel_uplight','${i}_L','rotate')">💡L 角度</button>
-                    <button class="sp-gizmo-btn" id="gizmo-funnel-uplight-${i}_R" onclick="toggleGizmo('funnel_uplight','${i}_R','rotate')">💡R 角度</button>
                     <button class="sp-gizmo-btn" onclick="copyFunnel(${i})">⧉ コピー</button>
                 </span>
                 <button class="sp-remove-btn" onclick="removeFunnel(${i})">✕</button>
@@ -175,6 +191,23 @@ function renderFunnelList() {
                 <span class="sp-label" style="min-width:0;">高さ:</span>
                 <input type="number" class="sp-num-input" value="${f.ry}" step="0.1" min="0.2" max="6"
                     oninput="funnels[${i}].ry=parseFloat(this.value)||1.2;buildFunnelMeshes();">
+            </div>
+            <div style="font-size:10px;color:#ffcc66;margin-top:6px;">💡 煙突照明（付け根は煙突の中心に対して左右対称）</div>
+            <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+                <span class="sp-label" style="min-width:0;">左右の間隔:</span>
+                <input type="number" id="funnel-up-side-${i}" class="sp-num-input" value="${up.side}" step="0.05" min="0" oninput="setFunnelUplightParam(${i},'side',this.value)">
+                <span class="sp-label" style="min-width:0;">高さ:</span>
+                <input type="number" id="funnel-up-h-${i}" class="sp-num-input" value="${up.h}" step="0.05" oninput="setFunnelUplightParam(${i},'h',this.value)">
+                <span class="sp-label" style="min-width:0;">前後:</span>
+                <input type="number" id="funnel-up-fz-${i}" class="sp-num-input" value="${up.fz}" step="0.05" oninput="setFunnelUplightParam(${i},'fz',this.value)">
+            </div>
+            <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+                <span class="sp-label" style="min-width:0;">傾き 内向き°:</span>
+                <input type="number" id="funnel-up-tiltIn-${i}" class="sp-num-input" value="${up.tiltIn}" step="1" min="-90" max="90" oninput="setFunnelUplightParam(${i},'tiltIn',this.value)">
+                <span class="sp-label" style="min-width:0;">前後°:</span>
+                <input type="number" id="funnel-up-tiltFore-${i}" class="sp-num-input" value="${up.tiltFore}" step="1" min="-90" max="90" oninput="setFunnelUplightParam(${i},'tiltFore',this.value)">
+                <button class="sp-gizmo-btn" id="gizmo-funnel-uplight-${i}_L-translate" onclick="toggleGizmo('funnel_uplight','${i}_L','translate')">💡 移動</button>
+                <button class="sp-gizmo-btn" id="gizmo-funnel-uplight-${i}_L-rotate" onclick="toggleGizmo('funnel_uplight','${i}_L','rotate')">💡 傾き</button>
             </div>`;
         list.appendChild(card);
     });
@@ -241,7 +274,7 @@ function buildFunnelMeshes() {
         const side = String(oldIndex).split('_')[1];
         const target = entry ? (side === 'L' ? entry.markerL : entry.markerR) : null;
         if (target) {
-            transformControl.setMode('rotate');
+            transformControl.setMode(currentGizmoMode || 'rotate');
             transformControl.attach(target);
             currentGizmoTarget = target;
         } else {

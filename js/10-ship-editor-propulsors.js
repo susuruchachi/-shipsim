@@ -17,7 +17,7 @@ let currentGizmoMode = 'translate';
 
 function syncSettingsVisibility() {
     const isOpen = $('settings-panel').classList.contains('open');
-    propMeshes.forEach(m => m.visible = isOpen);
+    propMeshes.forEach(m => m.visible = isOpen || !!m.userData.alwaysShow);   // アジポッドはいつも見える
     funnelMeshes3D.forEach(m => m.visible = isOpen);
     if (rudder3DMesh) rudder3DMesh.visible = isOpen;
     glbMovableParts.forEach(p => { if (p.pivotMarker) p.pivotMarker.visible = isOpen; });
@@ -82,9 +82,9 @@ function toggleGizmo(type, index = -1, mode = 'translate') {
         const entry = funnelUplights.find(u => u.funnelIndex === fi && !u.isMirror);
         if (entry) {
             targetMesh = side === 'L' ? entry.markerL : entry.markerR;
-            btnId = `gizmo-funnel-uplight-${index}`;
+            btnId = `gizmo-funnel-uplight-${index}-${mode}`;
         }
-        mode = 'rotate'; // 角度調整のみなので回転モード固定
+        // 移動（付け根の位置）と回転（傾き）。反対側は対称に付いてくる
     }
     else if (type === 'nav_port') targetMesh = navLightMeshes.port;
     else if (type === 'nav_mastFore') targetMesh = navLightMeshes.mastFore;
@@ -125,6 +125,11 @@ function toggleGizmo(type, index = -1, mode = 'translate') {
         if (entry) { targetMesh = entry.marker; btnId = `gizmo-viewpoint_lookout-${index}`; }
     }
 
+    // 他のファイルが登録する目印（汽笛・機関室の位置など。36-horns.js）
+    if (!targetMesh && typeof getExtraGizmoTarget === 'function') {
+        const ex = getExtraGizmoTarget(type, index);
+        if (ex && ex.mesh) { targetMesh = ex.mesh; btnId = ex.btnId || btnId; }
+    }
     if (!targetMesh) return;
 
     if (currentGizmoTarget === targetMesh && currentGizmoMode === mode) {
@@ -153,6 +158,7 @@ function toggleGizmo(type, index = -1, mode = 'translate') {
 function onGizmoChange() {
     if (!currentGizmoTarget) return;
     const pos = currentGizmoTarget.position;
+    if (typeof onExtraGizmoChange === 'function' && onExtraGizmoChange(currentGizmoType, currentGizmoIndex, currentGizmoTarget)) return;
 
     if (currentGizmoType === 'pivot') {
         const _old = (typeof _captureModelOffsetTransform === 'function') ? _captureModelOffsetTransform() : null;
@@ -252,9 +258,12 @@ function onGizmoChange() {
         const anode = light.userData.areaNode;
 
         if (currentGizmoMode === 'translate') {
-            // areaNode が動く → light も同期（areaNode と light は同じ親のLocal座標）
+            // areaNode が動く → UI反映。
+            // RectAreaLight本体はスケールを持たない光源ノードの子（ローカル原点）で、
+            // 位置は 25-area-lights.js が areaNode から毎フレーム写す。ここで
+            // light.position を触ると二重にずれるので、旧形式のときだけ同期する。
             if (anode) {
-                light.position.copy(anode.position);
+                if (!light.isRectAreaLight) light.position.copy(anode.position);
                 const ix = $(`alight-x-${i}`); if (ix) ix.value = anode.position.x.toFixed(2);
                 const iy = $(`alight-y-${i}`); if (iy) iy.value = anode.position.y.toFixed(2);
                 const iz = $(`alight-z-${i}`); if (iz) iz.value = anode.position.z.toFixed(2);
@@ -263,7 +272,9 @@ function onGizmoChange() {
                 const iy = $(`alight-y-${i}`); if (iy) iy.value = pos.y.toFixed(2);
                 const iz = $(`alight-z-${i}`); if (iz) iz.value = pos.z.toFixed(2);
             }
-            if (light.userData.symmetry && light.userData.mirrorLight) {
+            // シンメトリーのミラーは updateAreaLights() が元ライトから毎フレーム
+            // 位置・向きを作り直すので、新方式では何もしなくてよい。
+            if (!anode && light.userData.symmetry && light.userData.mirrorLight) {
                 const lp = light.position;
                 light.userData.mirrorLight.position.set(-lp.x, lp.y, lp.z);
             }
@@ -281,16 +292,8 @@ function onGizmoChange() {
         }
     }
     else if (currentGizmoType === 'funnel_uplight') {
-        updateFunnelUplightAim(currentGizmoTarget);
-        // 回転を funnels[] データへ保存（次回 buildFunnelMeshes 時に復元するため）
-        const parts = String(currentGizmoIndex).split('_');
-        const fi = parseInt(parts[0]);
-        const side = parts[1];
-        const f = funnels[fi];
-        if (f) {
-            const r = currentGizmoTarget.rotation;
-            f[side === 'L' ? 'upRotL' : 'upRotR'] = { x: r.x, y: r.y, z: r.z };
-        }
+        // 付け根の位置・傾きを funnels[i].up へ（左右対称に反映。12-bloom-and-deck-lighting-fx.js）
+        onFunnelUplightMarkerChanged(currentGizmoTarget, currentGizmoMode);
     }
     else if (currentGizmoType === 'decklight') {
         // position/scale をUIの数値欄に反映
@@ -349,6 +352,28 @@ const AXISVIEW_DEFAULT_FOV = 50;
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 let orthoHalfHeight = 50; // 正投影カメラの縦方向の半サイズ（リサイズ時のアスペクト再計算用に保持）
 
+// 横・上・正面から見るときに画面に収める範囲。
+// 以前は shipGroup 全体の外接箱を使っていたが、船から離れた所に置かれた小さな
+// 物（非表示の目印など）まで含まれて、Teutonic では船の長さ180mに対して
+// 外接箱が約7kmになり、ものすごく遠くから見る形になっていた。
+// 読み込んだ船のモデルの、表示されているメッシュだけで範囲を決める
+// （モデルが無いときは組み込みの船体など shipGroup の表示中メッシュ）。
+function _axisViewShipBox() {
+    const root = (typeof importedModelGroup !== 'undefined' && importedModelGroup && importedModelGroup.children.length > 0)
+        ? importedModelGroup : shipGroup;
+    root.updateWorldMatrix(true, true);
+    const box = new THREE.Box3(), b = new THREE.Box3();
+    const visibleChain = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
+    root.traverse((o) => {
+        if (!o.isMesh || !o.geometry || !visibleChain(o)) return;
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+        b.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+        box.union(b);
+    });
+    if (box.isEmpty()) box.setFromObject(shipGroup);
+    return box;
+}
+
 function setAxisView(mode) {
     if (!camera || !controls || !shipGroup) return;
     document.querySelectorAll('.sp-axisview-btn').forEach(b => b.classList.remove('active'));
@@ -382,7 +407,7 @@ function setAxisView(mode) {
 
     // 船体の現在のワールド空間バウンディングスフィアから、画角に収まるサイズを毎回計算する
     // （固定サイズだと船が大きいときに見切れる／小さいときに余白が大きすぎる、を防ぐ）
-    const box = new THREE.Box3().setFromObject(shipGroup);
+    const box = _axisViewShipBox();
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     const target = sphere.center.clone();
     const radius = Math.max(sphere.radius, 1 * physics.scale);
@@ -510,7 +535,7 @@ function copyPropulsor(i) {
     renderPropList();
     buildPropMeshes();
 }
-function updatePropulsionType() { disableGizmo(); buildPropMeshes(); }
+function updatePropulsionType() { disableGizmo(); buildPropMeshes(); if (typeof renderManeuverSettings === 'function') renderManeuverSettings(); }
 
 function renderPropList() {
     const list = $('prop-list'); if (!list) return;
@@ -523,7 +548,7 @@ function renderPropList() {
         card.innerHTML = `
             <div class="sp-item-header">
                 <span class="sp-item-title">
-                    推進器 #${i+1}${sym && p.x !== 0 ? ' (対称)' : ''}
+                    推進器 #${i+1}${sym && p.x !== 0 ? ' (対称)' : ''} <b class="prop-unit-name" data-i="${i}" style="color:#00ffcc;font-size:11px;"></b>
                     <button class="sp-gizmo-btn" id="gizmo-prop-${i}" onclick="toggleGizmo('propulsion', ${i})">📍 ギズモ</button>
                     <button class="sp-gizmo-btn" onclick="copyPropulsor(${i})">⧉ コピー</button>
                 </span>
@@ -565,6 +590,17 @@ function renderPropList() {
         list.appendChild(card);
     });
     addFineTuneButtons(list);
+    propUnitNamesRefresh();
+}
+// 推進器ごとのスクリューの名前（機関と同じ名前。56-engines.js）。名前の所だけ書き換える
+// （入力中の欄を作り直さないように。モデルにスクリューの部品があるときは、そちらが機関になるので出さない）
+function propUnitNamesRefresh() {
+    const list = $('prop-list'); if (!list || typeof engineScrewNameFor !== 'function') return;
+    if (typeof engineListRefresh === 'function') engineListRefresh();
+    list.querySelectorAll('.prop-unit-name').forEach(el => {
+        const i = el.dataset.i;
+        el.textContent = [engineScrewNameFor('prop:' + i), engineScrewNameFor('prop:' + i + ':m')].filter(v => v !== null).join('・');
+    });
 }
 
 function buildPropMeshes() {
@@ -628,20 +664,48 @@ function buildPropMeshes() {
         return g;
     }
 
+    // アジポッド（牽引式：プロペラが前を向いた流線形のポッド）。グループの +z が推力の向きで、
+    // 58-maneuvering.js が rotation.y で向きを変える。プロペラ（spinner）だけが回る。
     function makeAzipod(x, y, z, size) {
         const g = new THREE.Group();
-        const pod = new THREE.Mesh(new THREE.CylinderGeometry(0.18 * size, 0.18 * size, 0.8 * size, 10), mat);
-        pod.rotation.x = Math.PI / 2;
-        g.add(pod);
-        const strut = new THREE.Mesh(new THREE.BoxGeometry(0.12 * size, 0.35 * size, 0.12 * size), mat);
-        strut.position.y = 0.4 * size;
+        const podMat = new THREE.MeshStandardMaterial({ color: 0x5c6670, roughness: 0.45, metalness: 0.6 });
+        const bronze = new THREE.MeshStandardMaterial({ color: 0xb08a4a, roughness: 0.35, metalness: 0.85 });
+        // 胴体：前（プロペラ側）が太く、後ろへ細くなる
+        const prof = [[0, -0.62], [0.06, -0.58], [0.13, -0.45], [0.19, -0.2], [0.21, 0.05], [0.2, 0.25], [0.15, 0.38], [0.09, 0.43], [0, 0.44]]
+            .map(([r, zz]) => new THREE.Vector2(r * size, zz * size));
+        const body = new THREE.Mesh(new THREE.LatheGeometry(prof, 20), podMat);
+        body.rotation.x = Math.PI / 2;                   // 回転体の軸（y）を前後（z）へ
+        g.add(body);
+        // 支柱（船体へつながる翼形の柱）
+        const strut = new THREE.Mesh(new THREE.BoxGeometry(0.07 * size, 0.75 * size, 0.42 * size), podMat);
+        strut.position.set(0, 0.48 * size, -0.02 * size);
         g.add(strut);
-        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.08 * size, 0.08 * size, 0.15 * size, 8), mat);
-        hub.rotation.x = Math.PI / 2;
-        hub.position.z = -0.5 * size;
-        g.add(hub);
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.3 * size, 0.3 * size, 0.06 * size, 24), podMat);
+        cap.position.y = 0.86 * size;                    // 船底の旋回部（ここで向きを変える）
+        g.add(cap);
+        // 下のひれ
+        const fin = new THREE.Mesh(new THREE.BoxGeometry(0.05 * size, 0.3 * size, 0.3 * size), podMat);
+        fin.position.set(0, -0.3 * size, -0.25 * size);
+        g.add(fin);
+        // プロペラ（前向き・5 枚）
+        const spinner = new THREE.Group();
+        spinner.position.z = 0.5 * size;
+        const hub = new THREE.Mesh(new THREE.SphereGeometry(0.1 * size, 12, 8), bronze);
+        hub.scale.z = 1.2;
+        spinner.add(hub);
+        for (let b = 0; b < 5; b++) {
+            const a = (b / 5) * Math.PI * 2;
+            const blade = new THREE.Mesh(new THREE.BoxGeometry(0.16 * size, 0.38 * size, 0.025 * size), bronze);
+            const arm = new THREE.Group(); arm.rotation.z = a;
+            blade.position.y = 0.27 * size; blade.rotation.y = 0.5;   // ピッチ
+            arm.add(blade); spinner.add(arm);
+        }
+        g.add(spinner);
         g.position.set(x, y, z);
         g.userData.isProp = true;
+        g.userData.isPod = true;
+        g.userData.spinner = spinner;
+        g.userData.alwaysShow = true;                    // 船の外に見える本物の部品なので、ふだんも表示する
         return g;
     }
 
@@ -651,6 +715,7 @@ function buildPropMeshes() {
         else if (type === 'azipod') mesh = makeAzipod(x, y, z, size);
         else mesh = makeScrew(x, y, z, size);
         mesh.userData.dir = dir;
+        mesh.userData.size = size;   // 泡の出る半径を見た目に合わせるため（32-engine-propeller.js）
         mesh.userData.propIndex = propIndex;
         mesh.userData.isMirror = !!isMirror;
         mesh.traverse((c) => { if (c.isMesh) c.userData.noBloom = true; });
@@ -677,6 +742,7 @@ function buildPropMeshes() {
         }
     }
     syncSettingsVisibility();
+    propUnitNamesRefresh();
 }
 
 function updateRudder3D() {
@@ -690,3 +756,69 @@ function updateRudder3D() {
     syncSettingsVisibility();
 }
 
+
+// ════════════════════════════════════════════════════════════════
+//  目印（視点・重心・舵・回転軸・音の位置など）を画面上で一定の大きさにする
+// ════════════════════════════════════════════════════════════════
+// 目印は船の座標で作ってあるので、船が大きいと巨大になり、ズームしても
+// 大きさが変わらず、中心がどこか分かりにくくギズモも掴みにくかった。
+// カメラからの距離に合わせて毎フレーム拡大率を変え、画面上ではいつも
+// 小さな一定の大きさ（画面の高さの約2%）で見えるようにする。
+// ギズモの矢印が透けて見えるよう、目印は少し半透明にする。
+const MARKER_SCREEN_FRACTION = 0.022;   // 画面の高さに対する目印の大きさ（半径）
+let _markerList = [], _markerListAt = -1;
+const _mkWp = new THREE.Vector3(), _mkWs = new THREE.Vector3();
+function _collectMarkers() {
+    _markerList = [];
+    if (typeof shipGroup === 'undefined' || !shipGroup) return;
+    shipGroup.traverse((o) => {
+        const ud = o.userData || {};
+        // （係船設備は本物の金物なので、目印のように画面上の大きさをそろえたり透かしたりしない）
+        if (ud.isMooring) return;
+        if (ud.isViewpointMarker || ud.screenSizeMarker || ud.isGlbPivotMarker
+            || (typeof cgMarker !== 'undefined' && o === cgMarker) || (typeof rudderMarker !== 'undefined' && o === rudderMarker)) {
+            _markerList.push(o);
+        }
+    });
+    for (const o of _markerList) {
+        if (o.userData._mkR) continue;
+        // 大きさの基準：自分（と子）の形の外接球の半径（拡大率1のとき）
+        let r = 0;
+        o.traverse((c) => {
+            if (!c.geometry) return;
+            if (!c.geometry.boundingSphere) c.geometry.computeBoundingSphere();
+            if (c.geometry.boundingSphere) r = Math.max(r, c.geometry.boundingSphere.radius + (c === o ? 0 : c.position.length()));
+            if (c.material && c !== o && !c.userData._mkFaded) {
+                c.userData._mkFaded = true;
+                if (c.material.opacity === undefined || c.material.opacity >= 1) { c.material.transparent = true; c.material.opacity = 0.75; }
+            }
+        });
+        o.userData._mkR = Math.max(1e-4, r);
+        o.userData._mkBase = o.scale.x || 1;
+        if (o.material && !o.userData._mkFaded) {
+            o.userData._mkFaded = true;
+            if (o.material.opacity === undefined || o.material.opacity >= 1) { o.material.transparent = true; o.material.opacity = 0.75; }
+        }
+    }
+}
+function updateMarkerScales() {
+    if (typeof camera === 'undefined' || !camera) return;
+    const now = performance.now();
+    if (now - _markerListAt > 1000) { _markerListAt = now; _collectMarkers(); }
+    // 画面の高さ[ワールド単位]：透視は距離に比例、正投影は固定
+    const persp = !!camera.isPerspectiveCamera;
+    const k = persp ? 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) : (camera.top - camera.bottom) / (camera.zoom || 1);
+    for (const o of _markerList) {
+        if (!o.visible || !o.parent) continue;
+        o.getWorldPosition(_mkWp);
+        const viewH = persp ? k * _mkWp.distanceTo(camera.position) : k;
+        const want = viewH * MARKER_SCREEN_FRACTION;       // 画面上の半径（ワールド単位）
+        o.parent.getWorldScale(_mkWs);
+        const parentScale = Math.max(1e-6, _mkWs.x);
+        const s = want / (o.userData._mkR * parentScale);
+        // 元の大きさより大きくはしない（遠くでも元の大きさが上限。近づくと小さく）
+        const sc = Math.min(o.userData._mkBase, s);
+        if (Math.abs(o.scale.x - sc) > sc * 0.01) o.scale.setScalar(sc);
+    }
+}
+window.updateMarkerScales = updateMarkerScales;

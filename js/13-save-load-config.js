@@ -104,6 +104,7 @@ function collectShipConfig() {
             hemiMult: lightSettings.hemiMult,
             fillMult: lightSettings.fillMult,
             exposure: lightSettings.exposure,
+            autoExposure: lightSettings.autoExposure !== false,
             fogMult: lightSettings.fogMult,
             glbMaster: lightSettings.glbMaster,
             windowGlowMult: lightSettings.windowGlowMult,
@@ -125,6 +126,7 @@ function collectShipConfig() {
             invert: !!p.invert,
             spinAxis: p.spinAxis || 'x',
             disabled: !!p.disabled,
+            kind: p.origKey && p.key !== p.origKey ? p.key : undefined,     // 種類を切り替えた部品（07-glb-movable-parts.js）
             pivotOffset: p.pivotOffset ? { x: p.pivotOffset.x, y: p.pivotOffset.y, z: p.pivotOffset.z } : { x:0, y:0, z:0 },
         })),
         // エリアライト個別設定（強度・色・ON/OFF・位置・向き・サイズ）
@@ -138,20 +140,85 @@ function collectShipConfig() {
                 // areaNode の変換（位置・回転・スケール）を保存
                 // これが照射方向・面サイズ・ライト位置の実体
                 areaNode: an ? {
+                    // conv:2 … ローカル -Y を照らす決まり（25-area-lights.js）で保存したもの
+                    conv: 2,
                     pos:   { x: an.position.x, y: an.position.y, z: an.position.z },
                     rot:   { x: an.rotation.x, y: an.rotation.y, z: an.rotation.z, order: an.rotation.order || 'XYZ' },
                     scale: { x: an.scale.x,    y: an.scale.y,    z: an.scale.z },
                 } : null,
             };
         }),
+        // 天候（24-weather.js）。ONのときは風・波はここから決まるので、
+        // 上の waveRoughness 等より優先される。
+        weather: (window.weather) ? {
+            enabled: !!window.weather.enabled,
+            auto: !!window.weather.auto,
+            presetKey: window.weather.presetKey,
+            // 手動で細かく決めた天候（presetKey が 'custom' のとき使う）
+            custom: Object.assign({}, window.weather.custom),
+        } : null,
+        // 汽笛・機関音（36-horns.js）
+        sound: (typeof getShipSoundConfig === 'function') ? getShipSoundConfig() : null,
+        // 画面のテレグラフ・舵輪のデザイン（37-bridge-controls.js）
+        bridge: (typeof getBridgeConfig === 'function') ? getBridgeConfig() : null,
+        // 係船設備（46-mooring.js）
+        mooring: (typeof getMooringConfig === 'function') ? getMooringConfig() : null,
+        // 艦種（潜水艦）・潜望鏡・魚雷（54-submarine.js）
+        submarine: (typeof getSubmarineConfig === 'function') ? getSubmarineConfig() : null,
+        // 機関（スクリューごと：後進できるか・馬力・独立操作）（56-engines.js）
+        engines: (typeof getEngineConfig === 'function') ? getEngineConfig() : null,
+        // サイドスラスター・アジポッド（58-maneuvering.js）
+        maneuver: (typeof getManeuverConfig === 'function') ? getManeuverConfig() : null,
         // 位置・向き・月齢
         shipPos: { x: physics.cgWorldX, z: physics.cgWorldZ, heading: physics.heading },
         dayProgress: physics.dayProgress,
         moonPhase: physics.moonPhase,
         moonPhaseManual: !!physics.moonPhaseManual,
-        // 最後に使ったモデル形式名（バイナリは保存不可なので名前のみ）
+        // 最後に使ったモデル形式名
         lastModelName: window.lastLoadedModelName || null,
+        // モデル本体への参照。本体は IndexedDB に保存してある（27-model-store.js）
+        modelRef: (typeof getCurrentModelRef === 'function') ? getCurrentModelRef() : null,
+        // 設定パネルの入力欄すべて（上で個別に保存していない項目も含めて、
+        // ライトの明るさ・煙突照明のON/OFFなど、パネルで変えたものを船ごとに残す）
+        panelInputs: collectPanelInputs(),
     };
+}
+
+// ── 設定パネルの入力欄をまとめて保存・復元 ────────────────────────
+// 対象：船体設定パネルの中の、id の付いた入力欄・選択欄すべて。
+// 除外：一覧の中で番号付きで作り直される欄（煙突 #1 の X など。一覧のデータ
+//       として別に保存している）、この端末の音量（端末ごとの設定）、汽笛・
+//       テレグラフ（専用の形で別に保存）
+const PANEL_INPUT_SKIP = /^(audio-|horn-|engine-sound-|bridge-|clip-|bake-|tex-|ship-zip-)|[-_]\d+(_[LR])?(-\w+)?$/;
+function collectPanelInputs() {
+    const out = {};
+    document.querySelectorAll('#settings-panel input[id], #settings-panel select[id], #settings-panel textarea[id]').forEach((el) => {
+        if (el.type === 'file' || el.type === 'button' || el.type === 'submit' || PANEL_INPUT_SKIP.test(el.id)) return;
+        out[el.id] = (el.type === 'checkbox' || el.type === 'radio') ? el.checked : el.value;
+    });
+    return out;
+}
+// 今の値と違うものだけ書き戻し、手で変えたときと同じ処理（input/change）を走らせる
+function applyPanelInputs(map) {
+    if (!map || typeof map !== 'object') return;
+    // 以前の保存：船体設定の喫水欄は操作パネルのレバーと同じ id（draft-num）で、復元されていなかった
+    if (map['draft-num'] !== undefined && map['shipdraft-num'] === undefined) { map = Object.assign({}, map, { 'shipdraft-num': map['draft-num'] }); delete map['draft-num']; }
+    for (const id of Object.keys(map)) {
+        const el = document.getElementById(id);
+        if (!el || !el.closest || !el.closest('#settings-panel')) continue;
+        const v = map[id];
+        if (el.type === 'checkbox' || el.type === 'radio') {
+            if (el.checked === !!v) continue;
+            el.checked = !!v;
+        } else {
+            if (String(el.value) === String(v)) continue;
+            el.value = v;
+        }
+        try {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        } catch (e) { console.warn('[ShipConfig] 設定の復元に失敗:', id, e); }
+    }
 }
 
 function applyShipConfig(cfg) {
@@ -216,8 +283,8 @@ function applyShipConfig(cfg) {
     setVal('prop-type', pr.type);
 
     const fn = cfg.funnels || {};
+    // 保存した煙突の一覧をそのまま（煙突を全部消して保存した船は、煙突なしのまま。勝手に足さない）
     if (Array.isArray(fn.list)) funnels = JSON.parse(JSON.stringify(fn.list));
-    if (funnels.length === 0) funnels = [{ x: 0, y: 3.5, z: 0.5, rx: 0.4, ry: 1.2 }];
     setVal('funnel-symmetry', fn.symmetry);
 
     const sm = cfg.smoke || {};
@@ -276,6 +343,11 @@ function applyShipConfig(cfg) {
         if (Number.isFinite(lt.hemiMult)) lightSettings.hemiMult = lt.hemiMult;
         if (Number.isFinite(lt.fillMult)) lightSettings.fillMult = lt.fillMult;
         if (Number.isFinite(lt.exposure)) lightSettings.exposure = lt.exposure;
+        if (typeof lt.autoExposure === 'boolean' && typeof setAutoExposureEnabled === 'function') {
+            setAutoExposureEnabled(lt.autoExposure);
+            const cbAe = $('light-auto-exposure');
+            if (cbAe) cbAe.checked = lt.autoExposure;
+        }
         if (Number.isFinite(lt.fogMult)) lightSettings.fogMult = lt.fogMult;
         if (Number.isFinite(lt.glbMaster)) lightSettings.glbMaster = lt.glbMaster;
         if (Number.isFinite(lt.windowGlowMult)) lightSettings.windowGlowMult = lt.windowGlowMult;
@@ -292,6 +364,44 @@ function applyShipConfig(cfg) {
         } else {
             pendingGlbLightSettings = cfg.glbLightSettings;
         }
+    }
+
+    // 汽笛・機関音。古い保存データには無いので、そのときは既定の汽笛に戻す
+    if (typeof applyShipSoundConfig === 'function') applyShipSoundConfig(cfg.sound || null);
+    if (typeof applyBridgeConfig === 'function') applyBridgeConfig(cfg.bridge || null);
+    if (typeof applyMooringConfig === 'function') applyMooringConfig(cfg.mooring || null);
+    if (typeof applySubmarineConfig === 'function') applySubmarineConfig(cfg.submarine || null);
+    if (typeof applyEngineConfig === 'function') applyEngineConfig(cfg.engines || null);
+    if (typeof applyManeuverConfig === 'function') applyManeuverConfig(cfg.maneuver || null);
+    // ── 天候（24-weather.js）──────────────────────────────────────────
+    // 天候がONだと風・波はそちらが毎フレーム上書きするので、この設定が
+    // 保存していた風速・波の値は効かなくなる。天候機能より前に保存された
+    // データ（weatherキーが無い）は、保存された風・波の値のほうを尊重して
+    // 天候制御を切っておく。あとでパネルのチェックで戻せる。
+    if (window.weather) {
+        const wx = cfg.weather;
+        window.weather.enabled = wx ? !!wx.enabled : false;
+        window.weather.auto    = wx ? !!wx.auto    : window.weather.auto;
+        if (wx && wx.custom && typeof wx.custom === 'object') {
+            const c = wx.custom;
+            if (Number.isFinite(c.beaufort)) window.weather.custom.beaufort = c.beaufort;
+            if (Number.isFinite(c.cloud))    window.weather.custom.cloud = c.cloud;
+            window.weather.custom.rain = Number.isFinite(c.rain) ? c.rain : 0;
+            window.weather.custom.fog  = Number.isFinite(c.fog)  ? c.fog  : 0;
+            window.weather.custom.windDir = Number.isFinite(c.windDir) ? c.windDir : null;
+        }
+        if (wx && wx.presetKey && typeof setWeatherPreset === 'function') {
+            setWeatherPreset(wx.presetKey, { immediate: true });
+        }
+        const wxEnabled = $('weather-enabled');
+        const wxAuto    = $('weather-auto');
+        if (wxEnabled) wxEnabled.checked = window.weather.enabled;
+        if (wxAuto)    wxAuto.checked    = window.weather.auto;
+        if (typeof setWeatherDrivenSlidersDisabled === 'function') {
+            setWeatherDrivenSlidersDisabled(window.weather.enabled);
+        }
+        if (typeof renderWeatherPanel === 'function') renderWeatherPanel();
+        if (typeof _weatherSyncManualSliders === 'function') _weatherSyncManualSliders(true);
     }
 
     if (typeof cfg.waterVisible === 'boolean') {
@@ -335,6 +445,7 @@ function applyShipConfig(cfg) {
                     if (typeof saved.invert === 'boolean') part.invert = saved.invert;
                     if (saved.spinAxis) part.spinAxis = saved.spinAxis;
                     if (typeof saved.disabled === 'boolean') part.disabled = saved.disabled;
+                    if (saved.kind && typeof setGlbPartKindRaw === 'function') setGlbPartKindRaw(part, saved.kind);
                     if (saved.pivotOffset) {
                         if (!part.pivotOffset) part.pivotOffset = new THREE.Vector3();
                         part.pivotOffset.set(saved.pivotOffset.x, saved.pivotOffset.y, saved.pivotOffset.z);
@@ -383,6 +494,12 @@ function applyShipConfig(cfg) {
         if (statusText) statusText.innerText = '前回モデル: ' + cfg.lastModelName + ' (再読込が必要)';
     }
 
+    // 設定パネルの入力欄（個別に保存していない項目も含めて）。上の個別の復元の
+    // 後で、値が違うものだけ書き戻す。質量の自動補正（下）より前に行う。
+    // 喫水の手入力は船ごと：保存に無ければ「自動」に戻す
+    if (typeof setShipDraft === 'function') { const di = document.getElementById('shipdraft-num'); if (di) di.value = 0; setShipDraft(0); }
+    applyPanelInputs(cfg.panelInputs);
+
     // ── v30 実物理浮力（F=ρgV）対策: massの自動再計算 ──────────────────────
     // セーブデータの mass は、旧バージョン（位置スプリング式の浮力）で
     // 感覚的に調整された値の可能性がある。旧方式は mass の絶対値が物理的に
@@ -430,19 +547,48 @@ function saveShipConfig() {
     const all = loadAllShipSaves();
     all[name] = collectShipConfig();
     saveAllShipSaves(all);
-    if (status) status.textContent = `「${name}」として保存しました。`;
+    const src = window.currentModelSource;
+    let msg = `「${name}」として保存しました。`;
+    if (src && !src.embedded && src.stored === false) {
+        msg += '（モデル本体はブラウザの保存容量が足りず保存できませんでした。次回はモデルファイルを選び直してください）';
+    } else if (src) {
+        msg += `（モデル: ${src.name}）`;
+    }
+    if (status) status.textContent = msg;
     renderShipSaveList();
+    if (typeof gcModelStore === 'function') gcModelStore();
 }
 
-function loadShipConfig(name) {
+// 設定を適用する前に、その設定に結びついたモデルへ切り替える。
+// いま表示中のモデルと同じなら読み込み直さない。
+// 戻り値: 'same' | 'loaded' | 'missing' | 'none'
+async function switchModelForConfig(cfg) {
+    const ref = cfg && cfg.modelRef;
+    if (!ref || typeof loadModelByRef !== 'function') return 'none';
+    const cur = (typeof getCurrentModelRef === 'function') ? getCurrentModelRef() : null;
+    if (typeof sameModelRef === 'function' && sameModelRef(ref, cur)) return 'same';
+    try {
+        return (await loadModelByRef(ref)) ? 'loaded' : 'missing';
+    } catch (e) {
+        return 'missing';
+    }
+}
+
+async function loadShipConfig(name) {
     const all = loadAllShipSaves();
     const cfg = all[name];
     if (!cfg) return;
+    const status = $('ship-save-status');
+    if (cfg.modelRef && status) status.textContent = `「${name}」のモデルを読み込んでいます…`;
+    const r = await switchModelForConfig(cfg);
     applyShipConfig(cfg);
     const nameInput = $('ship-name-input');
     if (nameInput) nameInput.value = name;
-    const status = $('ship-save-status');
-    if (status) status.textContent = `「${name}」を読み込みました。`;
+    if (status) {
+        status.textContent = (r === 'missing')
+            ? `「${name}」の設定を読み込みました（モデル「${cfg.modelRef.name}」は保存されていないため、今のモデルのままです）。`
+            : `「${name}」を読み込みました。`;
+    }
 }
 
 function deleteShipConfig(name) {
@@ -450,6 +596,7 @@ function deleteShipConfig(name) {
     delete all[name];
     saveAllShipSaves(all);
     renderShipSaveList();
+    if (typeof gcModelStore === 'function') gcModelStore();
 }
 
 function renderShipSaveList() {
@@ -463,16 +610,26 @@ function renderShipSaveList() {
     }
     names.forEach(name => {
         const safeName = name.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        const ref = all[name] && all[name].modelRef;
+        const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const modelLine = ref
+            ? `<div style="font-size:10px;color:#8fb8d8;margin:2px 0 4px;">🚢 ${esc(ref.name)}${ref.embedded ? '（同梱）' : (typeof formatModelSize === 'function' ? ' ' + formatModelSize(ref.size) : '')}</div>`
+            : `<div style="font-size:10px;color:#777;margin:2px 0 4px;">モデル未登録（設定のみ）</div>`;
         const card = document.createElement('div');
         card.className = 'sp-item-card';
         card.innerHTML = `
             <div class="sp-item-header">
-                <span class="sp-item-title">${name}</span>
+                <span class="sp-item-title">${esc(name)}</span>
                 <button class="sp-remove-btn" onclick="deleteShipConfig('${safeName}')">✕</button>
             </div>
+            ${modelLine}
             <div class="sp-row" style="gap:8px;">
                 <button class="sp-add-btn" style="flex:1;" onclick="loadShipConfig('${safeName}')">📂 読み込み</button>
+                <label class="sp-toggle" style="font-size:10px;white-space:nowrap;"><input type="checkbox" class="ship-zip-pick"> 📦 ZIPに入れる</label>
             </div>`;
+        const pick = card.querySelector('.ship-zip-pick');
+        pick.checked = !(typeof shipZipExcluded !== 'undefined' && shipZipExcluded.has(name));
+        pick.addEventListener('change', () => { if (typeof setShipZipPick === 'function') setShipZipPick(name, pick.checked); });
         list.appendChild(card);
     });
 }
@@ -523,12 +680,19 @@ function importShipConfigFile(event) {
                 if (status) status.textContent = 'エラー: 無効な設定ファイルです。';
                 return;
             }
-            applyShipConfig(cfg);
-            if (cfg.shipName) {
-                const nameInput = $('ship-name-input');
-                if (nameInput) nameInput.value = cfg.shipName;
-            }
-            if (status) status.textContent = `ファイルから読み込みました: ${file.name}`;
+            // この端末にモデルが保存されていれば、モデルごと切り替える
+            switchModelForConfig(cfg).then((r) => {
+                applyShipConfig(cfg);
+                if (cfg.shipName) {
+                    const nameInput = $('ship-name-input');
+                    if (nameInput) nameInput.value = cfg.shipName;
+                }
+                if (status) {
+                    status.textContent = (r === 'missing')
+                        ? `ファイルから読み込みました: ${file.name}（モデル「${cfg.modelRef.name}」はこの端末に無いため、今のモデルのままです）`
+                        : `ファイルから読み込みました: ${file.name}`;
+                }
+            });
         } catch (e) {
             if (status) status.textContent = 'エラー: ファイルの読み込みに失敗しました。(JSON形式エラー)';
         }

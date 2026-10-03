@@ -1,8 +1,13 @@
 // スクリュー・舵・外輪などを名前から検出してギズモで動かせるようにする
 const GLB_PART_PATTERNS = [
+    // バウスラスター（船体を横に貫くトンネルの中のスクリュー。58-maneuvering.js のサイドスラスターになる）。
+    // "BowThruster_Propeller" のような名前もスラスターにするため、スクリューより先に調べる
+    { key: 'thruster', label: '↔ バウスラスター', regex: /thruster|スラスタ/i },
     { key: 'screw',  label: '🌀 スクリュー', regex: /screw|propeller|プロペラ|スクリュー/i },
     { key: 'rudder', label: '🕹 舵',          regex: /rudder|舵/i },
     { key: 'paddle', label: '🛞 外輪',         regex: /paddle|wheel|外輪|水車/i },
+    // アジポッドの胴体（向きを変える部品。中のプロペラは別に "Propeller" などの名前で）
+    { key: 'azipod', label: '🧭 アジポッド',   regex: /azipod|azimuth|ポッド/i },
 ];
 
 function createGlbPartLabel(text) {
@@ -159,12 +164,13 @@ function detectGlbMovableParts(model) {
                     name: child.name,
                     label: pat.label,
                     key: pat.key,
+                    origKey: pat.key,        // 名前から決まった種類（key は「種類」のボタンで変えられる）
                     object: child,
                     basePos: child.position.clone(),   // モデル初期位置（変えない）
                     baseRot: child.rotation.clone(),
                     invert: false,
                     spin: 0,
-                    spinAxis: 'x',           // 回転軸 x/y/z
+                    spinAxis: pat.key === 'azipod' ? 'y' : 'x',   // 回転軸 x/y/z（アジポッドは上下の軸で向きを変える）
                     disabled: false,         // true の場合、アニメーション対象から除外（誤検出パーツの機能停止用）
                     pivotOffset: new THREE.Vector3(), // 回転軸のオフセット（モデルは動かない）
                     pivotMarker: null,       // 回転軸位置を示すギズモ用マーカー
@@ -188,6 +194,7 @@ function detectGlbMovableParts(model) {
                 if (typeof saved.invert === 'boolean') part.invert = saved.invert;
                 if (saved.spinAxis) part.spinAxis = saved.spinAxis;
                 if (typeof saved.disabled === 'boolean') part.disabled = saved.disabled;
+                if (saved.kind) setGlbPartKindRaw(part, saved.kind);
                 if (saved.pivotOffset) {
                     part.pivotOffset.set(saved.pivotOffset.x, saved.pivotOffset.y, saved.pivotOffset.z);
                     if (part.pivotMarker) part.pivotMarker.position.copy(part.basePos).add(part.pivotOffset);
@@ -206,11 +213,26 @@ function buildGlbPartCard(part) {
     const card = document.createElement('div');
     card.className = 'sp-item-card';
     if (part.disabled) card.style.opacity = '0.5';
+    // スクリュー・外輪は、その機関と同じ名前で呼ぶ（56-engines.js）。モデルの中の名前は小さく添える
+    const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    const engId = 'glb:' + part.id;
+    const unitName = (!part.disabled && (part.key === 'screw' || part.key === 'paddle') && typeof engineScrewNameFor === 'function') ? engineScrewNameFor(engId) : null;
+    const eng = unitName !== null && typeof engineById === 'function' ? engineById(engId) : null;
     card.innerHTML = `
         <div class="sp-item-header">
-            <span class="sp-item-title">${part.label} : <span style="color:#aaa;font-size:10px;">${part.name}</span>${part.disabled ? ' <span style="color:#ff5555;">(機能停止中)</span>' : ''}</span>
+            <span class="sp-item-title">${part.label} : ${unitName !== null ? `<b style="color:#00ffcc;">${esc(unitName)}</b> ` : ''}<span style="color:#aaa;font-size:10px;">${unitName !== null ? '（モデル：' + esc(part.name) + '）' : esc(part.name)}</span>${part.disabled ? ' <span style="color:#ff5555;">(機能停止中)</span>' : ''}</span>
             <button class="sp-remove-btn" style="${part.disabled ? 'background:rgba(0,255,204,0.1);border-color:#00ffcc;color:#00ffcc;' : ''}" onclick="toggleGlbPartDisabled('${part.id}')">${part.disabled ? '↺ 復活' : '⛔ 機能停止'}</button>
         </div>
+        ${eng ? `<div class="sp-row" style="gap:6px;margin-bottom:4px;flex-wrap:wrap;align-items:center;">
+            <span class="sp-label" style="min-width:50px;">名前:</span>
+            <input type="text" value="${esc(eng.conf.name || '')}" placeholder="${esc(eng.autoBase || '（1基だけ）')}" maxlength="16" style="width:90px;background:#0a1932;color:#00ffcc;border:1px solid #00ffcc55;border-radius:4px;padding:2px 4px;font-size:11px;" onchange="engineSetConfById('${engId}','name',this.value)">
+            <span style="font-size:10px;color:#888;">機関（下の「機関」の欄）と同じ名前になります</span>
+        </div>` : ''}
+        ${GLB_PROP_KINDS[part.key] ? `<div class="sp-row" style="gap:4px;margin-bottom:4px;flex-wrap:wrap;">
+            <span class="sp-label" style="min-width:50px;">種類:</span>
+            ${Object.entries(GLB_PROP_KINDS).map(([k, l]) => `<button class="sp-add-btn" style="flex:none;${part.key === k ? 'background:rgba(0,255,204,0.18);border-color:#00ffcc;color:#00ffcc;' : ''}" onclick="setGlbPartKind('${part.id}','${k}')" title="名前から見分けた種類が違うときに">${l}</button>`).join('')}
+            ${part.key !== part.origKey ? '<span style="font-size:10px;color:#ffaa66;">（名前からは ' + (GLB_PROP_KINDS[part.origKey] || part.origKey) + '）</span>' : ''}
+        </div>` : ''}
         ${part.disabled ? '<div style="font-size:10px;color:#888;margin-bottom:4px;">このパーツはアニメーション・回転設定から除外されています。誤って選択した場合は「復活」で元に戻せます。</div>' : `
         <div class="sp-row" style="gap:6px;margin-bottom:4px;">
             <span class="sp-label" style="min-width:50px;">回転軸:</span>
@@ -234,7 +256,7 @@ function buildGlbPartCard(part) {
             <input type="number" id="pivot-z-${part.id}" class="sp-xyz-input" value="${pv.z.toFixed(3)}" step="0.05"
                 oninput="setGlbPartPivot('${part.id}','z',parseFloat(this.value)||0)">
         </div>
-        <div style="font-size:10px;color:#888;margin-bottom:4px;">${part.key === 'rudder' ? '舵角に連動して回転します。' : '船速に連動して回転します。'}</div>
+        <div style="font-size:10px;color:#888;margin-bottom:4px;">${part.key === 'rudder' ? '舵角に連動して回転します。' : part.key === 'azipod' ? 'ポッドの向きに連動して回転します（いちばん近い機関のポッド）。' : part.key === 'thruster' ? 'サイドスラスターの出力に連動して回転します（出力・名前は下の「サイドスラスター」で）。トンネルの軸（左右）を回転軸にしてください。' : '船速に連動して回転します。'}</div>
         <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
             <button class="sp-add-btn" style="flex:none;" onclick="resetGlbPart('${part.id}')" title="回転・位置も含めて完全に初期状態へ(回転軸はバウンディング中心)">↺ 全リセット</button>
             <button class="sp-add-btn" style="flex:none;" onclick="setGlbPartPivotToCentroid('${part.id}')" title="面積重心。奇数枚のスクリュー等、バウンディング中心だと軸がずれる場合に">⚖️ 重心中心</button>
@@ -248,12 +270,13 @@ function renderGlbPartsList() {
     const rudderList = $('glb-rudder-parts-list');
     if (!propList && !rudderList) return;
 
-    const propParts = glbMovableParts.filter(p => p.key === 'screw' || p.key === 'paddle');
+    const propParts = glbMovableParts.filter(p => p.key === 'screw' || p.key === 'paddle' || p.key === 'azipod' || p.key === 'thruster');
     const rudderParts = glbMovableParts.filter(p => p.key === 'rudder');
 
+    if (propList && propParts.length && typeof engineListRefresh === 'function') engineListRefresh();   // 名前（機関と同じ）を最新に
     if (propList) {
         if (propParts.length === 0) {
-            propList.innerHTML = '<div style="font-size:10px;color:#888;">スクリュー・外輪などの名前を持つパーツは見つかりませんでした。<br>(Blenderでオブジェクト名に "Screw" / "Paddle" などを含めてください)</div>';
+            propList.innerHTML = '<div style="font-size:10px;color:#888;">スクリュー・外輪などの名前を持つパーツは見つかりませんでした。<br>(Blenderでオブジェクト名に "Screw" / "Paddle" / "Thruster" などを含めてください)</div>';
         } else {
             propList.innerHTML = '';
             propParts.forEach((part) => propList.appendChild(buildGlbPartCard(part)));
@@ -290,6 +313,33 @@ function toggleGlbPartDisabled(id) {
         if (currentGizmoType === 'glbpart_pivot' && currentGizmoIndex === id) disableGizmo();
     }
     renderGlbPartsList();
+    _glbPropKindChanged();
+}
+
+// 推進器の部品の種類（誤認識のとき切り替える）：スクリュー・外輪・バウスラスター
+const GLB_PROP_KINDS = { screw: '🌀 スクリュー', paddle: '🛞 外輪', thruster: '↔ バウスラスター' };
+function setGlbPartKindRaw(part, kind) {
+    if (!GLB_PROP_KINDS[kind] || !GLB_PROP_KINDS[part.key]) return;
+    part.key = kind;
+    const pat = GLB_PART_PATTERNS.find(q => q.key === kind);
+    if (pat) part.label = pat.label;
+}
+function setGlbPartKind(id, kind) {
+    const part = glbMovableParts.find(p => p.id === id);
+    if (!part || part.key === kind) return;
+    setGlbPartKindRaw(part, kind);
+    // 回っていた分を戻す
+    part.object.position.copy(part.basePos);
+    part.object.rotation.copy(part.baseRot);
+    part.spin = 0;
+    renderGlbPartsList();
+    _glbPropKindChanged();
+}
+// 機関（56-engines.js）・スラスター（58-maneuvering.js）の一覧を作り直す
+function _glbPropKindChanged() {
+    if (typeof maneuverSyncParts === 'function') maneuverSyncParts();
+    if (typeof renderEngineSettings === 'function') renderEngineSettings();
+    if (typeof renderManeuverSettings === 'function') renderManeuverSettings();
 }
 
 function setGlbPartAxis(id, axis) {
