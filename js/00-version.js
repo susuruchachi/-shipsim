@@ -142,7 +142,8 @@
 //               タグの引き索の長さ（長・中・短）を選べる・狭くて引く所が岸壁などにかかるときは自動で縮める。
 // 0.03.013.025 保存した船の排煙を煙突の口から。自分の船の行き先の埠頭には他の船を付けない（いる船は出す・よそへ）。
 //               外洋でも行き会う船（近くを通る港の間の航路の上、無ければ近くを通るまっすぐの航路）。
-var APP_VERSION = '0.03.013.025';
+// 0.03.013.026 煙突のない船を保存して読み込んだとき、煙突を勝手に足さない。
+var APP_VERSION = '0.03.013.026';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

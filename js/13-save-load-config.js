@@ -283,8 +283,8 @@ function applyShipConfig(cfg) {
     setVal('prop-type', pr.type);
 
     const fn = cfg.funnels || {};
+    // 保存した煙突の一覧をそのまま（煙突を全部消して保存した船は、煙突なしのまま。勝手に足さない）
     if (Array.isArray(fn.list)) funnels = JSON.parse(JSON.stringify(fn.list));
-    if (funnels.length === 0) funnels = [{ x: 0, y: 3.5, z: 0.5, rx: 0.4, ry: 1.2 }];
     setVal('funnel-symmetry', fn.symmetry);
 
     const sm = cfg.smoke || {};
