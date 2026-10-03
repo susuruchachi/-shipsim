@@ -735,6 +735,23 @@ function _tugStep(t, dt, last) {
             const sgn = Math.abs(push.s) < 0.01 ? 1 : Math.sign(push.s);
             nx += F.sx * sgn * worst; nz += F.sz * sgn * worst;
         }
+        // 他の船（59-traffic.js）とも重ならないように：船体の外へ押し出し、船体へ向かう速さを消す
+        if (typeof trafficHulls === 'function') {
+            for (const H of trafficHulls()) {
+                if (Math.abs(H.x - nx) > H.HL + TUG_LEN || Math.abs(H.z - nz) > H.HL + TUG_LEN) continue;
+                for (const q of _tugPts(nx, nz, tg.yaw)) {
+                    const dx = q.x - H.x, dz = q.z - H.z, a = dx * H.fx + dz * H.fz, sb = dx * H.sx + dz * H.sz;
+                    if (Math.abs(a) >= H.HL) continue;
+                    const pen = H.hw(a) + TUG_BEAM / 2 + 0.5 - Math.abs(sb);
+                    if (pen <= 0) continue;
+                    const sg = sb >= 0 ? 1 : -1, ux = H.sx * sg, uz = H.sz * sg;
+                    nx += ux * pen; nz += uz * pen;
+                    const vin = tg.vel.x * ux + tg.vel.z * uz;
+                    if (vin < 0) { tg.vel.x -= ux * vin; tg.vel.z -= uz * vin; }
+                    tg.tugNear = true;
+                }
+            }
+        }
         tg.pos.x = nx; tg.pos.z = nz;
         // 座礁：浅い所に入り込んだまま、または持ち場へ向かっているのにまったく動けないまま、しばらくたったら
         // 代わりのタグを呼ぶ（持ち場が岸・浅瀬に塞がれているだけのときは、代わりも入れないので呼ばない）

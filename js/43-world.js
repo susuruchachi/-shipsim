@@ -1144,12 +1144,30 @@ window.worldNearestPort = worldNearestPort;
         }
     } catch (e) { /* ignore */ }
 })();
+// 自動航行の行き先も覚えておき、（落ちて）起動し直したら「再開」で続けられるようにする
+function _worldDestSave() {
+    if (typeof autopilot === 'undefined') return null;
+    const d = (autopilot.active || autopilot.planning) ? autopilot.dest : autopilot.resume ? autopilot.resume.dest : null;
+    if (!d) return null;
+    return d.point ? { point: true, lat: d.lat, lon: d.lon } : { name: d.name };
+}
+function _worldSavedDest() { try { const o = JSON.parse(localStorage.getItem('susuru_world') || 'null'); return (o && o.ap) || null; } catch (e) { return null; } }
+function _worldRestoreDest(a) {
+    if (!a || typeof autopilot === 'undefined' || world.mode !== 'world') return;
+    let dest = null;
+    if (a.point && Number.isFinite(a.lat)) dest = { point: true, lat: a.lat, lon: a.lon, name: `指定海域（${worldFmtLatLon(a.lat, a.lon)}）` };
+    else if (a.name) dest = worldBuildPorts().find(p => p.name === a.name) || null;
+    if (!dest) return;
+    autopilot.resume = { dest, route: [], leg: 0, legFrom: null, planDraft: 0 };
+    if (typeof _apMsg === 'function') _apMsg(`前回の行き先（${dest.name}）へは「▶ 再開」で続けられます`);
+    if (typeof renderAutopilotPanel === 'function') renderAutopilotPanel();
+}
 function _worldKindKey() { return world.kind === 'real' ? 'real:' + world.realKey : 'gen'; }
 function _worldSave() {
     if (world._pendingReal) return;                    // 現実世界の読み込み中は書かない
     let old = null;
     try { old = JSON.parse(localStorage.getItem('susuru_world') || 'null'); } catch (e) { /* ignore */ }
-    const o = { mode: world.mode, ref: world.ref, kind: world.kind, realKey: world.realKey, ships: (old && old.ships) || {} };
+    const o = { mode: world.mode, ref: world.ref, kind: world.kind, realKey: world.realKey, ships: (old && old.ships) || {}, ap: _worldDestSave() };
     if (world.mode === 'world' && typeof physics !== 'undefined') {
         const ll = worldShipLatLon();
         o.ship = { lat: ll.lat, lon: ll.lon, hdg: physics.heading || 0 };
@@ -1162,6 +1180,16 @@ window._worldSave = _worldSave;
 const _rwCache = {};
 // 港の航路の前計算（data/<key>_fairways.json）の版：航路の探し方・地形を変えたら上げて、作り直す（worldBuildFairwayCache）
 const RW_FAIRWAY_VER = 1;
+// 地形の PNG を展開した画素。メモリが足りないと（iPad など）キャンバスが作れなかったり、全部 0 の画素が返ったりする。
+// そのまま使うと、海がどこも同じ深さ・陸の無い地形になって「していない座礁」や小さな地図の消える原因になるので、使わずにやり直させる
+function _rwPixels(g, meta, name) {
+    if (!g) throw new Error('キャンバスを作れません（メモリ不足）：' + name);
+    const px = g.getImageData(0, 0, meta.cols, meta.rows).data;
+    let nz = 0;
+    for (let i = 0, step = Math.max(4, ((px.length / 4 / 2000) | 0) * 4); i < px.length && nz < 20; i += step) if (px[i] || px[i + 1]) nz++;
+    if (nz < 5) throw new Error('地形の画素が空でした（メモリ不足）：' + name);
+    return px;
+}
 async function _rwLoadGrid(url) {
     const meta = await (await fetch(url + '.json')).json();
     const blob = await (await fetch(url + '.png')).blob();
@@ -1171,7 +1199,7 @@ async function _rwLoadGrid(url) {
     const cv = document.createElement('canvas'); cv.width = meta.cols; cv.height = meta.rows;
     const g = cv.getContext('2d', { willReadFrequently: true });
     g.drawImage(bmp, 0, 0);
-    const px = g.getImageData(0, 0, meta.cols, meta.rows).data;
+    const px = _rwPixels(g, meta, url);
     const h = new Int16Array(meta.cols * meta.rows);
     for (let i = 0, j = 0; i < h.length; i++, j += 4) h[i] = px[j] * 256 + px[j + 1] - 32768;
     cv.width = cv.height = 1;
@@ -1223,7 +1251,7 @@ async function _rwLoadHarbor(hk) {
     const cv = document.createElement('canvas'); cv.width = meta.cols; cv.height = meta.rows;
     const g = cv.getContext('2d', { willReadFrequently: true });
     g.drawImage(bmp, 0, 0);
-    const px = g.getImageData(0, 0, meta.cols, meta.rows).data;
+    const px = _rwPixels(g, meta, hk);
     const n = meta.cols * meta.rows, h = new Int16Array(n), k = new Uint8Array(n);
     for (let i = 0, j = 0; i < n; i++, j += 4) { h[i] = px[j] * 256 + px[j + 1] - 32768; k[i] = px[j + 2]; }
     cv.width = cv.height = 1;
@@ -1348,12 +1376,16 @@ window.worldSetKind = worldSetKind;
 async function worldRestoreReal() {
     const P = world._pendingReal;
     if (!P) return;
+    const ap = _worldSavedDest();          // （読み込む間に位置を書き直しても、行き先は消えないように先に読む）
     try { _RW = await worldLoadReal(world.realKey); }
     catch (e) { world._pendingReal = null; _RW = null; WORLD_R = WORLD_R_GEN; world.kind = 'gen'; world.realKey = null; return; }
     world._pendingReal = null;
     _worldKindChanged();
+    // 船のいる所の作り込んだ港を、先に読む（読む前の粗い地形で、岸壁に着いている船を「座礁」と見ないように）
+    if (P.mode === 'world' && world.ref) { try { await worldEnsureHarbors([world.ref], 150); } catch (e) { /* ignore */ } }
     world.mode = P.mode;
     if (world._resumeHeading !== undefined && typeof physics !== 'undefined') physics.heading = world._resumeHeading;
+    _worldRestoreDest(ap);
     if (typeof worldTerrainModeChanged === 'function') worldTerrainModeChanged(true);
     worldMapRedraw();
 }

@@ -1388,7 +1388,7 @@ function _tfVisual(S, t, vis, night) {
     if (S.saved) {
         const near = S.dPl < TF_SAVED_FAR;
         const P = near ? _tfProto.get(S.saved.key) : null;
-        if (near && !P && !_tfProtoBusy) _tfLoadProto(S.saved);
+        if (near && !P && !_tfProtoBusy && _tfProtoRoom()) _tfLoadProto(S.saved);
         if (P && P.state === 'fail') S.saved = null;
         const ready = P && P.state === 'ok';
         if (S.mesh) {
@@ -1485,6 +1485,7 @@ function updateTraffic(t, dt) {
         if (traffic.ruleAcc >= 0.5) { traffic.ruleAcc -= 0.5; if (traffic.ruleAcc > 0.5) traffic.ruleAcc = 0; _tfRules(); _tfPlayerAuto(); }
         _tfLaterTick();
     }
+    traffic._hulls = null;
     _tfCollide(dt);
     if (farStep) {
         _tfPlayerBerthKeep();
@@ -1791,7 +1792,11 @@ async function _tfLoadProto(v) {
         let root;
         if (type === 'obj') root = new THREE.OBJLoader().parse(new TextDecoder('utf-8').decode(buf));
         else {
-            const gltf = await new Promise((res, rej) => new THREE.GLTFLoader().parse(buf, '', res, rej));
+            // テクスチャは小さく（スマホ 512px・パソコン 1024px）：自分の船とは別に、まるごと GPU に載るので
+            //（自分の船と同じ 2048px で読むと、保存した船が出るたびに数百 MB ずつ増え、iPad などで画面が落ちていた）
+            const L = new THREE.GLTFLoader(new THREE.LoadingManager());
+            L.__texCapMax = (typeof _texIsMobile === 'function' && _texIsMobile()) ? 512 : 1024; L.__texQuiet = true;
+            const gltf = await new Promise((res, rej) => L.parse(buf, '', res, rej));
             // Blender の発光の強さ（窓の明かり）を、自分の船と同じように読む（08-model-loading-and-lighting.js）
             if (typeof applyGltfEmissiveStrengthExt === 'function') applyGltfEmissiveStrengthExt(gltf.scene, gltf.parser && gltf.parser.json);
             root = gltf.scene;
@@ -1865,9 +1870,16 @@ function _tfProtoDispose(key) {
     P.obj.traverse(o => {
         if (o.geometry) o.geometry.dispose();
         const ms = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
-        for (const mt of ms) { for (const k in mt) { const t = mt[k]; if (t && t.isTexture) t.dispose(); } mt.dispose(); }
+        for (const mt of ms) { for (const k in mt) { const t = mt[k]; if (t && t.isTexture) { t.dispose(); if (t.image && t.image.close) { try { t.image.close(); } catch (e) { /* ignore */ } } } } mt.dispose(); }
     });
 }
+// メモリが足りない（描画が捨てられた：33-performance.js）：保存した船のモデルを全部外し、sec 秒のあいだは使わない
+function trafficFreeMemory(sec) {
+    traffic.savedHoldUntil = performance.now() + (sec || 600) * 1000;
+    for (const S of traffic.ships) if (S.mesh && S.mesh.userData.saved) _tfDropMesh(S);
+    for (const [key, P] of [..._tfProto]) if (P.state !== 'loading') _tfProtoDispose(key);
+}
+window.trafficFreeMemory = trafficFreeMemory;
 // 保存した船の形（読み込んだモデルを写す。形・材質は共有）
 function _tfBuildSavedMesh(S, P) {
     const g = new THREE.Group(), wrap = new THREE.Group();
@@ -1899,6 +1911,14 @@ function _tfBuildSavedMesh(S, P) {
     return g;
 }
 // 見えなくなった保存した船のモデルは、1 分たったら捨てる（メモリ）
+// 同時に読み込んでおく保存した船のモデルの数（メモリ：スマホは 2 つ、パソコンは 4 つ）。いっぱいなら、使っていないものを捨てて空ける
+function _tfProtoMax() { return (typeof _texIsMobile === 'function' && _texIsMobile()) ? 2 : 4; }
+function _tfProtoRoom() {
+    if (traffic.savedHoldUntil && performance.now() < traffic.savedHoldUntil) return false;
+    if (_tfProto.size < _tfProtoMax()) return true;
+    for (const [key, P] of _tfProto) if (P.users === 0 && P.state !== 'loading') { _tfProtoDispose(key); return true; }
+    return false;
+}
 function _tfProtoTick(dt) {
     for (const [key, P] of [..._tfProto]) {
         if (P.state === 'loading') continue;
@@ -2385,3 +2405,12 @@ function _tfContact(A, Bh, c, SA, SB) {
     }
 }
 window.trafficCollide = _tfCollide;
+// 近く（自分の船から 3km 以内）の他の船の船体（上から見た形）。タグ（47-tugboats.js）が、他の船に重ならないように使う
+// （1 フレームに 1 回だけ作る：updateTraffic で捨てる）
+function trafficHulls() {
+    if (traffic._hulls) return traffic._hulls;
+    const L = [];
+    if (traffic.on && traffic.ready) for (const S of traffic.ships) if (_tfShown(S) && S.dPl < 3000) { const H = _tfHullOf(S); if (H) L.push(H); }
+    return (traffic._hulls = L);
+}
+window.trafficHulls = trafficHulls;

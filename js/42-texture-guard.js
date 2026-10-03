@@ -262,13 +262,14 @@ async function _texLoadBitmap(url, opts, ctx) {
     if (THREE.GLTFLoader) {
         const origParse = THREE.GLTFLoader.prototype.parse;
         THREE.GLTFLoader.prototype.parse = function (data, path, onLoad, onError) {
-            const cap = _texChooseCap(_texScanGlb(data));
+            // （他の船として出す保存した船など、遠くから見るモデルは __texCapMax で小さく：59-traffic.js）
+            const cap = Math.min(_texChooseCap(_texScanGlb(data)), this.__texCapMax || Infinity);
             const ctx = { cap, stats: _texNewStats(cap) };
-            texGuard.stats = ctx.stats;
+            if (!this.__texQuiet) texGuard.stats = ctx.stats;
             if (this.manager) this.manager.__texCtx = ctx;
             return origParse.call(this, data, path, (gltf) => {
                 if (onLoad) onLoad(gltf);
-                _texReport(ctx.stats);
+                if (!this.__texQuiet) _texReport(ctx.stats);
             }, onError);
         };
     }

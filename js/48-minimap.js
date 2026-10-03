@@ -84,7 +84,7 @@ function _mmStepBuild() {
     }
     B.cv.rows = B.row;
     _wmPaint(B.cv, Math.max(0, r0 - 1), B.row);
-    if (B.row >= N) { _mm.tile = B; }
+    if (B.row >= N) { B.at = performance.now(); _mm.tile = B; }
 }
 
 function _mmDraw() {
@@ -313,7 +313,8 @@ function updateMinimap(t) {
         _mm.chart = !!_wm.chart;
         for (const X of [T, B]) if (X && X.cv.rows) _wmPaint(X.cv, 0, X.cv.rows);
     }
-    const need = !T || T.zoom !== _mm.zoom || Math.hypot(sx - T.cx, sz - T.cz) > viewR * 0.3;
+    // （3 分ごとにも作り直す：メモリが足りないと、iPad などでは作った絵の中身が消えて、他の船と航路しか見えなくなるので）
+    const need = !T || T.zoom !== _mm.zoom || Math.hypot(sx - T.cx, sz - T.cz) > viewR * 0.3 || performance.now() - (T.at || 0) > 180000;
     const building = B && B.row < MM_TILE && B.zoom === _mm.zoom;
     if (need && !building) _mmStartBuild(Math.round(sx), Math.round(sz));
     _mmStepBuild();

@@ -139,3 +139,44 @@ document.addEventListener('visibilitychange', () => {
         if (cb) cb.checked = perfGovernor.autoResolution;
     });
 })();
+
+// ════════════════════════════════════════════════════════════════
+//  描画（WebGL）が落ちたとき
+// ════════════════════════════════════════════════════════════════
+// iPad・スマホでメモリ（GPU）が足りなくなると、ブラウザが描画を一度捨てる（webglcontextlost）。
+// 何もしないと、戻らないか、戻ってもテクスチャが真っ黒のままになる。ここでは：
+//  ・捨てられたら、戻してもらえるように知らせ（preventDefault）、他の船の重いモデル（保存した船）を外して空ける
+//  ・戻ったら、テクスチャ・材質をすべて GPU へ送り直す。小さな地図・世界地図の絵も作り直す
+//  ・しばらく（10 分）は、他の船に保存した船のモデルを使わない（59-traffic.js）
+(function watchGlContext() {
+    const hook = () => {
+        if (typeof renderer === 'undefined' || !renderer || !renderer.domElement) { setTimeout(hook, 500); return; }
+        const cv = renderer.domElement;
+        cv.addEventListener('webglcontextlost', (e) => {
+            e.preventDefault();
+            window.glContextLost = true;
+            console.warn('[Perf] 描画が捨てられました（メモリ不足）。戻るのを待ちます');
+            try { if (typeof trafficFreeMemory === 'function') trafficFreeMemory(600); } catch (err) { /* ignore */ }
+        }, false);
+        cv.addEventListener('webglcontextrestored', () => {
+            window.glContextLost = false;
+            console.warn('[Perf] 描画が戻りました。テクスチャを送り直します');
+            try {
+                if (typeof autoExposure !== 'undefined') { autoExposure._pbo = null; autoExposure._sync = null; }
+                const seen = new Set();
+                if (typeof scene !== 'undefined' && scene) scene.traverse(o => {
+                    const ms = !o.material ? [] : Array.isArray(o.material) ? o.material : [o.material];
+                    for (const m of ms) {
+                        if (!m || seen.has(m)) continue;
+                        seen.add(m); m.needsUpdate = true;
+                        for (const k in m) { const t = m[k]; if (t && t.isTexture && t.image) t.needsUpdate = true; }
+                    }
+                });
+                if (typeof minimapReset === 'function') minimapReset();
+                if (typeof _wm !== 'undefined') { _wm.detail = null; _wm.detailKey = ''; }
+                if (typeof bloomTargetsDirty === 'function') bloomTargetsDirty();
+            } catch (err) { console.warn('[Perf] 送り直しに失敗しました', err); }
+        }, false);
+    };
+    hook();
+})();
