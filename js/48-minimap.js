@@ -9,16 +9,18 @@
 //  船が動いたら位置をずらして描く。はみ出しそうになったら作り直す。
 //  物理の面の座標：+x が西、+z が北（43-world.js の worldLocalToUnit）。
 
-const MM_RANGES = [2000, 6000, 20000, 60000];
+const MM_RANGES = [500, 1000, 2000, 6000, 20000, 60000];
+const MM_DANGER_IDX = 2;                   // 危ない海域で自動で拡大するときの範囲（半径 2km）
 const MM_TILE = 160;                      // 地面の絵の細かさ（1辺の点の数）
 const MM_TILE_K = 1.6;                    // 地面の絵の広さ（見える半径の何倍）
 const _mm = { show: true, zoom: 1, headUp: false, depth: true, tile: null, build: null, lastDraw: 0, chart: null };
 try {
     const s = JSON.parse(localStorage.getItem('susuru_minimap') || 'null');
-    if (s) { _mm.show = s.show !== false; _mm.zoom = Math.max(0, Math.min(MM_RANGES.length - 1, s.zoom | 0)); _mm.headUp = !!s.headUp; _mm.depth = s.depth !== false; }
+    // （v2 より前の保存は、範囲の並びが [2km, 6km, 20km, 60km] だったので、2 つずらす）
+    if (s) { _mm.show = s.show !== false; _mm.zoom = Math.max(0, Math.min(MM_RANGES.length - 1, (s.zoom | 0) + (s.v2 ? 0 : 2))); _mm.headUp = !!s.headUp; _mm.depth = s.depth !== false; }
 } catch (e) { /* ignore */ }
 // （危ない海域で自動で拡大している間は、元の範囲を覚えておく）
-function _mmSave() { try { localStorage.setItem('susuru_minimap', JSON.stringify({ show: _mm.show, zoom: _mm.auto ? _mm.auto.prev : _mm.zoom, headUp: _mm.headUp, depth: _mm.depth })); } catch (e) { /* ignore */ } }
+function _mmSave() { try { localStorage.setItem('susuru_minimap', JSON.stringify({ v2: true, show: _mm.show, zoom: _mm.auto ? _mm.auto.prev : _mm.zoom, headUp: _mm.headUp, depth: _mm.depth })); } catch (e) { /* ignore */ } }
 
 function minimapShow(on) {
     _mm.show = !!on; _mmSave();
@@ -226,7 +228,14 @@ function _mmDraw() {
     // 船（真ん中）
     g.save(); g.translate(c, c); g.rotate(_mm.headUp ? 0 : compass * Math.PI / 180);
     g.fillStyle = '#ffffff'; g.strokeStyle = '#ff3b30'; g.lineWidth = 1.6;
-    g.beginPath(); g.moveTo(0, -8); g.lineTo(5, 6); g.lineTo(0, 3); g.lineTo(-5, 6); g.closePath(); g.fill(); g.stroke();
+    // 大きく拡大したら、船の本当の大きさの形で（長さ・幅）
+    const hpS = window.hullProfile, shipL = (hpS && hpS.ready ? hpS.halfLen * 2 : 12) * (physics.scale || 1);
+    if (shipL * k > 18) {
+        const len = shipL * k, wid = Math.max(4, (typeof _apShipHalfBeam === 'function' ? _apShipHalfBeam() * 2 : shipL / 9) * k);
+        g.beginPath(); g.moveTo(0, -len / 2); g.quadraticCurveTo(wid / 2, -len / 2 + wid, wid / 2, -len / 2 + wid * 1.6); g.lineTo(wid / 2, len / 2 - wid * 0.3);
+        g.quadraticCurveTo(wid / 2, len / 2, 0, len / 2); g.quadraticCurveTo(-wid / 2, len / 2, -wid / 2, len / 2 - wid * 0.3); g.lineTo(-wid / 2, -len / 2 + wid * 1.6);
+        g.quadraticCurveTo(-wid / 2, -len / 2 + wid, 0, -len / 2); g.closePath(); g.fill(); g.stroke();
+    } else { g.beginPath(); g.moveTo(0, -8); g.lineTo(5, 6); g.lineTo(0, 3); g.lineTo(-5, 6); g.closePath(); g.fill(); g.stroke(); }
     g.restore();
     // 北の印（縁）
     const nx = c + Math.sin(rot) * (c - 9), ny = c - Math.cos(rot) * (c - 9);
@@ -283,7 +292,7 @@ function _mmAutoZoom() {
     _mm.danger = danger;
     if (danger) {
         _mm.azClear = 0;
-        if (!_mm.auto && _mm.zoom > 0) { _mm.auto = { prev: _mm.zoom }; _mm.zoom = 0; _mm.build = null; _mm.lastDraw = 0; }
+        if (!_mm.auto && _mm.zoom > MM_DANGER_IDX) { _mm.auto = { prev: _mm.zoom }; _mm.zoom = MM_DANGER_IDX; _mm.build = null; _mm.lastDraw = 0; }
     } else if (_mm.auto) {
         _mm.azClear = (_mm.azClear || 0) + dt;
         if (_mm.azClear > MM_DANGER_CLEAR_S) { _mm.zoom = _mm.auto.prev; _mm.auto = null; _mm.build = null; _mm.lastDraw = 0; }

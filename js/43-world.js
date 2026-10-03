@@ -1643,6 +1643,8 @@ function _wmPortShapes(lon0, lon1, lat0, lat1) {
     for (const p of world.ports) {
         const d = Math.acos(Math.max(-1, Math.min(1, cl.x * p.u.x + cl.y * p.u.y + cl.z * p.u.z))) * WORLD_R;
         if (d > rad) continue;
+        // 作り込んだ港は本物の地形（岸壁・ドック）があるので、ふつうの港の形（泊地を掘った形）は重ねない
+        if (p.real && typeof _rwDetailBoxOf === 'function' && _rwDetailBoxOf(p.lat, p.lon)) continue;
         const T = PORT_TYPES[p.type], br = p.seaBearing * Math.PI / 180;
         const quayLen = T.quay;
         out.push({ F: _worldFrame(p.lat, p.lon), S: [{ x: 0, z: 0, sx: Math.sin(br), sz: Math.cos(br), quayLen, apron: 0, basin: T.basin, depth: T.depth, chLen: worldPortChannelLen(p) }] });
@@ -1780,7 +1782,16 @@ function _wmDegPerPx() {
     const cv = document.getElementById('wp-canvas');
     return 360 / Math.max(1, cv.clientWidth) / _wm.zoom;
 }
-function _wmSetZoom(z) { _wm.zoom = Math.max(1, Math.min(400, z)); worldMapRedraw(true); }
+// いちばん大きく拡大したとき：画面の縦・横の半分が、どちらも 500m 以上（半径 500m）
+//（地図は緯度・経度が同じ縮尺の図なので、横の 1 点は cos(緯度) だけ短い）
+function _wmMaxZoom() {
+    const cv = document.getElementById('wp-canvas');
+    const W = Math.max(1, cv ? cv.clientWidth : 800), H = Math.max(1, cv ? cv.clientHeight : 600);
+    const cl = Math.max(0.1, Math.cos(Math.min(80, Math.abs(_wm.cy || 0)) * Math.PI / 180));
+    const dpdMin = Math.max(500 / 111320 / (H / 2), 500 / (111320 * cl) / (W / 2));
+    return Math.max(400, 360 / W / dpdMin);
+}
+function _wmSetZoom(z) { _wm.zoom = Math.max(1, Math.min(_wmMaxZoom(), z)); worldMapRedraw(true); }
 function _wmZoomBy(k) { _wmSetZoom(_wm.zoom * k); clearTimeout(_wm._t); _wm._t = setTimeout(() => worldMapRedraw(), 200); }
 window._wmZoomBy = _wmZoomBy;
 function _wmCenterShip() {
@@ -1904,11 +1915,21 @@ function worldMapRedraw(quick) {
         g.imageSmoothingEnabled = _wm.zoom < 6;
         // 経度方向は繰り返し描く
         const pxPerDeg = 1 / dpd;
-        const top = H / 2 - (90 - _wm.cy) * pxPerDeg;
-        const wWorld = 360 * pxPerDeg;
-        let left = W / 2 - (_wm.cx + 180) * pxPerDeg;
-        left = ((left % wWorld) + wWorld) % wWorld - wWorld;
-        for (let x = left; x < W; x += wWorld) g.drawImage(baseImg, x, top, wWorld, 180 * pxPerDeg);
+        if (_wm.zoom > 6) {
+            // 大きく拡大したときは、見えている所だけを切り出して描く（全体を何万倍にも引き伸ばさない）
+            const bw = baseImg.width, bh = baseImg.height;
+            const lon0 = _wm.cx - W / 2 * dpd, lat1 = _wm.cy + H / 2 * dpd;
+            const sx = (lon0 + 180) / 360 * bw, sy = (90 - lat1) / 180 * bh, sw = W * dpd / 360 * bw, sh = H * dpd / 180 * bh;
+            const sxc = ((sx % bw) + bw) % bw;
+            if (sxc + sw <= bw) g.drawImage(baseImg, sxc, sy, Math.max(0.01, sw), Math.max(0.01, sh), 0, 0, W, H);
+            else { const w1 = bw - sxc; g.drawImage(baseImg, sxc, sy, w1, sh, 0, 0, W * w1 / sw, H); g.drawImage(baseImg, 0, sy, sw - w1, sh, W * w1 / sw, 0, W - W * w1 / sw, H); }
+        } else {
+            const top = H / 2 - (90 - _wm.cy) * pxPerDeg;
+            const wWorld = 360 * pxPerDeg;
+            let left = W / 2 - (_wm.cx + 180) * pxPerDeg;
+            left = ((left % wWorld) + wWorld) % wWorld - wWorld;
+            for (let x = left; x < W; x += wWorld) g.drawImage(baseImg, x, top, wWorld, 180 * pxPerDeg);
+        }
     }
     // 拡大したときは、見えている範囲を細かく作り直す
     if (_wm.zoom >= 4) {
@@ -2069,7 +2090,14 @@ function worldMapRedraw(quick) {
         const s = _wmToScreen(ll.lat, ll.lon, cv);
         g.save(); g.translate(s.x, s.y); g.rotate((typeof worldTrueCompass === 'function' ? worldTrueCompass() : worldCompass(physics.heading)) * Math.PI / 180);
         g.fillStyle = '#ffffff'; g.strokeStyle = '#ff3b30'; g.lineWidth = 2;
-        g.beginPath(); g.moveTo(0, -11); g.lineTo(7, 8); g.lineTo(0, 4); g.lineTo(-7, 8); g.closePath(); g.fill(); g.stroke();
+        // 大きく拡大したら、船の本当の大きさの形で
+        const pxPerM = 1 / (dpd * 111320), hpS = window.hullProfile, shipL = (hpS && hpS.ready ? hpS.halfLen * 2 : 12) * (physics.scale || 1);
+        if (shipL * pxPerM > 24) {
+            const len = shipL * pxPerM, wid = Math.max(5, (typeof _apShipHalfBeam === 'function' ? _apShipHalfBeam() * 2 : shipL / 9) * pxPerM);
+            g.beginPath(); g.moveTo(0, -len / 2); g.quadraticCurveTo(wid / 2, -len / 2 + wid, wid / 2, -len / 2 + wid * 1.6); g.lineTo(wid / 2, len / 2 - wid * 0.3);
+            g.quadraticCurveTo(wid / 2, len / 2, 0, len / 2); g.quadraticCurveTo(-wid / 2, len / 2, -wid / 2, len / 2 - wid * 0.3); g.lineTo(-wid / 2, -len / 2 + wid * 1.6);
+            g.quadraticCurveTo(-wid / 2, -len / 2 + wid, 0, -len / 2); g.closePath(); g.fill(); g.stroke();
+        } else { g.beginPath(); g.moveTo(0, -11); g.lineTo(7, 8); g.lineTo(0, 4); g.lineTo(-7, 8); g.closePath(); g.fill(); g.stroke(); }
         g.restore();
     }
     if (st && _wm.base && world.mode === 'ocean') st.textContent = '「海だけ」モード中：港を選んで「この港から出航」すると、世界を航海するモードになります';

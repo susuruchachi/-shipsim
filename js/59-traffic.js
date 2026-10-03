@@ -1429,6 +1429,7 @@ function _tfShown(S) { return S.st !== 'off' && S.st !== 'gone' && S.st !== 'pen
 function trafficDrawMap(g, cv, W, H) {
     if (!traffic.on || !traffic.ships.length || typeof _wmToScreen !== 'function') return;
     const z = _wm.zoom, labels = z >= 120;
+    const pxPerM = 1 / (_wmDegPerPx() * 111320);
     g.save(); g.font = '10px sans-serif'; g.textBaseline = 'middle';
     for (const S of traffic.ships) {
         if (!_tfShown(S)) continue;
@@ -1437,7 +1438,11 @@ function trafficDrawMap(g, cv, W, H) {
         g.save(); g.translate(s.x, s.y); g.rotate(S.hdg * _tfR);
         const r = Math.max(3, Math.min(7, 2 + S.L / 60));
         g.fillStyle = TF_MAP_COLOR[S.cls] || '#ddd'; g.strokeStyle = _wm.chart ? '#16283c' : '#0a1932'; g.lineWidth = 1;
-        g.beginPath(); g.moveTo(0, -r * 1.4); g.lineTo(r * 0.6, r); g.lineTo(-r * 0.6, r); g.closePath(); g.fill(); g.stroke();
+        const len = S.L * pxPerM, wid = Math.max(3, S.B * pxPerM);
+        if (len > 16) {
+            // 大きく拡大したら、本当の大きさの形で
+            g.beginPath(); g.moveTo(0, -len / 2); g.lineTo(wid / 2, -len / 2 + wid * 1.2); g.lineTo(wid / 2, len / 2); g.lineTo(-wid / 2, len / 2); g.lineTo(-wid / 2, -len / 2 + wid * 1.2); g.closePath(); g.fill(); g.stroke();
+        } else { g.beginPath(); g.moveTo(0, -r * 1.4); g.lineTo(r * 0.6, r); g.lineTo(-r * 0.6, r); g.closePath(); g.fill(); g.stroke(); }
         g.restore();
         if (labels) { g.fillStyle = _wm.chart ? '#16283c' : 'rgba(255,255,255,0.85)'; g.fillText(S.name, s.x + 7, s.y + 7); }
     }
