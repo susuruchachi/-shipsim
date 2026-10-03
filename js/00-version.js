@@ -140,7 +140,9 @@
 // 0.03.013.024 保存した船を他の船として（自分の船の近くの港を中心に）出す。モデルは近くで見えるときだけ読み、船ごとに出さない設定。
 //               引き波なし・排煙と航海灯あり。地図の埠頭の名前は出さない（ミニ地図は港ごとに 1 つ）。
 //               タグの引き索の長さ（長・中・短）を選べる・狭くて引く所が岸壁などにかかるときは自動で縮める。
-var APP_VERSION = '0.03.013.024';
+// 0.03.013.025 保存した船の排煙を煙突の口から。自分の船の行き先の埠頭には他の船を付けない（いる船は出す・よそへ）。
+//               外洋でも行き会う船（近くを通る港の間の航路の上、無ければ近くを通るまっすぐの航路）。
+var APP_VERSION = '0.03.013.025';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
