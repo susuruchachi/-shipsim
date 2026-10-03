@@ -146,7 +146,9 @@
 // 0.03.013.027 ミニ地図・世界地図とも半径 500m まで拡大できるように。大きく拡大したら自分の船・他の船を本当の大きさの形で。
 // 0.03.013.028 他の船：保存した船も影を落とし・受け、窓の明かりは昼は消えて夜に点く（自分の船と同じ係数）。
 //               保存した船にも空の見え方を焼き込み（プロムナードの奥などを暗く）、晴れた昼の影のくっきりさを自分の船とそろえる。
-var APP_VERSION = '0.03.013.028';
+// 0.03.013.029 行き会い（短音 1 回）・追い越し（長長短短）の汽笛と返事（短音・長短長短）。保存した船はその船の汽笛で。
+//               自分の船は自動航行中に自動で鳴らす・返す。行き会い・追い越しでは減速しない（追い越しは相手の左舷側を通る）。
+var APP_VERSION = '0.03.013.029';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

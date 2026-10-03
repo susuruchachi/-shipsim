@@ -1575,7 +1575,7 @@ function updateAutopilot(t, dt) {
     // 他の船（59-traffic.js）：同じルールで、よける（右へ）・速力を落とす・埠頭が空くまで待つ
     const adv = (typeof trafficAdvice === 'function') ? trafficAdvice({ dest: autopilot.dest, remain, channel: !!wp.channel, narrow: !!wp.narrow }) : null;
     if (adv && Number.isFinite(adv.order)) order = Math.min(order, adv.order);
-    if (adv && adv.dc && !wp.final) course = (course + adv.dc) % 360;
+    if (adv && adv.dc && !wp.final) course = ((course + adv.dc) % 360 + 360) % 360;      // （右へ＋・追い越しは左へ−）
     if ((adv ? adv.why : '') !== (autopilot.trafficWhy || '')) { autopilot.trafficWhy = adv ? adv.why : ''; renderAutopilotPanel(); }
     _apOrder(order);
     // 舵：針路のずれ（物理の向き）と回る速さで

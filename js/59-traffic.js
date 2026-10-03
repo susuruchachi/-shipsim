@@ -988,13 +988,22 @@ function _tfRules() {
     const vis = _tfVisM();
     for (const S of near) {
         if (S.st !== 'go' && S.st !== 'anchoring') continue;
-        let rv = 1, offT = 0, why = '';
+        let rv = 1, offT = 0, offL = 0, why = '';
         const inCh = S.path && S.path.pts[Math.min(S.path.pts.length - 1, S.k + 1)].ch;
         const safe = Math.max(inCh ? 1.5 * S.B + 60 : 900, 2.5 * S.L);
+        S.avoid = S.avoid || {};
         for (const O of all) {
             if (O === S) continue;
             const c = _tfCPA(S, O);
             if (c.dist > 12000) continue;
+            // よけ始めた相手は、すれ違い・追い越しが終わるまで（最接近を過ぎて離れていくまで）よけ続ける
+            //（右へ変針すると最接近の予測が離れて、よける理由が消えて戻ってしまうので）
+            const key = _tfSigKey(O), lat = S.avoid[key];
+            if (lat) {
+                const passed = c.t <= 0 && c.dist > (S.L + (O.L || 100)) / 2 + 100;
+                if (passed || c.dist > 8000) delete S.avoid[key];
+                else { offT = Math.max(offT, lat.r); offL = Math.max(offL, lat.l); why = why || lat.why; continue; }
+            }
             const brgO = _tfBrg(S, O), rb = _tfWrap(brgO - S.hdg);            // 相手の見える向き（右が＋）
             const rbFromO = _tfWrap(_tfBrg(O, S) - O.hdg);                      // 相手から見た自分
             const sameDir = Math.abs(_tfWrap(O.hdg - S.hdg)) < 45;
@@ -1002,13 +1011,22 @@ function _tfRules() {
             if (sameDir && Math.abs(rb) < 25 && c.dist < Math.max(6 * S.L, 1500)) {
                 const gap = c.dist - (S.L + (O.L || 100)) / 2;
                 const want = Math.max(2 * S.L, inCh ? 3 * S.L : 600);
-                if (gap < want * 2) {
-                    const k = Math.max(0, Math.min(1, (gap - want * 0.5) / want));
-                    const vO = O.v || 0;
-                    rv = Math.min(rv, Math.max(0, (vO + (S.vSea - vO) * k) / Math.max(0.5, S.vSea)));
-                    if (!inCh && gap < want && (O.v || 0) < S.v - 0.5 && !why) { offT = Math.max(offT, safe); why = `${O.name} を追い越すので、よけています`; }
-                    else if (k < 0.5) why = why || `${O.name} の後ろで速力を落としています`;
+                const vO = O.v || 0;
+                if (gap < want * 2 && vO < S.v - 0.3) {
+                    // 追い越す：減速はせず、相手の左舷側を通る（相手は右側を通っている）。汽笛「長長短短」で知らせる
+                    const l = inCh ? Math.min((S.B + (O.B || 20)) / 2 + 40, safe) : safe;
+                    offL = Math.max(offL, l);
+                    why = why || `${O.name} を追い越しています`;
+                    S.avoid[key] = { r: 0, l, why: `${O.name} を追い越しています` };
+                    _tfSignal(S, O, 'over', c.dist);
                 }
+                // （ぶつかりそうなほど近いときだけ、相手の速さまで落とす）
+                if (gap < Math.max(60, S.L * 0.5)) { rv = Math.min(rv, Math.max(0, vO / Math.max(0.5, S.vSea))); why = why || `${O.name} に近すぎるので、速力を合わせています`; }
+                continue;
+            }
+            // 追い越される：右へ寄って、追い越す船に場所をあける（速力はそのまま）
+            if (sameDir && Math.abs(rb) > 155 && c.dist < Math.max(4 * S.L, 900) && (O.v || 0) > S.v + 0.3) {
+                offT = Math.max(offT, inCh ? S.B / 2 + 30 : 250);
                 continue;
             }
             if (!(c.t > 0 && c.t < 1500 && c.cpa < safe)) continue;
@@ -1019,23 +1037,31 @@ function _tfRules() {
             }
             const headOn = Math.abs(rb) < 12 && Math.abs(rbFromO) < 12;
             const overtaking = Math.abs(rbFromO) > 112.5 && sameDir;             // 自分が相手の船尾の方から近づく
-            const giveWay = headOn || overtaking || (rb > 0 && rb < 112.5);
+            // （同じ向きの船は横切りではない：追い越すか、追い越されるか）
+            const crossing = !sameDir && rb > 0 && rb < 112.5;
+            const giveWay = headOn || overtaking || crossing;
             if (giveWay) {
-                offT = Math.max(offT, inCh ? Math.min(S.B + 60, safe) : Math.min(1500, safe + 300));
-                if (!headOn && c.t < 600) rv = Math.min(rv, inCh ? 0.5 : 0.65);
+                const amt = inCh ? Math.min(S.B + 60, safe) : Math.min(1500, safe + 300);
+                if (overtaking) offL = Math.max(offL, amt); else offT = Math.max(offT, amt);
+                S.avoid[key] = overtaking ? { r: 0, l: amt, why: `${O.name} を追い越しています` } : { r: amt, l: 0, why: headOn ? `${O.name} と行き会うので右へ` : `${O.name} を右に見るので、よけています` };
+                // 行き会い・追い越しでは減速しない（よけるだけ）。横切りの避航船だけ、近ければ少し落とす
+                if (!headOn && !overtaking && c.t < 600) rv = Math.min(rv, inCh ? 0.5 : 0.65);
+                if (headOn) _tfSignal(S, O, 'meet', c.dist); else if (overtaking) _tfSignal(S, O, 'over', c.dist);
                 why = why || (headOn ? `${O.name} と行き会うので右へ` : overtaking ? `${O.name} を追い越すので、よけています` : `${O.name} を右に見るので、よけています`);
-            } else if (c.cpa < Math.max(S.L, 200) && c.t < 240) {
+            } else if (!sameDir && c.cpa < Math.max(S.L, 200) && c.t < 240) {
                 // 保持船でも、ぶつかりそうなら最後はよける（減速して右へ）
                 rv = Math.min(rv, 0.4); offT = Math.max(offT, Math.min(safe, 300)); why = why || `${O.name} が近いので減速しています`;
             }
         }
+        // 追い越し（左へ）は、右へよける理由が無いときだけ
+        if (!(offT > 0) && offL > 0) offT = -offL;
         // よける所が浅ければ、よけずに減速
-        if (offT > 0 && S.path) {
+        if (offT !== 0 && S.path) {
             const a = S.path.pts[S.k], b = S.path.pts[Math.min(S.path.pts.length - 1, S.k + 1)];
             const crs = rhumbCourse(a.lat, a.lon, b.lat, b.lon).course;
             let okOff = offT;
             for (const f of [1, 0.6, 0.3]) { const q = _tfOff(S, crs + 90, offT * f - (S.off || 0)); if (_tfDepth(q) >= S.d + 2) { okOff = offT * f; break; } okOff = 0; }
-            if (okOff < offT * 0.5) rv = Math.min(rv, 0.4);
+            if (Math.abs(okOff) < Math.abs(offT) * 0.5 && offT > 0) rv = Math.min(rv, 0.4);
             offT = okOff;
         }
         // 霧の中は、レーダーで見る分だけ早めに減速（視程の 2 倍の中に他の船がいれば半分の速さ）
@@ -1052,17 +1078,41 @@ function _tfRules() {
 //  汽笛（その船の位置から聞こえる）
 // ════════════════════════════════════════════════════════════════
 //  'L'：長音（4〜6 秒：出港・霧中信号）、'S1'・'S2'・'S3'：短音 1〜3 回（右へ・左へ・後進）、'D'：短音 5 回（疑問・警告）
+//  ほかに、長音 L・短音 S の並び（'LLSS'：追い越しの合図、'LSLS'：追い越しへの同意 など）
 function _tfHorn(S, pat) {
     if (!traffic.horn || !S || !(S.dPl < 7000)) return;
     if (typeof audioEnsure !== 'function' || !audioEnsure() || !audio.buses || !audio.buses.horn || typeof AudioEmitter === 'undefined') return;
     const loc = _tfLocal(S, {});
     if (!Number.isFinite(loc.x)) return;
     const c = audio.ctx;
+    // 長音・短音の並びにする（長音 5 秒・短音 1 秒、間は 36-horns.js と同じ）
+    const seq = pat === 'D' ? 'SSSSS' : /^S\d$/.test(pat) ? 'S'.repeat(+pat[1]) : pat;
+    const blasts = [];
+    let tt = 0;
+    const sh = typeof HORN_SHORT !== 'undefined' ? HORN_SHORT : 1, lg = typeof HORN_LONG !== 'undefined' ? HORN_LONG : 5, gp = typeof HORN_GAP !== 'undefined' ? HORN_GAP : 1;
+    for (const ch of seq) { const len = ch === 'L' ? lg : (pat === 'D' ? 0.5 : sh); blasts.push([tt, len]); tt += len + (ch === 'L' ? 2 : (pat === 'D' ? 0.4 : gp)); }
     const em = new AudioEmitter(audio.buses.horn, 120, 0.9);
     em.update(new THREE.Vector3(loc.x, 25, loc.z));
+    // 保存した船：その船の汽笛（船体設定の汽笛・音・種類）で鳴らす
+    const horns = S.saved && S.saved.cfg && S.saved.cfg.sound && Array.isArray(S.saved.cfg.sound.horns) ? S.saved.cfg.sound.horns : null;
+    const mains = horns ? horns.filter(h => h && h.main && h.type !== 'bell' && h.type !== 'gong') : [];
+    if (mains.length && typeof _makeVoice === 'function' && typeof noteToFreq === 'function') {
+        const out = c.createGain(); out.connect(em.input);
+        for (const [t0r, len] of blasts) {
+            setTimeout(() => {
+                const vs = [];
+                for (const h of mains) {
+                    const notes = (h.notes && h.notes.length) ? h.notes : ['C3'], per = Math.max(0, h.volume != null ? h.volume : 1) / Math.sqrt(notes.length);
+                    for (const n of notes) { const v = _makeVoice(h.type, out, noteToFreq(n), per); if (v) vs.push(v); }
+                }
+                setTimeout(() => { const now = c.currentTime; for (const v of vs) v.stop(now); }, len * 1000);
+            }, (0.05 + t0r) * 1000);
+        }
+        setTimeout(() => em.disconnect(), (tt + 8) * 1000);
+        return;
+    }
     // 大きな船ほど低い音（汽笛の 2 つの音で和音）
     const f0 = Math.max(70, Math.min(330, 15000 / Math.max(30, S.L) + (S.seed - 0.5) * 20));
-    const blasts = pat === 'L' ? [[0, 5]] : pat === 'D' ? [0, 1, 2, 3, 4].map(k => [k * 0.9, 0.5]) : Array.from({ length: +pat[1] || 1 }, (_, k) => [k * 1.6, 1]);
     let end = 0;
     for (const [t0r, len] of blasts) {
         const t0 = c.currentTime + 0.05 + t0r;
@@ -1390,6 +1440,7 @@ function updateTraffic(t, dt) {
     }
     traffic.ruleAcc += dt;
     if (traffic.ruleAcc >= 0.5) { traffic.ruleAcc = 0; _tfRules(); }
+    _tfLaterTick();
     if (farStep) {
         _tfPlayerBerthKeep();
         _tfProtoTick(dF);
@@ -1579,24 +1630,41 @@ function trafficAdvice(ctx) {
         const c = _tfCPA(me, O);
         const rb = _tfWrap(_tfBrg(me, O) - me.hdg), rbFromO = _tfWrap(_tfBrg(O, me) - O.hdg);
         const sameDir = Math.abs(_tfWrap(O.hdg - me.hdg)) < 45;
-        // 前の船（同じ向き）：間を空ける（港の航路では追い越さない）
+        // よけ始めた相手は、すれ違い・追い越しが終わるまでよけ続ける
+        const PA = traffic.player.avoid = traffic.player.avoid || {}, lat = PA[O.id];
+        if (lat) {
+            if ((c.t <= 0 && c.dist > (L + O.L) / 2 + 100) || c.dist > 8000) delete PA[O.id];
+            else { if (lat.dc > 0) dc = Math.max(dc, lat.dc); else dc = Math.min(dc, lat.dc); why = why || lat.why; continue; }
+        }
+        // 前の船（同じ向き）：追い越す
         if (sameDir && Math.abs(rb) < 25 && c.dist < Math.max(6 * L, 1500)) {
             const gap = c.dist - (L + O.L) / 2, want = Math.max(2 * L, inCh ? 3 * L : 600);
-            if (gap < want * 0.6) { order = Math.min(order, 0); why = why || `前の ${O.name} との間を空けています`; }
-            else if (gap < want * 1.2 && (O.v || 0) < me.v) { order = Math.min(order, inCh ? 1 : 2); why = why || `前の ${O.name} に合わせて速力を落としています`; }
+            if (gap < want * 2 && (O.v || 0) < me.v - 0.3) {
+                // 追い越す：減速はせず、相手の左舷側を通る（港の航路の中は、相手が右へ寄ってあけてくれる）
+                if (!inCh) { dc = Math.min(dc, -20); PA[O.id] = { dc: -20, why: `${O.name} を追い越しています` }; }
+                why = why || `${O.name} を追い越しています`;
+                if (c.dist < 3000) _tfPlayerSignal(O, 'over');
+            }
+            // （ぶつかりそうなほど近いときだけ止める）
+            if (gap < Math.max(60, L * 0.5)) { order = Math.min(order, 0); why = `前の ${O.name} に近すぎるので、機関を止めています`; }
             continue;
         }
         if (!(c.t > 0 && c.t < 1500 && c.cpa < safe)) continue;
         if ((O.v || 0) < 0.3) { if (!inCh) { dc = Math.max(dc, 20); why = why || `${O.name}（止まっている船）を右によけています`; } continue; }
         const headOn = Math.abs(rb) < 12 && Math.abs(rbFromO) < 12;
         const overtaking = Math.abs(rbFromO) > 112.5 && sameDir;
-        const giveWay = headOn || overtaking || (rb > 0 && rb < 112.5);
+        const giveWay = headOn || overtaking || (!sameDir && rb > 0 && rb < 112.5);
         if (giveWay) {
-            if (!inCh) dc = Math.max(dc, headOn ? 25 : 35);
-            if (!headOn && c.t < 600) order = Math.min(order, inCh ? 1 : 2);
-            if (inCh && c.cpa < Math.max(L, 150) && c.t < 300) order = Math.min(order, 0);
+            if (!inCh) {
+                if (overtaking) dc = Math.min(dc, -25); else dc = Math.max(dc, headOn ? 25 : 35);
+                PA[O.id] = { dc: overtaking ? -25 : headOn ? 25 : 35, why: headOn ? `${O.name} と行き会うので右へよけています` : overtaking ? `${O.name} を追い越しています` : `${O.name} を右に見るので、よけています（避航船）` };
+            }
+            // 行き会い・追い越しでは減速しない。横切りの避航船だけ、近ければ落とす
+            if (!headOn && !overtaking && c.t < 600) order = Math.min(order, inCh ? 1 : 2);
+            if (!headOn && !overtaking && inCh && c.cpa < Math.max(L, 150) && c.t < 300) order = Math.min(order, 0);
+            if (c.dist < 3000) { if (headOn) _tfPlayerSignal(O, 'meet'); else if (overtaking) _tfPlayerSignal(O, 'over'); }
             why = why || (headOn ? `${O.name} と行き会うので右へよけています` : overtaking ? `${O.name} を追い越すので、よけています` : `${O.name} を右に見るので、よけています（避航船）`);
-        } else if (c.cpa < Math.max(L, 200) && c.t < 240) {
+        } else if (!sameDir && c.cpa < Math.max(L, 200) && c.t < 240) {
             order = Math.min(order, 0); if (!inCh) dc = Math.max(dc, 20);
             why = why || `${O.name} が近いので、減速して右へよけています`;
         }
@@ -1608,7 +1676,7 @@ function trafficAdvice(ctx) {
     }
     // 霧：安全な速力（半速まで）・霧中信号は自分で鳴らす
     if (_tfVisM() < 2000) { order = Math.min(order, 2); why = why || '霧なので、速力を落としています'; }
-    if (order === 9 && !dc) return { why: '' };
+    if (order === 9 && !dc && !why) return { why: '' };
     return { order: order === 9 ? undefined : order, dc, why };
 }
 function _tfPlayerAsShipSafe() { try { return _tfPlayerAsShip(); } catch (e) { return null; } }
@@ -1899,3 +1967,50 @@ function _tfProtoAOStep() {
         return;                      // 1 つずつ
     }
 }
+
+// ════════════════════════════════════════════════════════════════
+//  行き会い・追い越しの汽笛と、その返事
+// ════════════════════════════════════════════════════════════════
+//  行き会い：短音 1 回（右へ変針する）→ 相手も短音 1 回
+//  追い越し：長長短短（あなたの左舷側を追い越したい）→ 追い越される船は 長短長短（同意）
+//  同じ相手には 10 分に 1 回だけ。自分の船は自動航行中だけ、自動で鳴らす・返す（36-horns.js の汽笛で）
+const TF_SIG = { meet: { call: 'S', reply: 'S', delay: 3 }, over: { call: 'LLSS', reply: 'LSLS', delay: 15 } };
+function _tfSigKey(O) { return O.player ? 'P' : O.id; }
+function _tfSignal(S, O, kind, dist) {
+    if (!(dist < 3000) || !(S.dPl < 7000)) return;
+    S.sigs = S.sigs || {};
+    const k = _tfSigKey(O);
+    if (traffic.t - (S.sigs[k] ?? -1e9) < 600) return;
+    S.sigs[k] = traffic.t;
+    const G = TF_SIG[kind];
+    _tfHorn(S, G.call);
+    if (S.dPl < 8000) _trMsgSafe(`${S.name}：${kind === 'meet' ? '短音 1 回（右へ変針します）' : '長長短短（追い越します）'}`);
+    if (O.player) {
+        // 自分の船（自動航行中）：返事をする
+        if (typeof autopilot !== 'undefined' && autopilot.active && traffic.horn && typeof playHornSignal === 'function')
+            _tfLater(_tfSigLen(G.call) + G.delay, () => playHornSignal(G.reply));
+        return;
+    }
+    O.sigs = O.sigs || {}; O.sigs[S.id] = traffic.t;          // 相手からは、同じ出会いで改めて鳴らさない
+    _tfLater(_tfSigLen(G.call) + G.delay, () => _tfHorn(O, G.reply));
+}
+// 自分の船（自動航行中）から鳴らす。相手の船（保存した船ならその汽笛で）が返事をする
+function _tfPlayerSignal(O, kind) {
+    if (!traffic.horn || typeof autopilot === 'undefined' || !autopilot.active || typeof playHornSignal !== 'function') return;
+    traffic.player.sigs = traffic.player.sigs || {};
+    if (traffic.t - (traffic.player.sigs[O.id] ?? -1e9) < 600) return;
+    traffic.player.sigs[O.id] = traffic.t;
+    O.sigs = O.sigs || {}; O.sigs.P = traffic.t;
+    const G = TF_SIG[kind];
+    playHornSignal(G.call);
+    _tfLater(_tfSigLen(G.call) + G.delay, () => _tfHorn(O, G.reply));
+}
+// 合図の長さ[秒]（長音 5＋2 秒・短音 1＋1 秒）
+function _tfSigLen(p) { return p.split('').reduce((a, ch) => a + (ch === 'L' ? 7 : 2), 0); }
+// しばらく後に（船の時間で）
+function _tfLater(sec, fn) { (traffic.later = traffic.later || []).push({ at: traffic.t + sec, fn }); }
+function _tfLaterTick() {
+    const L = traffic.later; if (!L || !L.length) return;
+    for (let i = L.length - 1; i >= 0; i--) if (traffic.t >= L[i].at) { const f = L[i].fn; L.splice(i, 1); try { f(); } catch (e) { /* ignore */ } }
+}
+function _trMsgSafe(s) { try { _tfMsg(s); } catch (e) { /* ignore */ } }
