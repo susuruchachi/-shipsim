@@ -2338,6 +2338,13 @@ function _tfCollide(dt) {
         if (!(S.dPl < (Lp + S.L) / 2 + 30)) continue;
         const H = _tfHullOf(S); if (!H) continue;
         const c = _tfHullPen(P, H); if (!c) continue;
+        // 止まっている自分の船に、停泊・錨泊中の船が重なっている（隣の埠頭の船が、自分の船の場所まではみ出している）：
+        // 自分の船を岸壁の方へ押してしまわないよう押し合わず、その船に出て行ってもらう
+        if (_tfMassOf(S) === Infinity && Math.abs(physics.speed || 0) < 0.5 && Math.abs(traffic.bump.vS) < 0.05) {
+            if (S.st === 'berth') S.t = Math.min(S.t, 2);
+            else if (S.st === 'anchored') S.t = Math.min(S.t, 2);
+            continue;
+        }
         _tfContact(P, H, c, null, S);
     }
     // 他の船どうし（見える所だけ）

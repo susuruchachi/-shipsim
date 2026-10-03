@@ -693,9 +693,18 @@ async function autopilotStart(port) {
                     // サイドスラスターもアジポッドも無い船：横へは動けないので、舵と機関で出る。
                     // 港口の向きが前寄りなら、船首を沖へ振り出して（スプリングで船尾を岸壁に当てて）前進で、
                     // 後ろ寄りなら、船尾を沖へ振り出して後進で船の長さほど下がってから、舵で回って出る
-                    const back = Number.isFinite(plan.hOut) && Math.abs(((plan.hOut - physics.heading + 540) % 360) - 180) > 100;
+                    let back = Number.isFinite(plan.hOut) && Math.abs(((plan.hOut - physics.heading + 540) % 360) - 180) > 100;
+                    // 前がふさがっていて（埠頭の間の奥を向いている）、後ろが空いていれば、後進で出る
+                    if (!back && _apPoseBlocked(apShipLen() * 0.8, 0) && !_apPoseBlocked(-apShipLen() * 0.8, 0)) back = true;
                     const bowOut = side * (back ? -1 : 1);                 // ＋：heading を増やす（左舷へ回る）
-                    autopilot.selfDepart = { port, rudder: true, back, h1: physics.heading + bowOut * 12, out: side, moved: 0, need: back ? Math.max(60, apShipLen()) : 0, v: 0, hOut: plan.hOut };
+                    // 振り出すと船体が岸壁・隣の埠頭にかかる（ニューヨークの埠頭の間のような狭い所）なら、振り出さずにまっすぐ出る
+                    let swing = 12;
+                    {
+                        const h1 = (physics.heading + bowOut * 12) * _apRad, HL = apShipLen() / 2, st = HL * 12 * _apRad * 0.9;
+                        const X = physics.cgWorldX + Math.cos(physics.heading * _apRad) * side * st, Z = physics.cgWorldZ - Math.sin(physics.heading * _apRad) * side * st;
+                        if (_apPoseBlockedAt(X, Z, h1)) swing = 0;
+                    }
+                    autopilot.selfDepart = { port, rudder: true, back, h1: physics.heading + bowOut * swing, out: side, moved: 0, need: back ? Math.max(60, apShipLen()) : 0, v: 0, hOut: plan.hOut };
                     _apMsg(`もやい綱を放し、舵と機関で岸壁から離れています（${back ? '後進で下がってから' : '船首を沖へ振ってから前進で'}、${port.name} へ）`);
                     return;
                 }
@@ -1157,6 +1166,24 @@ function _apHullDims() {
     let hw = 0; if (hp && hp.ready) for (const sl of hp.slices || []) hw = Math.max(hw, sl.halfWidth || 0);
     return { HL, hw: (hw || 1.5) * sc };
 }
+// 船体の外周の点（前後 9 か所の両舷＋船首・船尾）と、その点の喫水（＋余裕）。座礁の判定（44-world-terrain.js）と同じく、その場所の幅と喫水で
+function _apHullRing() {
+    const hp = window.hullProfile, sc = physics.scale || 1, hl = (hp && hp.ready) ? hp.halfLen : 6, HL = hl * sc;
+    const key = hl + ':' + sc + ':' + worldShipDraft().toFixed(2);
+    if (_apHullRing.k === key) return _apHullRing.v;
+    const D = worldShipDraft(), out = [[HL * 0.98, 0, D + 0.5], [-HL * 0.98, 0, D + 0.5]];
+    for (const k of [-0.9, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 0.9]) {
+        const H = worldHullAt(k * hl);
+        out.push([k * HL, H.hw, H.d + 1], [k * HL, -H.hw, H.d + 1], [k * HL, 0, D + 0.5]);
+    }
+    _apHullRing.k = key; _apHullRing.v = out;
+    return out;
+}
+// 今の姿勢で、もう浅い所・岸壁の上にある外周の点（岸壁に着いている舷など）。これから当たるかを見るときは数えない
+function _apRingNow() {
+    const ring = _apHullRing(), h = physics.heading * _apRad, fx = Math.sin(h), fz = Math.cos(h), qx = Math.cos(h), qz = -Math.sin(h);
+    return ring.map(([a, o, d]) => worldSeabedAt(physics.cgWorldX + fx * a + qx * o, physics.cgWorldZ + fz * a + qz * o) > -d);
+}
 function _apSwingRadius() {
     const sc = physics.scale || 1, L = 12 * sc;
     const lever = Math.abs(((physics.rudderOffset && physics.rudderOffset.z) || 0) * sc - ((physics.cgOffset && physics.cgOffset.z) || 0) * sc);
@@ -1175,10 +1202,10 @@ function _apSwingBlockedSide(s, tot, straight) {
     const { HL, hw } = _apHullDims(), Rt = _apSwingRadius(), dr = worldShipDraft() + 0.5, w = hw * 0.9;
     const h0 = physics.heading * _apRad, X0 = physics.cgWorldX, Z0 = physics.cgWorldZ;
     const cx = X0 + Math.cos(h0) * Rt * s, cz = Z0 - Math.sin(h0) * Rt * s;          // 回る円の中心（heading が増える向き＝左舷へ回るとき左舷側）
+    const ring = _apHullRing(), now = _apRingNow();
     const hit = (X, Z, h) => {
         const fx = Math.sin(h), fz = Math.cos(h), qx = Math.cos(h), qz = -Math.sin(h);
-        for (const [a, o] of [[HL * 0.97, 0], [HL * 0.7, w], [HL * 0.7, -w], [0, w], [0, -w], [-HL * 0.8, w], [-HL * 0.8, -w]])
-            if (worldSeabedAt(X + fx * a + qx * o, Z + fz * a + qz * o) > -dr) return true;
+        for (let i = 0; i < ring.length; i++) { const [a, o, d] = ring[i]; if (!now[i] && worldSeabedAt(X + fx * a + qx * o, Z + fz * a + qz * o) > -d) return true; }
         return false;
     };
     for (let th = 8; th <= tot; th += 6) {
@@ -1188,6 +1215,17 @@ function _apSwingBlockedSide(s, tot, straight) {
     const hf = h0 + s * tot * _apRad, X1 = cx - s * Rt * Math.cos(hf), Z1 = cz + s * Rt * Math.sin(hf);
     for (let d = 20; d <= straight; d += 20) if (hit(X1 + Math.sin(hf) * d, Z1 + Math.cos(hf) * d, hf)) return true;
     return false;
+}
+// 船をその姿勢（重心 X, Z・向き h[ラジアン]）に置いたら、今は当たっていない外周の点が、浅い所・岸壁にかかるか
+function _apPoseBlockedAt(X, Z, h) {
+    const ring = _apHullRing(), now = _apRingNow(), fx = Math.sin(h), fz = Math.cos(h), qx = Math.cos(h), qz = -Math.sin(h);
+    for (let i = 0; i < ring.length; i++) { const [a, o, d] = ring[i]; if (!now[i] && worldSeabedAt(X + fx * a + qx * o, Z + fz * a + qz * o) > -d) return true; }
+    return false;
+}
+// まっすぐ後進で下がると（止まるまでの惰性も入れて）、船体のどこかが浅い所・岸壁にかかるか
+function _apBackBlocked() {
+    const v = Math.abs(physics.speed || 0) * 0.514;
+    return _apSternBlocked() || _apPoseBlocked(-(30 + v * 60), 0);
 }
 // 後ろ（船尾の先 60m まで）が浅い所・岸壁か（後進で下がれないか）
 function _apSternBlocked() {
@@ -1205,9 +1243,9 @@ function _apPoseBlocked(ds, s) {
     const n = Math.max(1, Math.ceil(Math.abs(ds) / 4)), st = ds / n;
     for (let i = 0; i < n; i++) { X += Math.sin(h) * st; Z += Math.cos(h) * st; h += s * Math.abs(st) / Rt; }
     const fx = Math.sin(h), fz = Math.cos(h), qx = Math.cos(h), qz = -Math.sin(h);
-    // （舵で回ると、船首と反対に船尾も振れるので、船首・船尾の両方の肩を見る）
-    const pts = [[HL * 0.97, 0], [HL * 0.75, w], [HL * 0.75, -w], [0, w], [0, -w], [-HL * 0.75, w], [-HL * 0.75, -w], [-HL * 0.97, 0]];
-    for (const [a, o] of pts) if (worldSeabedAt(X + fx * a + qx * o, Z + fz * a + qz * o) > -dr) return true;
+    // （舵で回ると、船首と反対に船尾も振れるので、船体の外周をぐるりと見る）
+    const ring = _apHullRing(), now = _apRingNow();
+    for (let i = 0; i < ring.length; i++) { const [a, o, d] = ring[i]; if (!now[i] && worldSeabedAt(X + fx * a + qx * o, Z + fz * a + qz * o) > -d) return true; }
     return false;
 }
 //  自動航行中、ゆっくり（3 ノットより遅い）のときに、次の点への向きへ前で回ると岸壁・浅い所にかかるなら：
@@ -1232,7 +1270,7 @@ function _apBackOff(dt) {
         if (autopilot.leg >= R.length - 1 && T.dist < apShipLen() * 1.5) return false;           // 着く所の手前
         if (Math.abs(T.e) < 25) return false;
         if (!_apSwingBlocked(T.hT, Math.min(T.dist, apShipLen() * 0.5))) return false;
-        B = autopilot.backOff = { x: physics.cgWorldX, z: physics.cgWorldZ, t: 0, chk: 0, mode: _apSternBlocked() ? 'fill' : 'back', dir: 1, s: Math.sign(T.e) || 1, swT: 0, best: Math.abs(T.e), bestT: 0 };
+        B = autopilot.backOff = { x: physics.cgWorldX, z: physics.cgWorldZ, t: 0, chk: 0, mode: _apBackBlocked() ? 'fill' : 'back', dir: 1, s: Math.sign(T.e) || 1, swT: 0, best: Math.abs(T.e), bestT: 0 };
     }
     B.t += dt; B.chk += dt;
     const T = target();
@@ -1242,8 +1280,8 @@ function _apBackOff(dt) {
         const moved = Math.hypot(physics.cgWorldX - B.x, physics.cgWorldZ - B.z), maxBack = Math.min(3000, 10 * apShipLen());
         if (B.chk >= 1) {
             B.chk = 0;
-            if (!_apSwingBlocked(T.hT, apShipLen() * 0.5)) { autopilot.backOff = null; _apMsg(''); return false; }
-            if (moved > maxBack || _apSternBlocked()) { B.mode = 'fill'; B.dir = 1; B.s = Math.sign(T.e) || B.s; B.swT = 0; }
+            // 回れる所まで下がった・これ以上は下がれない：舵いっぱいで回る（ふさがれば切り返す）。向いたら自動航行へ戻す
+            if (!_apSwingBlocked(T.hT, apShipLen() * 0.5) || moved > maxBack || _apBackBlocked()) { B.mode = 'fill'; B.dir = 1; B.s = Math.sign(T.e) || B.s; B.swT = 0; }
         }
         if (B.mode === 'back') {
             _apOrder(B.t > 40 && (physics.speed || 0) > -1 ? -2 : -1);
@@ -1253,9 +1291,10 @@ function _apBackOff(dt) {
     }
     // 切り返し
     const e = T.e;
-    if (Math.abs(e) < 20 || (B.chk >= 1 && !_apSwingBlocked(T.hT, apShipLen() * 0.5) && (B.chk = 0, true))) {
-        autopilot.backOff = null; _apOrder(0); _apMsg(''); return false;
-    }
+    // （切り返しは、次の点の方をほぼ向くまで続ける：途中で舵だけに戻すと、回り切れずにまた止まる・浅い所にかかる）
+    // （向いたら、後ろへの行き足が止まってから戻す：後ろへ惰性で動いたまま渡すと、そのまま浅い所へ下がっていた）
+    if (Math.abs(e) < 20 && (physics.speed || 0) > -0.3) { autopilot.backOff = null; autopilot.boHold = 30; _apOrder(0); _apMsg(''); return false; }
+    if (Math.abs(e) < 20) B.dir = 1;
     if (B.chk >= 1) B.chk = 0;
     // 向きが変わらなくなったら（両方ふさがって動けない）、やめる
     if (Math.abs(e) < B.best - 3) { B.best = Math.abs(e); B.bestT = B.t; }
@@ -1263,7 +1302,8 @@ function _apBackOff(dt) {
     B.swT += dt;
     // 先を見る長さ：止まるまでに進む分も入れて（大きな船は、機関を逆にしてもしばらく惰性で進む）
     const v = (physics.speed || 0) * 0.514, look = 40 + Math.abs(v) * 60;
-    if (B.swT > 4 && _apPoseBlocked(B.dir * look, B.s)) { B.dir = -B.dir; B.swT = 0; }
+    // （舵が効くまでの遅れで、思ったより回らずにまっすぐ進むこともあるので、まっすぐ進んだ場合も見る）
+    if (B.swT > 4 && (_apPoseBlocked(B.dir * look, B.s) || _apPoseBlocked(B.dir * look, 0))) { B.dir = -B.dir; B.swT = 0; }
     // 前進は舵を回る向きへ、後進は舵を反対へ（17-main-loop.js：回る速さ ＝ −速さ ×舵角。同じ向きへ回り続ける）
     // 舵は、実際に動いている向きで決める（機関を逆にしても惰性で動いている間も、同じ向きへ回り続けるように）
     const goingRight = Math.sign(physics.speed || 0) === B.dir;
@@ -1474,7 +1514,7 @@ function updateAutopilot(t, dt) {
         }
         // 後ろの港口へ出るとき：船の長さだけ下がっても、前へ回ると岸壁・浅い所にかかるなら、回れる所までさらに下がる
         if (S.back && S.moved >= S.need && Number.isFinite(S.hOut) && S.moved < Math.min(3000, 10 * apShipLen())
-            && _apSwingBlocked(S.hOut, apShipLen() * 0.5) && !_apSternBlocked()) { S.need = S.moved + 25; S.more = true; }
+            && _apSwingBlocked(S.hOut, apShipLen() * 0.5) && !_apBackBlocked()) { S.need = S.moved + 25; S.more = true; }
         if (S.back && S.moved < S.need) {
             S.v = Math.min(1.2, S.v + 0.05 * d, Math.max(0.2, (S.need - S.moved) * 0.05));
             const step = Math.min(S.need - S.moved, S.v * d);
