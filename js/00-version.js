@@ -150,7 +150,8 @@
 //               自分の船は自動航行中に自動で鳴らす・返す。行き会い・追い越しでは減速しない（追い越しは相手の左舷側を通る）。
 // 0.03.013.030 進路が重なる船への警告信号（短音 5 回）・他の船の近くでの変針の信号（右へ短音 1 回・左へ 2 回、自分の船も自動で）。他の船も物理早送りで進む。
 // 0.03.013.031 他の船とぶつかる（すり抜けない：押し合い・跳ね返り・ぶつかった船は機関を止める。他の船どうしも）。遠くからよけ始めた相手にも近くで合図（他の船どうしも）。止まっている船は右によけて通る。
-var APP_VERSION = '0.03.013.031';
+// 0.03.013.032 他の船の名前を実際の綴りに（Queen Mary・Kaiser Wilhelm der Grosse など）。軽量化：昼はブルームの抽出（シーン全体をもう一度描く）をしない、保存した船のモデルを材質ごとにまとめる（Olympic 535→31 部品）・5km より先はふつうの形・影は 2km 以内だけ。
+var APP_VERSION = '0.03.013.032';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

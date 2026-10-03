@@ -190,6 +190,13 @@ function updateBloomForWeather() {
     const wet = haze * 0.04 + rain * 0.6 + fog * 1.0;
     const k = 1 - THREE.MathUtils.smoothstep(wet, 0.08, 0.5);
     bloomPass.strength = bloomBaseStrength * k;
+    // 昼（窓・甲板の灯りが消えていて、稲妻も無い）は、にじませる光が無いので抽出しない。
+    // 抽出のパスはシーン全体（船・陸・海面）をもう一度描くので、昼はこれだけで描く量がほぼ半分になる
+    const night = typeof lightingNightFactor === 'number' ? lightingNightFactor : 1;
+    const manualLights = typeof glbLightAutoMode !== 'undefined' && !glbLightAutoMode;
+    const strike = typeof _lightning !== 'undefined' && _lightning && _lightning.strike;
+    const glow = typeof _alGlowFactor !== 'undefined' ? _alGlowFactor : 0;
+    if (night < 0.02 && !manualLights && !strike && glow < 0.01) return false;
     return k > 0.02;
 }
 function setBloomRadius(v)     { if (bloomPass) bloomPass.radius     = v; }

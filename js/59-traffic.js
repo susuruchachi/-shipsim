@@ -23,6 +23,8 @@ const TF_FAR_DT = 2;            // 遠くの船を進める間隔[秒]
 const TF_SUB = 0.25;            // 近くの船を進める刻み[秒]（物理早送りのとき、1 フレームを何回かに分ける）
 const TF_DT_MAX = 3;            // 1 フレームで進める物理の時間の上限[秒]
 const TF_SIG_NEAR = 3000;
+const TF_SAVED_FAR = 5000;      // 保存した船のモデルで描く範囲[m]（その先はふつうの形）
+const TF_SHADOW_NEAR = 2000;    // 他の船が影を落とす範囲[m]
 const TF_HIT_STOP = 90;         // ぶつかった船が機関を止めている時間[秒]       // 変針の信号を鳴らす、他の船との距離[m]
 const traffic = {
     on: true, density: 'normal', era: 'mix', horn: true,
@@ -82,22 +84,22 @@ const TF_RANDOM_FUN = [0x15161a, 0xc8401e, 0xd29a3c, 0x1d3557, 0x2e7d3c, 0xd9c23
 
 // ── 名前（決まった船のほかは、ここから選ぶ）──
 const TF_NAMES = {
-    liner: ['カレドニア', 'カメロニア', 'コロンビア', 'ミネワスカ', 'ミネトンカ', 'ラップランド', 'ゼーラント', 'フィンランド', 'オリノコ', 'アラビック', 'キムリック', 'ペルシック', 'ルニック', 'カナダ', 'ドミニオン', 'ヴィクトリアン', 'ヴァージニアン', 'ティニシアン', 'グランピアン', 'ヘスペリアン'],
-    coastal: ['ハーヴァード', 'イェール', 'プリシラ', 'コモンウェルス', 'ピューリタン', 'プロヴィデンス', 'カルヴィン・オースティン', 'ガバナー・ディングリー', 'ジェファーソン', 'ジェームズタウン', 'ヨークタウン', 'アラパホー', 'コマンチ', 'アパッチ', 'イロコイ', 'ミョハンク', 'ハミルトン', 'メリマック'],
-    steamer: ['イースタン・スター', 'ノーザン・クイーン', 'アトランティック・トレーダー', 'ミスティック', 'ブルー・リッジ', 'ポトマック', 'ハドソン', 'デラウェア', 'サスケハナ', 'アパラチー', 'ケネベック', 'ペノブスコット', 'ナンタケット', 'コネチカット', 'チャタム', 'ワバッシュ', 'オンタリオ', 'ケンタッキー'],
-    dreadnought: ['テキサス', 'ニューヨーク', 'ワイオミング', 'アーカンソー', 'フロリダ', 'ユタ', 'デラウェア', 'ノースダコタ', 'ミシガン', 'サウスカロライナ'],
-    cruiser: ['ブルックリン', 'オリンピア', 'シカゴ', 'ボストン', 'アトランタ', 'ローリー', 'シンシナティ', 'リッチモンド', 'ノーフォーク', 'ロンドン', 'ヨーク'],
-    destroyer: ['ファラガット', 'ディケーター', 'ポーター', 'ベインブリッジ', 'ローレンス', 'マクドノー', 'ホプキンス', 'ウィップル', 'トラクスタン', 'ストリンガム', 'スミス', 'プレストン', 'ポール・ジョーンズ', 'リード'],
-    cruise: ['オーシャン・ドリーム', 'シー・プリンセス', 'アトランティック・スター', 'ノーザン・ライツ', 'エメラルド・ベイ', 'サンセット・クイーン', 'ハーモニー', 'セレナーデ', 'ルミナス', 'オーロラ'],
-    ferry: ['シティ・オブ・ポートランド', 'ブルーノーズ', 'カスコ・ベイ', 'ケープ・メイ', 'ナンタケット・ドーン', 'アイランド・クイーン', 'ハイランダー', 'セント・コロンバ'],
-    container: ['アトランティック・コンテナ', 'ポート・エクスプレス', 'ハーバー・ブリッジ', 'オーシャン・トレーダー', 'スター・ライナー', 'ブルー・ホライズン', 'メリディアン', 'エバー・ブライト', 'マースク・ヴァージニア', 'ノース・ゲート'],
-    tanker: ['ガルフ・スター', 'ペトロ・アトランティック', 'デルタ・クイーン', 'アトランティック・フレイム', 'ノース・シー・スピリット', 'オーシャン・ペトロ'],
-    bulk: ['ケープ・ストーン', 'アイアン・デューク', 'コール・ハーバー', 'グレイン・クイーン', 'ストーン・ヘイヴン', 'オア・トレーダー'],
-    carrier: ['エンタープライズ', 'レンジャー', 'ワスプ', 'ホーネット', 'ヨークタウン', 'サラトガ'],
-    fishing: ['メアリー・アン', 'グッド・ホープ', 'シー・スワロー', 'リトル・ジョン', 'ノーザン・ライト', 'スリー・ブラザーズ', 'オーシャン・ベル', 'セント・アンドリュー', 'ラッキー・スター', 'フェイス', 'ヘレン・B', 'ガートルード'],
+    liner: ['Caledonia', 'Cameronia', 'Columbia', 'Minnewaska', 'Minnetonka', 'Lapland', 'Zeeland', 'Finland', 'Orinoco', 'Arabic', 'Cymric', 'Persic', 'Runic', 'Canada', 'Dominion', 'Victorian', 'Virginian', 'Tunisian', 'Grampian', 'Hesperian'],
+    coastal: ['Harvard', 'Yale', 'Priscilla', 'Commonwealth', 'Puritan', 'Providence', 'Calvin Austin', 'Governor Dingley', 'Jefferson', 'Jamestown', 'Yorktown', 'Arapahoe', 'Comanche', 'Apache', 'Iroquois', 'Mohawk', 'Hamilton', 'Merrimack'],
+    steamer: ['Eastern Star', 'Northern Queen', 'Atlantic Trader', 'Mystic', 'Blue Ridge', 'Potomac', 'Hudson', 'Delaware', 'Susquehanna', 'Apalachee', 'Kennebec', 'Penobscot', 'Nantucket', 'Connecticut', 'Chatham', 'Wabash', 'Ontario', 'Kentucky'],
+    dreadnought: ['USS Texas', 'USS New York', 'USS Wyoming', 'USS Arkansas', 'USS Florida', 'USS Utah', 'USS Delaware', 'USS North Dakota', 'USS Michigan', 'USS South Carolina'],
+    cruiser: ['USS Brooklyn', 'USS Olympia', 'USS Chicago', 'USS Boston', 'USS Atlanta', 'USS Raleigh', 'USS Cincinnati', 'USS Richmond', 'USS Norfolk', 'HMS London', 'HMS York'],
+    destroyer: ['USS Farragut', 'USS Decatur', 'USS Porter', 'USS Bainbridge', 'USS Lawrence', 'USS Macdonough', 'USS Hopkins', 'USS Whipple', 'USS Truxtun', 'USS Stringham', 'USS Smith', 'USS Preston', 'USS Paul Jones', 'USS Reid'],
+    cruise: ['Ocean Dream', 'Sea Princess', 'Atlantic Star', 'Northern Lights', 'Emerald Bay', 'Sunset Queen', 'Harmony', 'Serenade', 'Luminous', 'Aurora'],
+    ferry: ['City of Portland', 'Bluenose', 'Casco Bay', 'Cape May', 'Nantucket Dawn', 'Island Queen', 'Highlander', 'St. Columba'],
+    container: ['Atlantic Container', 'Port Express', 'Harbour Bridge', 'Ocean Trader', 'Star Liner', 'Blue Horizon', 'Meridian', 'Ever Bright', 'Maersk Virginia', 'North Gate'],
+    tanker: ['Gulf Star', 'Petro Atlantic', 'Delta Queen', 'Atlantic Flame', 'North Sea Spirit', 'Ocean Petro'],
+    bulk: ['Cape Stone', 'Iron Duke', 'Coal Harbour', 'Grain Queen', 'Stonehaven', 'Ore Trader'],
+    carrier: ['USS Enterprise', 'USS Ranger', 'USS Wasp', 'USS Hornet', 'USS Yorktown', 'USS Saratoga'],
+    fishing: ['Mary Ann', 'Good Hope', 'Sea Swallow', 'Little John', 'Northern Light', 'Three Brothers', 'Ocean Belle', 'St. Andrew', 'Lucky Star', 'Faith', 'Helen B.', 'Gertrude'],
 };
-// 作った世界の船の名前（〇〇丸）
-const TF_GEN_SYL = ['あさ', 'しお', 'なみ', 'かぜ', 'ほし', 'つき', 'ひの', 'うみ', 'やま', 'はや', 'しら', 'あお', 'くろ', 'みな', 'たか', 'あけ', 'わか', 'ふじ', 'さく', 'すず'];
+// 作った世界の船の名前（〇〇丸：ローマ字で ○○ Maru）
+const TF_GEN_SYL = ['asa', 'shio', 'nami', 'kaze', 'hoshi', 'tsuki', 'hino', 'umi', 'yama', 'haya', 'shira', 'ao', 'kuro', 'mina', 'taka', 'ake', 'waka', 'fuji', 'saku', 'suzu'];
 
 // ── 外洋の出入口（現実世界の地図の外へ行く・地図の外から来る船）──
 const TF_GATES = {
@@ -124,56 +126,56 @@ const TF_GATES = {
 const TF_SERVICES = {
     useast: [
         // 大西洋航路（ニューヨーク）
-        { name: 'アドリアティック', line: 'ホワイト・スター・ライン', cls: 'liner', L: 222, B: 23, d: 9.4, kn: 17, fun: 2, liv: 'whitestar', route: ['g:eu', 'ニューヨーク港 59番埠頭（ホワイト・スター・ライン）（南側）'] },
-        { name: 'セドリック', line: 'ホワイト・スター・ライン', cls: 'liner', L: 213, B: 23, d: 9.4, kn: 16, fun: 2, liv: 'whitestar', route: ['ニューヨーク港 60番埠頭（ホワイト・スター・ライン）', 'g:eu'] },
-        { name: 'バルティック', line: 'ホワイト・スター・ライン', cls: 'liner', L: 222, B: 23, d: 9.4, kn: 16, fun: 2, liv: 'whitestar', route: ['g:eu', 'ニューヨーク港 59番埠頭（ホワイト・スター・ライン）（北側）'] },
-        { name: 'ルシタニア', line: 'キュナード・ライン', cls: 'liner', L: 240, B: 27, d: 10.2, kn: 24, fun: 4, liv: 'cunard', route: ['ニューヨーク港 54番埠頭（キュナード・ライン）（北側）', 'g:eu'] },
-        { name: 'カロニア', line: 'キュナード・ライン', cls: 'liner', L: 206, B: 22, d: 9.1, kn: 18, fun: 2, liv: 'cunard', route: ['g:eu', 'ニューヨーク港 56番埠頭（キュナード・ライン）'] },
-        { name: 'ラ・プロヴァンス', line: 'フレンチ・ライン', cls: 'liner', L: 191, B: 20, d: 8.5, kn: 21, fun: 2, liv: 'cgt', route: ['ニューヨーク港 57番埠頭（フレンチ・ライン）', 'g:eu'] },
-        { name: 'アメリカ', line: 'ハンブルク・アメリカ・ライン', cls: 'liner', L: 213, B: 23, d: 9.5, kn: 18, fun: 2, liv: 'hapag', route: ['g:eu', 'ニューヨーク港 ホーボーケン（ハンブルク・アメリカ・ライン）'] },
-        { name: 'カイザー・ヴィルヘルム・デア・グロッセ', line: '北ドイツ・ロイド', cls: 'liner', L: 200, B: 20, d: 8.8, kn: 22, fun: 4, liv: 'ndl', route: ['ニューヨーク港 ホーボーケン（北ドイツ・ロイド）', 'g:eu'] },
-        { name: 'ロッテルダム', line: 'ホランド・アメリカ・ライン', cls: 'liner', L: 203, B: 23, d: 9.5, kn: 17, fun: 1, liv: 'hal', route: ['g:eu', 'ニューヨーク港 ホーボーケン（ホランド・アメリカ・ライン）'] },
-        { name: 'レックス', line: 'イタリアン・ライン', cls: 'liner', L: 268, B: 30, d: 10.0, kn: 26, fun: 2, liv: 'italia', route: ['ニューヨーク港 84番埠頭（イタリアン・ライン）', 'g:eu'] },
-        { name: 'クイーン・メリー', line: 'キュナード・ライン', cls: 'liner', L: 310, B: 36, d: 10.4, kn: 28, fun: 3, liv: 'cunard', route: ['g:eu', 'ニューヨーク港 90番埠頭（キュナード・ライン）（南側）'] },
-        { name: 'ユナイテッド・ステーツ', line: 'ユナイテッド・ステーツ・ライン', cls: 'liner', L: 302, B: 31, d: 9.6, kn: 30, fun: 2, liv: 'usl', route: ['ニューヨーク港 86番埠頭（ユナイテッド・ステーツ・ライン）', 'g:eu'] },
+        { name: 'Adriatic', line: 'ホワイト・スター・ライン', cls: 'liner', L: 222, B: 23, d: 9.4, kn: 17, fun: 2, liv: 'whitestar', route: ['g:eu', 'ニューヨーク港 59番埠頭（ホワイト・スター・ライン）（南側）'] },
+        { name: 'Cedric', line: 'ホワイト・スター・ライン', cls: 'liner', L: 213, B: 23, d: 9.4, kn: 16, fun: 2, liv: 'whitestar', route: ['ニューヨーク港 60番埠頭（ホワイト・スター・ライン）', 'g:eu'] },
+        { name: 'Baltic', line: 'ホワイト・スター・ライン', cls: 'liner', L: 222, B: 23, d: 9.4, kn: 16, fun: 2, liv: 'whitestar', route: ['g:eu', 'ニューヨーク港 59番埠頭（ホワイト・スター・ライン）（北側）'] },
+        { name: 'Lusitania', line: 'キュナード・ライン', cls: 'liner', L: 240, B: 27, d: 10.2, kn: 24, fun: 4, liv: 'cunard', route: ['ニューヨーク港 54番埠頭（キュナード・ライン）（北側）', 'g:eu'] },
+        { name: 'Caronia', line: 'キュナード・ライン', cls: 'liner', L: 206, B: 22, d: 9.1, kn: 18, fun: 2, liv: 'cunard', route: ['g:eu', 'ニューヨーク港 56番埠頭（キュナード・ライン）'] },
+        { name: 'La Provence', line: 'フレンチ・ライン', cls: 'liner', L: 191, B: 20, d: 8.5, kn: 21, fun: 2, liv: 'cgt', route: ['ニューヨーク港 57番埠頭（フレンチ・ライン）', 'g:eu'] },
+        { name: 'Amerika', line: 'ハンブルク・アメリカ・ライン', cls: 'liner', L: 213, B: 23, d: 9.5, kn: 18, fun: 2, liv: 'hapag', route: ['g:eu', 'ニューヨーク港 ホーボーケン（ハンブルク・アメリカ・ライン）'] },
+        { name: 'Kaiser Wilhelm der Grosse', line: '北ドイツ・ロイド', cls: 'liner', L: 200, B: 20, d: 8.8, kn: 22, fun: 4, liv: 'ndl', route: ['ニューヨーク港 ホーボーケン（北ドイツ・ロイド）', 'g:eu'] },
+        { name: 'Rotterdam', line: 'ホランド・アメリカ・ライン', cls: 'liner', L: 203, B: 23, d: 9.5, kn: 17, fun: 1, liv: 'hal', route: ['g:eu', 'ニューヨーク港 ホーボーケン（ホランド・アメリカ・ライン）'] },
+        { name: 'Rex', line: 'イタリアン・ライン', cls: 'liner', L: 268, B: 30, d: 10.0, kn: 26, fun: 2, liv: 'italia', route: ['ニューヨーク港 84番埠頭（イタリアン・ライン）', 'g:eu'] },
+        { name: 'Queen Mary', line: 'キュナード・ライン', cls: 'liner', L: 310, B: 36, d: 10.4, kn: 28, fun: 3, liv: 'cunard', route: ['g:eu', 'ニューヨーク港 90番埠頭（キュナード・ライン）（南側）'] },
+        { name: 'United States', line: 'ユナイテッド・ステーツ・ライン', cls: 'liner', L: 302, B: 31, d: 9.6, kn: 30, fun: 2, liv: 'usl', route: ['ニューヨーク港 86番埠頭（ユナイテッド・ステーツ・ライン）', 'g:eu'] },
         // フィラデルフィア・ボルティモア・ボストンの大西洋航路
-        { name: 'フリースラント', line: 'アメリカン・ライン', cls: 'liner', L: 133, B: 15.5, d: 7.5, kn: 15, fun: 1, liv: 'american', route: ['g:eu', 'フィラデルフィア港 ワシントン通り埠頭（アメリカン・ライン／レッド・スター・ライン）'] },
-        { name: 'ヴァダーランド', line: 'レッド・スター・ライン', cls: 'liner', L: 170, B: 18, d: 8.2, kn: 15, fun: 1, liv: 'redstar', route: ['フィラデルフィア港 ワシントン通り埠頭（アメリカン・ライン／レッド・スター・ライン）', 'g:eu'] },
-        { name: 'ブランデンブルク', line: '北ドイツ・ロイド', cls: 'liner', L: 145, B: 17, d: 7.8, kn: 13, fun: 1, liv: 'ndl', route: ['g:eu', 'ボルティモア港 ローカスト・ポイント 8番埠頭（北ドイツ・ロイド／移民の埠頭）'] },
-        { name: 'サクソニア', line: 'キュナード・ライン', cls: 'liner', L: 176, B: 20, d: 8.5, kn: 15, fun: 1, liv: 'cunard', route: ['ボストン港 コモンウェルス埠頭（5番埠頭）', 'g:eu'] },
+        { name: 'Friesland', line: 'アメリカン・ライン', cls: 'liner', L: 133, B: 15.5, d: 7.5, kn: 15, fun: 1, liv: 'american', route: ['g:eu', 'フィラデルフィア港 ワシントン通り埠頭（アメリカン・ライン／レッド・スター・ライン）'] },
+        { name: 'Vaderland', line: 'レッド・スター・ライン', cls: 'liner', L: 170, B: 18, d: 8.2, kn: 15, fun: 1, liv: 'redstar', route: ['フィラデルフィア港 ワシントン通り埠頭（アメリカン・ライン／レッド・スター・ライン）', 'g:eu'] },
+        { name: 'Brandenburg', line: '北ドイツ・ロイド', cls: 'liner', L: 145, B: 17, d: 7.8, kn: 13, fun: 1, liv: 'ndl', route: ['g:eu', 'ボルティモア港 ローカスト・ポイント 8番埠頭（北ドイツ・ロイド／移民の埠頭）'] },
+        { name: 'Saxonia', line: 'キュナード・ライン', cls: 'liner', L: 176, B: 20, d: 8.5, kn: 15, fun: 1, liv: 'cunard', route: ['ボストン港 コモンウェルス埠頭（5番埠頭）', 'g:eu'] },
         // 沿岸の客船
-        { name: 'ハーヴァード', line: 'メトロポリタン・ライン', cls: 'coastal', L: 124, B: 19, d: 5, kn: 19, fun: 3, liv: 'coastal', route: ['ニューヨーク港', 'ボストン港'] },
-        { name: 'イェール', line: 'メトロポリタン・ライン', cls: 'coastal', L: 124, B: 19, d: 5, kn: 19, fun: 3, liv: 'coastal', route: ['ボストン港', 'ニューヨーク港'] },
-        { name: 'プリシラ', line: 'フォール・リヴァー・ライン', cls: 'coastal', L: 134, B: 16, d: 4.5, kn: 17, fun: 2, liv: 'coastal', route: ['ニューヨーク港', 'フォール・リヴァー港'] },
-        { name: 'ジェームズタウン', line: 'オールド・ドミニオン・ライン', cls: 'coastal', L: 110, B: 14, d: 5.5, kn: 15, fun: 1, liv: 'coastal', route: ['ニューヨーク港', 'ノーフォーク港（ハンプトン・ローズ）'] },
-        { name: 'アラパホー', line: 'クライド・ライン', cls: 'coastal', L: 115, B: 14, d: 6, kn: 15, fun: 1, liv: 'american', route: ['ニューヨーク港', 'チャールストン港', 'ジャクソンヴィル港', 'チャールストン港'] },
-        { name: 'モロ・キャッスル', line: 'ウォード・ライン', cls: 'coastal', L: 155, B: 21, d: 7.5, kn: 20, fun: 2, liv: 'american', route: ['ニューヨーク港', 'ナッソー港', 'g:sa', 'ナッソー港'] },
-        { name: 'カルヴィン・オースティン', line: 'イースタン・スチームシップ', cls: 'coastal', L: 100, B: 15, d: 4.5, kn: 16, fun: 1, liv: 'coastal', route: ['ボストン港', 'ポートランド港（メイン）', 'セント・ジョン港', 'ポートランド港（メイン）'] },
+        { name: 'Harvard', line: 'メトロポリタン・ライン', cls: 'coastal', L: 124, B: 19, d: 5, kn: 19, fun: 3, liv: 'coastal', route: ['ニューヨーク港', 'ボストン港'] },
+        { name: 'Yale', line: 'メトロポリタン・ライン', cls: 'coastal', L: 124, B: 19, d: 5, kn: 19, fun: 3, liv: 'coastal', route: ['ボストン港', 'ニューヨーク港'] },
+        { name: 'Priscilla', line: 'フォール・リヴァー・ライン', cls: 'coastal', L: 134, B: 16, d: 4.5, kn: 17, fun: 2, liv: 'coastal', route: ['ニューヨーク港', 'フォール・リヴァー港'] },
+        { name: 'Jamestown', line: 'オールド・ドミニオン・ライン', cls: 'coastal', L: 110, B: 14, d: 5.5, kn: 15, fun: 1, liv: 'coastal', route: ['ニューヨーク港', 'ノーフォーク港（ハンプトン・ローズ）'] },
+        { name: 'Arapahoe', line: 'クライド・ライン', cls: 'coastal', L: 115, B: 14, d: 6, kn: 15, fun: 1, liv: 'american', route: ['ニューヨーク港', 'チャールストン港', 'ジャクソンヴィル港', 'チャールストン港'] },
+        { name: 'Morro Castle', line: 'ウォード・ライン', cls: 'coastal', L: 155, B: 21, d: 7.5, kn: 20, fun: 2, liv: 'american', route: ['ニューヨーク港', 'ナッソー港', 'g:sa', 'ナッソー港'] },
+        { name: 'Calvin Austin', line: 'イースタン・スチームシップ', cls: 'coastal', L: 100, B: 15, d: 4.5, kn: 16, fun: 1, liv: 'coastal', route: ['ボストン港', 'ポートランド港（メイン）', 'セント・ジョン港', 'ポートランド港（メイン）'] },
         // 海軍
-        { name: 'テキサス', line: 'アメリカ海軍', cls: 'dreadnought', L: 175, B: 29, d: 8.7, kn: 21, fun: 2, liv: 'navy', route: ['ノーフォーク港（ハンプトン・ローズ）', 'ニューヨーク港 ブルックリン海軍工廠', 'ボストン港', 'ニューヨーク港 ブルックリン海軍工廠'] },
-        { name: 'ニューヨーク', line: 'アメリカ海軍', cls: 'dreadnought', L: 175, B: 29, d: 8.7, kn: 21, fun: 2, liv: 'navy', route: ['ニューヨーク港 ブルックリン海軍工廠', 'ノーフォーク港（ハンプトン・ローズ）', 'フィラデルフィア港 フィラデルフィア海軍工廠（4番埠頭）', 'ノーフォーク港（ハンプトン・ローズ）'] },
+        { name: 'USS Texas', line: 'アメリカ海軍', cls: 'dreadnought', L: 175, B: 29, d: 8.7, kn: 21, fun: 2, liv: 'navy', route: ['ノーフォーク港（ハンプトン・ローズ）', 'ニューヨーク港 ブルックリン海軍工廠', 'ボストン港', 'ニューヨーク港 ブルックリン海軍工廠'] },
+        { name: 'USS New York', line: 'アメリカ海軍', cls: 'dreadnought', L: 175, B: 29, d: 8.7, kn: 21, fun: 2, liv: 'navy', route: ['ニューヨーク港 ブルックリン海軍工廠', 'ノーフォーク港（ハンプトン・ローズ）', 'フィラデルフィア港 フィラデルフィア海軍工廠（4番埠頭）', 'ノーフォーク港（ハンプトン・ローズ）'] },
     ],
     britain: [
-        { name: 'マジェスティック', line: 'ホワイト・スター・ライン', cls: 'liner', L: 177, B: 18, d: 7.6, kn: 20, fun: 2, liv: 'whitestar', route: ['サウサンプトン港 オーシャン・ドック（43/44番）', 'シェルブール軍港', 'コーク港', 'g:am', 'コーク港', 'シェルブール軍港'] },
-        { name: 'オーシャニック', line: 'ホワイト・スター・ライン', cls: 'liner', L: 215, B: 21, d: 9.6, kn: 19, fun: 2, liv: 'whitestar', route: ['g:am', 'コーク港', 'シェルブール軍港', 'サウサンプトン港 オーシャン・ドック（43/44番）', 'シェルブール軍港', 'コーク港'] },
-        { name: 'アドリアティック', line: 'ホワイト・スター・ライン', cls: 'liner', L: 222, B: 23, d: 9.4, kn: 17, fun: 2, liv: 'whitestar', route: ['サウサンプトン港 オーシャン・ドック（43/44番）', 'g:am'] },
-        { name: 'ルシタニア', line: 'キュナード・ライン', cls: 'liner', L: 240, B: 27, d: 10.2, kn: 24, fun: 4, liv: 'cunard', route: ['リヴァプール港', 'コーク港', 'g:am', 'コーク港'] },
-        { name: 'カンパニア', line: 'キュナード・ライン', cls: 'liner', L: 189, B: 20, d: 8.5, kn: 21, fun: 2, liv: 'cunard', route: ['g:am', 'コーク港', 'リヴァプール港', 'コーク港'] },
-        { name: 'カロニア', line: 'キュナード・ライン', cls: 'liner', L: 206, B: 22, d: 9.1, kn: 18, fun: 2, liv: 'cunard', route: ['リヴァプール港', 'g:am'] },
-        { name: 'カレドニア', line: 'アンカー・ライン', cls: 'liner', L: 160, B: 19, d: 8, kn: 16, fun: 2, liv: 'american', route: ['グラスゴー港', 'g:an'] },
-        { name: 'ヴィクトリアン', line: 'アラン・ライン', cls: 'liner', L: 165, B: 18, d: 8, kn: 18, fun: 1, liv: 'cgt', route: ['g:an', 'リヴァプール港'] },
-        { name: 'ニューヨーク', line: 'アメリカン・ライン', cls: 'liner', L: 170, B: 19, d: 8, kn: 20, fun: 3, liv: 'american', route: ['サウサンプトン港', 'シェルブール軍港', 'g:am', 'シェルブール軍港'] },
-        { name: 'カイザー・ヴィルヘルム2世', line: '北ドイツ・ロイド', cls: 'liner', L: 215, B: 22, d: 9.4, kn: 23, fun: 4, liv: 'ndl', route: ['g:ns', 'サウサンプトン港', 'シェルブール軍港', 'g:am', 'サウサンプトン港', 'g:ns'] },
+        { name: 'Majestic', line: 'ホワイト・スター・ライン', cls: 'liner', L: 177, B: 18, d: 7.6, kn: 20, fun: 2, liv: 'whitestar', route: ['サウサンプトン港 オーシャン・ドック（43/44番）', 'シェルブール軍港', 'コーク港', 'g:am', 'コーク港', 'シェルブール軍港'] },
+        { name: 'Oceanic', line: 'ホワイト・スター・ライン', cls: 'liner', L: 215, B: 21, d: 9.6, kn: 19, fun: 2, liv: 'whitestar', route: ['g:am', 'コーク港', 'シェルブール軍港', 'サウサンプトン港 オーシャン・ドック（43/44番）', 'シェルブール軍港', 'コーク港'] },
+        { name: 'Adriatic', line: 'ホワイト・スター・ライン', cls: 'liner', L: 222, B: 23, d: 9.4, kn: 17, fun: 2, liv: 'whitestar', route: ['サウサンプトン港 オーシャン・ドック（43/44番）', 'g:am'] },
+        { name: 'Lusitania', line: 'キュナード・ライン', cls: 'liner', L: 240, B: 27, d: 10.2, kn: 24, fun: 4, liv: 'cunard', route: ['リヴァプール港', 'コーク港', 'g:am', 'コーク港'] },
+        { name: 'Campania', line: 'キュナード・ライン', cls: 'liner', L: 189, B: 20, d: 8.5, kn: 21, fun: 2, liv: 'cunard', route: ['g:am', 'コーク港', 'リヴァプール港', 'コーク港'] },
+        { name: 'Caronia', line: 'キュナード・ライン', cls: 'liner', L: 206, B: 22, d: 9.1, kn: 18, fun: 2, liv: 'cunard', route: ['リヴァプール港', 'g:am'] },
+        { name: 'Caledonia', line: 'アンカー・ライン', cls: 'liner', L: 160, B: 19, d: 8, kn: 16, fun: 2, liv: 'american', route: ['グラスゴー港', 'g:an'] },
+        { name: 'Victorian', line: 'アラン・ライン', cls: 'liner', L: 165, B: 18, d: 8, kn: 18, fun: 1, liv: 'cgt', route: ['g:an', 'リヴァプール港'] },
+        { name: 'New York', line: 'アメリカン・ライン', cls: 'liner', L: 170, B: 19, d: 8, kn: 20, fun: 3, liv: 'american', route: ['サウサンプトン港', 'シェルブール軍港', 'g:am', 'シェルブール軍港'] },
+        { name: 'Kaiser Wilhelm II', line: '北ドイツ・ロイド', cls: 'liner', L: 215, B: 22, d: 9.4, kn: 23, fun: 4, liv: 'ndl', route: ['g:ns', 'サウサンプトン港', 'シェルブール軍港', 'g:am', 'サウサンプトン港', 'g:ns'] },
         // アイリッシュ海・イギリス海峡の連絡船
-        { name: 'ヒベルニア', line: 'ロンドン・ノース・ウェスタン鉄道', cls: 'coastal', L: 115, B: 13, d: 4.5, kn: 21, fun: 2, liv: 'coastal', route: ['ホーリーヘッド港', 'ダブリン港'] },
-        { name: 'ムナ', line: 'シティ・オブ・ダブリン汽船', cls: 'coastal', L: 115, B: 13, d: 4.5, kn: 22, fun: 2, liv: 'coastal', route: ['ダブリン港', 'ホーリーヘッド港'] },
-        { name: 'ヴァイキング', line: 'マン島汽船', cls: 'coastal', L: 110, B: 13, d: 4.5, kn: 22, fun: 3, liv: 'coastal', route: ['リヴァプール港', 'ダグラス港'] },
-        { name: 'ザ・クイーン', line: 'サウス・イースタン鉄道', cls: 'coastal', L: 94, B: 12, d: 4, kn: 21, fun: 2, liv: 'coastal', route: ['ドーヴァー港', 'カレー港'] },
-        { name: 'カレドニア', line: 'ロンドン・アンド・サウス・ウェスタン鉄道', cls: 'coastal', L: 90, B: 12, d: 4.2, kn: 19, fun: 2, liv: 'coastal', route: ['サウサンプトン港', 'ル・アーヴル貨物港'] },
-        { name: 'ベルファスト', line: 'ベルファスト汽船', cls: 'coastal', L: 100, B: 13, d: 4.8, kn: 18, fun: 1, liv: 'coastal', route: ['リヴァプール港', 'ベルファスト港'] },
+        { name: 'Hibernia', line: 'ロンドン・ノース・ウェスタン鉄道', cls: 'coastal', L: 115, B: 13, d: 4.5, kn: 21, fun: 2, liv: 'coastal', route: ['ホーリーヘッド港', 'ダブリン港'] },
+        { name: 'Munster', line: 'シティ・オブ・ダブリン汽船', cls: 'coastal', L: 115, B: 13, d: 4.5, kn: 22, fun: 2, liv: 'coastal', route: ['ダブリン港', 'ホーリーヘッド港'] },
+        { name: 'Viking', line: 'マン島汽船', cls: 'coastal', L: 110, B: 13, d: 4.5, kn: 22, fun: 3, liv: 'coastal', route: ['リヴァプール港', 'ダグラス港'] },
+        { name: 'The Queen', line: 'サウス・イースタン鉄道', cls: 'coastal', L: 94, B: 12, d: 4, kn: 21, fun: 2, liv: 'coastal', route: ['ドーヴァー港', 'カレー港'] },
+        { name: 'Caledonia', line: 'ロンドン・アンド・サウス・ウェスタン鉄道', cls: 'coastal', L: 90, B: 12, d: 4.2, kn: 19, fun: 2, liv: 'coastal', route: ['サウサンプトン港', 'ル・アーヴル貨物港'] },
+        { name: 'Belfast', line: 'ベルファスト汽船', cls: 'coastal', L: 100, B: 13, d: 4.8, kn: 18, fun: 1, liv: 'coastal', route: ['リヴァプール港', 'ベルファスト港'] },
         // 海軍
-        { name: 'ドレッドノート', line: 'イギリス海軍', cls: 'dreadnought', L: 160, B: 25, d: 8.9, kn: 21, fun: 2, liv: 'navy', route: ['ポーツマス軍港', 'プリマス軍港', 'ロサイス軍港', 'プリマス軍港'] },
-        { name: 'ヴァンガード', line: 'イギリス海軍', cls: 'dreadnought', L: 163, B: 26, d: 8.7, kn: 21, fun: 2, liv: 'navy', route: ['ロサイス軍港', 'ポーツマス軍港'] },
+        { name: 'HMS Dreadnought', line: 'イギリス海軍', cls: 'dreadnought', L: 160, B: 25, d: 8.9, kn: 21, fun: 2, liv: 'navy', route: ['ポーツマス軍港', 'プリマス軍港', 'ロサイス軍港', 'プリマス軍港'] },
+        { name: 'HMS Vanguard', line: 'イギリス海軍', cls: 'dreadnought', L: 163, B: 26, d: 8.7, kn: 21, fun: 2, liv: 'navy', route: ['ロサイス軍港', 'ポーツマス軍港'] },
     ],
 };
 // 北大西洋（1 つの世界）：大西洋航路の客船は、ヨーロッパの港とアメリカの港の間をそのまま行き来する
@@ -182,29 +184,29 @@ const TF_SERVICES = {
     const SOT = 'サウサンプトン港 オーシャン・ドック（43/44番）', CHB = 'シェルブール軍港', QT = 'コーク港', LIV = 'リヴァプール港';
     const NY = (k) => 'ニューヨーク港 ' + k;
     const liners = [
-        { name: 'マジェスティック', line: 'ホワイト・スター・ライン', cls: 'liner', L: 177, B: 18, d: 7.6, kn: 20, fun: 2, liv: 'whitestar', route: [SOT, CHB, QT, NY('59番埠頭（ホワイト・スター・ライン）（北側）'), QT, CHB] },
-        { name: 'オーシャニック', line: 'ホワイト・スター・ライン', cls: 'liner', L: 215, B: 21, d: 9.6, kn: 19, fun: 2, liv: 'whitestar', route: [NY('60番埠頭（ホワイト・スター・ライン）'), QT, CHB, SOT, CHB, QT] },
-        { name: 'アドリアティック', line: 'ホワイト・スター・ライン', cls: 'liner', L: 222, B: 23, d: 9.4, kn: 17, fun: 2, liv: 'whitestar', route: [SOT, CHB, QT, NY('59番埠頭（ホワイト・スター・ライン）（南側）'), QT, CHB] },
-        { name: 'セドリック', line: 'ホワイト・スター・ライン', cls: 'liner', L: 213, B: 23, d: 9.4, kn: 16, fun: 2, liv: 'whitestar', route: [LIV, QT, NY('60番埠頭（ホワイト・スター・ライン）'), QT] },
-        { name: 'バルティック', line: 'ホワイト・スター・ライン', cls: 'liner', L: 222, B: 23, d: 9.4, kn: 16, fun: 2, liv: 'whitestar', route: [NY('59番埠頭（ホワイト・スター・ライン）（北側）'), QT, LIV, QT] },
-        { name: 'ルシタニア', line: 'キュナード・ライン', cls: 'liner', L: 240, B: 27, d: 10.2, kn: 24, fun: 4, liv: 'cunard', route: [LIV, QT, NY('54番埠頭（キュナード・ライン）（北側）'), QT] },
-        { name: 'カンパニア', line: 'キュナード・ライン', cls: 'liner', L: 189, B: 20, d: 8.5, kn: 21, fun: 2, liv: 'cunard', route: [NY('56番埠頭（キュナード・ライン）'), QT, LIV, QT] },
-        { name: 'カロニア', line: 'キュナード・ライン', cls: 'liner', L: 206, B: 22, d: 9.1, kn: 18, fun: 2, liv: 'cunard', route: [LIV, NY('56番埠頭（キュナード・ライン）')] },
-        { name: 'クイーン・メリー', line: 'キュナード・ライン', cls: 'liner', L: 310, B: 36, d: 10.4, kn: 28, fun: 3, liv: 'cunard', route: [SOT, CHB, NY('90番埠頭（キュナード・ライン）（南側）'), CHB] },
-        { name: 'サクソニア', line: 'キュナード・ライン', cls: 'liner', L: 176, B: 20, d: 8.5, kn: 15, fun: 1, liv: 'cunard', route: [LIV, QT, 'ボストン港 コモンウェルス埠頭（5番埠頭）', QT] },
-        { name: 'ラ・プロヴァンス', line: 'フレンチ・ライン', cls: 'liner', L: 191, B: 20, d: 8.5, kn: 21, fun: 2, liv: 'cgt', route: ['ル・アーヴル貨物港', NY('57番埠頭（フレンチ・ライン）')] },
-        { name: 'アメリカ', line: 'ハンブルク・アメリカ・ライン', cls: 'liner', L: 213, B: 23, d: 9.5, kn: 18, fun: 2, liv: 'hapag', route: ['g:ns', 'サウサンプトン港', CHB, NY('ホーボーケン（ハンブルク・アメリカ・ライン）'), CHB, 'サウサンプトン港'] },
-        { name: 'カイザー・ヴィルヘルム・デア・グロッセ', line: '北ドイツ・ロイド', cls: 'liner', L: 200, B: 20, d: 8.8, kn: 22, fun: 4, liv: 'ndl', route: [NY('ホーボーケン（北ドイツ・ロイド）'), CHB, 'サウサンプトン港', 'g:ns', 'サウサンプトン港', CHB] },
-        { name: 'カイザー・ヴィルヘルム2世', line: '北ドイツ・ロイド', cls: 'liner', L: 215, B: 22, d: 9.4, kn: 23, fun: 4, liv: 'ndl', route: ['g:ns', 'サウサンプトン港', CHB, NY('ホーボーケン（北ドイツ・ロイド）'), CHB, 'サウサンプトン港'] },
-        { name: 'ブランデンブルク', line: '北ドイツ・ロイド', cls: 'liner', L: 145, B: 17, d: 7.8, kn: 13, fun: 1, liv: 'ndl', route: ['g:ns', 'ボルティモア港 ローカスト・ポイント 8番埠頭（北ドイツ・ロイド／移民の埠頭）'] },
-        { name: 'ロッテルダム', line: 'ホランド・アメリカ・ライン', cls: 'liner', L: 203, B: 23, d: 9.5, kn: 17, fun: 1, liv: 'hal', route: ['g:ns', NY('ホーボーケン（ホランド・アメリカ・ライン）')] },
-        { name: 'ヴァダーランド', line: 'レッド・スター・ライン', cls: 'liner', L: 170, B: 18, d: 8.2, kn: 15, fun: 1, liv: 'redstar', route: ['g:ns', 'フィラデルフィア港 ワシントン通り埠頭（アメリカン・ライン／レッド・スター・ライン）'] },
-        { name: 'フリースラント', line: 'アメリカン・ライン', cls: 'liner', L: 133, B: 15.5, d: 7.5, kn: 15, fun: 1, liv: 'american', route: [LIV, 'フィラデルフィア港 ワシントン通り埠頭（アメリカン・ライン／レッド・スター・ライン）'] },
-        { name: 'ニューヨーク', line: 'アメリカン・ライン', cls: 'liner', L: 170, B: 19, d: 8, kn: 20, fun: 3, liv: 'american', route: ['サウサンプトン港', CHB, 'ニューヨーク港', CHB] },
-        { name: 'ユナイテッド・ステーツ', line: 'ユナイテッド・ステーツ・ライン', cls: 'liner', L: 302, B: 31, d: 9.6, kn: 30, fun: 2, liv: 'usl', route: [NY('86番埠頭（ユナイテッド・ステーツ・ライン）'), 'ル・アーヴル貨物港', SOT] },
-        { name: 'レックス', line: 'イタリアン・ライン', cls: 'liner', L: 268, B: 30, d: 10.0, kn: 26, fun: 2, liv: 'italia', route: ['g:med', NY('84番埠頭（イタリアン・ライン）')] },
-        { name: 'カレドニア', line: 'アンカー・ライン', cls: 'liner', L: 160, B: 19, d: 8, kn: 16, fun: 2, liv: 'american', route: ['グラスゴー港', 'ニューヨーク港'] },
-        { name: 'ヴィクトリアン', line: 'アラン・ライン', cls: 'liner', L: 165, B: 18, d: 8, kn: 18, fun: 1, liv: 'cgt', route: [LIV, 'g:gsl'] },
+        { name: 'Majestic', line: 'ホワイト・スター・ライン', cls: 'liner', L: 177, B: 18, d: 7.6, kn: 20, fun: 2, liv: 'whitestar', route: [SOT, CHB, QT, NY('59番埠頭（ホワイト・スター・ライン）（北側）'), QT, CHB] },
+        { name: 'Oceanic', line: 'ホワイト・スター・ライン', cls: 'liner', L: 215, B: 21, d: 9.6, kn: 19, fun: 2, liv: 'whitestar', route: [NY('60番埠頭（ホワイト・スター・ライン）'), QT, CHB, SOT, CHB, QT] },
+        { name: 'Adriatic', line: 'ホワイト・スター・ライン', cls: 'liner', L: 222, B: 23, d: 9.4, kn: 17, fun: 2, liv: 'whitestar', route: [SOT, CHB, QT, NY('59番埠頭（ホワイト・スター・ライン）（南側）'), QT, CHB] },
+        { name: 'Cedric', line: 'ホワイト・スター・ライン', cls: 'liner', L: 213, B: 23, d: 9.4, kn: 16, fun: 2, liv: 'whitestar', route: [LIV, QT, NY('60番埠頭（ホワイト・スター・ライン）'), QT] },
+        { name: 'Baltic', line: 'ホワイト・スター・ライン', cls: 'liner', L: 222, B: 23, d: 9.4, kn: 16, fun: 2, liv: 'whitestar', route: [NY('59番埠頭（ホワイト・スター・ライン）（北側）'), QT, LIV, QT] },
+        { name: 'Lusitania', line: 'キュナード・ライン', cls: 'liner', L: 240, B: 27, d: 10.2, kn: 24, fun: 4, liv: 'cunard', route: [LIV, QT, NY('54番埠頭（キュナード・ライン）（北側）'), QT] },
+        { name: 'Campania', line: 'キュナード・ライン', cls: 'liner', L: 189, B: 20, d: 8.5, kn: 21, fun: 2, liv: 'cunard', route: [NY('56番埠頭（キュナード・ライン）'), QT, LIV, QT] },
+        { name: 'Caronia', line: 'キュナード・ライン', cls: 'liner', L: 206, B: 22, d: 9.1, kn: 18, fun: 2, liv: 'cunard', route: [LIV, NY('56番埠頭（キュナード・ライン）')] },
+        { name: 'Queen Mary', line: 'キュナード・ライン', cls: 'liner', L: 310, B: 36, d: 10.4, kn: 28, fun: 3, liv: 'cunard', route: [SOT, CHB, NY('90番埠頭（キュナード・ライン）（南側）'), CHB] },
+        { name: 'Saxonia', line: 'キュナード・ライン', cls: 'liner', L: 176, B: 20, d: 8.5, kn: 15, fun: 1, liv: 'cunard', route: [LIV, QT, 'ボストン港 コモンウェルス埠頭（5番埠頭）', QT] },
+        { name: 'La Provence', line: 'フレンチ・ライン', cls: 'liner', L: 191, B: 20, d: 8.5, kn: 21, fun: 2, liv: 'cgt', route: ['ル・アーヴル貨物港', NY('57番埠頭（フレンチ・ライン）')] },
+        { name: 'Amerika', line: 'ハンブルク・アメリカ・ライン', cls: 'liner', L: 213, B: 23, d: 9.5, kn: 18, fun: 2, liv: 'hapag', route: ['g:ns', 'サウサンプトン港', CHB, NY('ホーボーケン（ハンブルク・アメリカ・ライン）'), CHB, 'サウサンプトン港'] },
+        { name: 'Kaiser Wilhelm der Grosse', line: '北ドイツ・ロイド', cls: 'liner', L: 200, B: 20, d: 8.8, kn: 22, fun: 4, liv: 'ndl', route: [NY('ホーボーケン（北ドイツ・ロイド）'), CHB, 'サウサンプトン港', 'g:ns', 'サウサンプトン港', CHB] },
+        { name: 'Kaiser Wilhelm II', line: '北ドイツ・ロイド', cls: 'liner', L: 215, B: 22, d: 9.4, kn: 23, fun: 4, liv: 'ndl', route: ['g:ns', 'サウサンプトン港', CHB, NY('ホーボーケン（北ドイツ・ロイド）'), CHB, 'サウサンプトン港'] },
+        { name: 'Brandenburg', line: '北ドイツ・ロイド', cls: 'liner', L: 145, B: 17, d: 7.8, kn: 13, fun: 1, liv: 'ndl', route: ['g:ns', 'ボルティモア港 ローカスト・ポイント 8番埠頭（北ドイツ・ロイド／移民の埠頭）'] },
+        { name: 'Rotterdam', line: 'ホランド・アメリカ・ライン', cls: 'liner', L: 203, B: 23, d: 9.5, kn: 17, fun: 1, liv: 'hal', route: ['g:ns', NY('ホーボーケン（ホランド・アメリカ・ライン）')] },
+        { name: 'Vaderland', line: 'レッド・スター・ライン', cls: 'liner', L: 170, B: 18, d: 8.2, kn: 15, fun: 1, liv: 'redstar', route: ['g:ns', 'フィラデルフィア港 ワシントン通り埠頭（アメリカン・ライン／レッド・スター・ライン）'] },
+        { name: 'Friesland', line: 'アメリカン・ライン', cls: 'liner', L: 133, B: 15.5, d: 7.5, kn: 15, fun: 1, liv: 'american', route: [LIV, 'フィラデルフィア港 ワシントン通り埠頭（アメリカン・ライン／レッド・スター・ライン）'] },
+        { name: 'New York', line: 'アメリカン・ライン', cls: 'liner', L: 170, B: 19, d: 8, kn: 20, fun: 3, liv: 'american', route: ['サウサンプトン港', CHB, 'ニューヨーク港', CHB] },
+        { name: 'United States', line: 'ユナイテッド・ステーツ・ライン', cls: 'liner', L: 302, B: 31, d: 9.6, kn: 30, fun: 2, liv: 'usl', route: [NY('86番埠頭（ユナイテッド・ステーツ・ライン）'), 'ル・アーヴル貨物港', SOT] },
+        { name: 'Rex', line: 'イタリアン・ライン', cls: 'liner', L: 268, B: 30, d: 10.0, kn: 26, fun: 2, liv: 'italia', route: ['g:med', NY('84番埠頭（イタリアン・ライン）')] },
+        { name: 'Caledonia', line: 'アンカー・ライン', cls: 'liner', L: 160, B: 19, d: 8, kn: 16, fun: 2, liv: 'american', route: ['グラスゴー港', 'ニューヨーク港'] },
+        { name: 'Victorian', line: 'アラン・ライン', cls: 'liner', L: 165, B: 18, d: 8, kn: 18, fun: 1, liv: 'cgt', route: [LIV, 'g:gsl'] },
     ];
     const local = (k) => TF_SERVICES[k].filter(sv => sv.cls !== 'liner');
     TF_SERVICES.natl = liners.concat(local('britain'), local('useast'));
@@ -500,7 +502,7 @@ function _tfMakeShip(spec) {
 function _tfNewName(S) {
     const used = new Set(traffic.ships.map(o => o.name));
     if (world.kind !== 'real') {
-        for (let k = 0; k < 40; k++) { const n = _tfPick(TF_GEN_SYL) + _tfPick(TF_GEN_SYL) + '丸'; if (!used.has(n)) return n; }
+        for (let k = 0; k < 40; k++) { const w = _tfPick(TF_GEN_SYL) + _tfPick(TF_GEN_SYL), n = w[0].toUpperCase() + w.slice(1) + ' Maru'; if (!used.has(n)) return n; }
     }
     const pool = TF_NAMES[S.cls] || TF_NAMES.steamer;
     for (let k = 0; k < 30; k++) { const n = _tfPick(pool); if (!used.has(n)) return n; }
@@ -1381,17 +1383,21 @@ const _tfV = new THREE.Vector3(), _tfD3 = new THREE.Vector3();
 function _tfVisual(S, t, vis, night) {
     const loc = _tfLocal(S, {});
     if (!Number.isFinite(loc.x)) { _tfDropMesh(S); return; }
-    if (!S.mesh) {
-        if (S.saved) {
-            // 保存した船：モデルを読み込んでから（1 つずつ）。読めなければ、ふつうの形で
-            const P = _tfProto.get(S.saved.key);
-            if (!P) { if (!_tfProtoBusy) _tfLoadProto(S.saved); return; }
-            if (P.state === 'loading') return;
-            if (P.state === 'fail') S.saved = null;
-            else { S.mesh = _tfBuildSavedMesh(S, P); scene.add(S.mesh); }
+    // 保存した船：遠く（TF_SAVED_FAR より先）は、ふつうの形で描く（重いモデルを遠くの小さな船に使わない）。
+    // 近づいたら、モデルを読み込み終えてから差し替える（読み込む間も、ふつうの形で見えるように）
+    if (S.saved) {
+        const near = S.dPl < TF_SAVED_FAR;
+        const P = near ? _tfProto.get(S.saved.key) : null;
+        if (near && !P && !_tfProtoBusy) _tfLoadProto(S.saved);
+        if (P && P.state === 'fail') S.saved = null;
+        const ready = P && P.state === 'ok';
+        if (S.mesh) {
+            const isSaved = !!S.mesh.userData.saved;
+            if (isSaved ? S.dPl > TF_SAVED_FAR + 500 : (ready && S.dPl < TF_SAVED_FAR - 500)) _tfDropMesh(S);
         }
-        if (!S.mesh) { S.mesh = _tfBuildMesh(S); scene.add(S.mesh); }
+        if (!S.mesh && ready && S.dPl < TF_SAVED_FAR) { S.mesh = _tfBuildSavedMesh(S, P); scene.add(S.mesh); }
     }
+    if (!S.mesh) { S.mesh = _tfBuildMesh(S); scene.add(S.mesh); }
     const g = S.mesh, yaw = _tfYaw(S, loc);
     const H = (x, z) => (typeof getOceanHeight === 'function') ? getOceanHeight(x, z, t) : 0;
     const fx = Math.sin(yaw), fz = Math.cos(yaw), hl = S.L * 0.35, hb = S.B * 0.5;
@@ -1401,6 +1407,9 @@ function _tfVisual(S, t, vis, night) {
     g.position.set(loc.x, oh * 0.8, loc.z);
     g.rotation.set(-pitch * 0.7, yaw, roll * 0.6, 'YXZ');
     g.visible = S.dPl < vis * 1.4 + S.L;
+    // 影は近く（TF_SHADOW_NEAR）の船だけ落とす（影の地図に描く数を減らす）
+    const sh = S.dPl < TF_SHADOW_NEAR;
+    if (g.userData.shadowOn !== sh) { g.userData.shadowOn = sh; g.traverse(o => { if (o.isMesh) { if (o.userData.cs0 === undefined) o.userData.cs0 = o.castShadow; o.castShadow = sh && o.userData.cs0; } }); }
     g.updateMatrixWorld();
     // 窓の明かり（夜）
     const M = g.userData.mats;
@@ -1837,6 +1846,8 @@ async function _tfLoadProto(v) {
             aft: [n('mastAftX', 0), n('mastAftY', top), n('mastAftZ', box.min.z + len * 0.35)],
             stern: [n('sternX', 0), n('sternY', wl + 0.2 * (top - wl)), n('sternZ', box.min.z)],
         };
+        // 部品を材質ごとに 1 つの形へまとめる（描く回数が、部品の数から材質の数に減る：本描画・光のにじみ・影・海面の反射のそれぞれで）
+        _tfMergeProto(inner);
         // 空の見え方（プロムナードの奥などを暗く）を、自分の船と同じ方法で少しずつ焼き込む（60・61）
         if (typeof _ssBuild === 'function' && typeof _aoField === 'function' && typeof _aoMeshes === 'function') P.aoJob = _tfProtoAO(inner, (+ph.scale || 12) / 12);
         Object.assign(P, { state: 'ok', glow: [...glow], obj: inner, S, wl, cx: (box.min.x + box.max.x) / 2, cz: (box.min.z + box.max.z) / 2, len, wid: box.max.x - box.min.x, keel: box.min.y, funnels, lamps });
@@ -1893,7 +1904,7 @@ function _tfProtoTick(dt) {
         if (P.state === 'loading') continue;
         if (P.users > 0) { P.idleT = 0; continue; }
         P.idleT += dt;
-        if (P.idleT > 60 || P.state === 'fail' && P.idleT > 600) _tfProtoDispose(key);
+        if (P.idleT > 180 || P.state === 'fail' && P.idleT > 600) _tfProtoDispose(key);
     }
 }
 function trafficSavedSet(name, on) {
@@ -1985,6 +1996,87 @@ function _tfSpawnEncounter(me) {
     S.dPl = _tfDist(me, S);
     traffic.ships.push(S);
     return true;
+}
+
+// ── 保存した船のモデルの部品を、材質ごとにまとめる ──
+//  root（親の無いグループ。部品の matrixWorld が root の中の座標）の中の、ふつうのメッシュ（1 つの材質・骨や変形の無いもの）を、
+//  材質・頂点の持ち物・影の落とし方が同じものどうしで 1 つの形にまとめ、root の直下に置き直す
+const _TF_ATTRS = ['position', 'normal', 'uv', 'uv2', 'color', 'tangent'];
+function _tfAttrRead(a, i, c) {
+    let v = c === 0 ? a.getX(i) : c === 1 ? a.getY(i) : c === 2 ? a.getZ(i) : a.getW(i);
+    if (a.normalized) {
+        const A = a.isInterleavedBufferAttribute ? a.data.array : a.array;
+        v = A instanceof Int8Array ? Math.max(-1, v / 127) : A instanceof Uint8Array ? v / 255 : A instanceof Int16Array ? Math.max(-1, v / 32767) : A instanceof Uint16Array ? v / 65535 : v;
+    }
+    return v;
+}
+function _tfMergeProto(root) {
+    root.updateMatrixWorld(true);
+    const groups = new Map(), drop = [];
+    root.traverse(o => {
+        if (!o.isMesh || o.isSkinnedMesh || o.isInstancedMesh || Array.isArray(o.material) || !o.material) return;
+        const g = o.geometry;
+        if (!g || !g.attributes.position || (g.morphAttributes && Object.keys(g.morphAttributes).length) || (g.groups && g.groups.length > 1)) return;
+        let vis = true; for (let x = o; x; x = x.parent) if (!x.visible) { vis = false; break; }
+        if (!vis) { drop.push(o); return; }
+        const names = _TF_ATTRS.filter(n => g.attributes[n]);
+        const key = o.material.uuid + '|' + names.map(n => n + g.attributes[n].itemSize).join(',') + '|' + (o.castShadow ? 1 : 0) + (o.userData.noBloom ? 1 : 0) + (o.renderOrder | 0);
+        let G = groups.get(key); if (!G) groups.set(key, G = { names, list: [] });
+        G.list.push(o);
+    });
+    const nm = new THREE.Matrix3(), v = new THREE.Vector3();
+    for (const G of groups.values()) {
+        if (G.list.length < 2) continue;
+        let nv = 0, ni = 0;
+        for (const o of G.list) { const g = o.geometry; nv += g.attributes.position.count; ni += g.index ? g.index.count : g.attributes.position.count; }
+        const out = {}, sizes = {};
+        for (const n of G.names) { sizes[n] = G.list[0].geometry.attributes[n].itemSize; out[n] = new Float32Array(nv * sizes[n]); }
+        const idx = nv > 65535 ? new Uint32Array(ni) : new Uint16Array(ni);
+        let vo = 0, io = 0;
+        for (const o of G.list) {
+            const g = o.geometry, M = o.matrixWorld, cnt = g.attributes.position.count;
+            nm.getNormalMatrix(M);
+            const flip = M.determinant() < 0;
+            for (const n of G.names) {
+                const a = g.attributes[n], k = sizes[n], O = out[n];
+                for (let i = 0; i < cnt; i++) {
+                    const d = (vo + i) * k;
+                    if (n === 'position') { v.set(_tfAttrRead(a, i, 0), _tfAttrRead(a, i, 1), _tfAttrRead(a, i, 2)).applyMatrix4(M); O[d] = v.x; O[d + 1] = v.y; O[d + 2] = v.z; }
+                    else if (n === 'normal') { v.set(_tfAttrRead(a, i, 0), _tfAttrRead(a, i, 1), _tfAttrRead(a, i, 2)).applyMatrix3(nm).normalize(); O[d] = v.x; O[d + 1] = v.y; O[d + 2] = v.z; }
+                    else if (n === 'tangent') { v.set(_tfAttrRead(a, i, 0), _tfAttrRead(a, i, 1), _tfAttrRead(a, i, 2)).transformDirection(M); O[d] = v.x; O[d + 1] = v.y; O[d + 2] = v.z; O[d + 3] = _tfAttrRead(a, i, 3) * (flip ? -1 : 1); }
+                    else for (let c = 0; c < k; c++) O[d + c] = _tfAttrRead(a, i, c);
+                }
+            }
+            if (g.index) {
+                const I = g.index, n = I.count;
+                for (let j = 0; j < n; j += 3) {
+                    const a0 = I.getX(j), a1 = I.getX(j + 1), a2 = I.getX(j + 2);
+                    idx[io++] = vo + a0; idx[io++] = vo + (flip ? a2 : a1); idx[io++] = vo + (flip ? a1 : a2);
+                }
+            } else {
+                for (let j = 0; j < cnt; j += 3) { idx[io++] = vo + j; idx[io++] = vo + j + (flip ? 2 : 1); idx[io++] = vo + j + (flip ? 1 : 2); }
+            }
+            vo += cnt;
+        }
+        const geo = new THREE.BufferGeometry();
+        for (const n of G.names) geo.setAttribute(n, new THREE.BufferAttribute(out[n], sizes[n], false));
+        geo.setIndex(new THREE.BufferAttribute(idx, 1));
+        geo.computeBoundingSphere(); geo.computeBoundingBox();
+        const f = G.list[0], m = new THREE.Mesh(geo, f.material);
+        m.castShadow = f.castShadow; m.receiveShadow = f.receiveShadow; m.renderOrder = f.renderOrder;
+        m.userData.noLightBake = true; m.userData.noBloom = f.userData.noBloom;
+        root.add(m);
+        for (const o of G.list) drop.push(o);
+    }
+    // まとめた元の部品を外す（形は、ほかで使っていなければ捨てる）
+    const dropS = new Set(drop), keep = new Set();
+    root.traverse(o => { if (o.isMesh && !dropS.has(o)) keep.add(o.geometry); });
+    for (const o of drop) {
+        // （外す部品の子で、まとめなかった物は、見た目の位置のまま root へ移す）
+        for (const c of o.children.slice()) if (!dropS.has(c)) root.attach(c);
+        if (o.parent) o.parent.remove(o);
+        if (!keep.has(o.geometry)) o.geometry.dispose();
+    }
 }
 
 // 保存した船のモデルに、空の見え方を焼き込む（ジェネレーター：1 フレーム数 ms ずつ。形は使い回すので 1 回だけ）
