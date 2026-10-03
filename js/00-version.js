@@ -149,7 +149,8 @@
 // 0.03.013.029 行き会い（短音 1 回）・追い越し（長長短短）の汽笛と返事（短音・長短長短）。保存した船はその船の汽笛で。
 //               自分の船は自動航行中に自動で鳴らす・返す。行き会い・追い越しでは減速しない（追い越しは相手の左舷側を通る）。
 // 0.03.013.030 進路が重なる船への警告信号（短音 5 回）・他の船の近くでの変針の信号（右へ短音 1 回・左へ 2 回、自分の船も自動で）。他の船も物理早送りで進む。
-var APP_VERSION = '0.03.013.030';
+// 0.03.013.031 他の船とぶつかる（すり抜けない：押し合い・跳ね返り・ぶつかった船は機関を止める。他の船どうしも）。遠くからよけ始めた相手にも近くで合図（他の船どうしも）。止まっている船は右によけて通る。
+var APP_VERSION = '0.03.013.031';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
