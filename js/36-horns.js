@@ -400,18 +400,20 @@ window.playHornSignal = playHornSignal;
 //  霧中信号：霧の中を航行中は2分ごとに長音1回、停止中は長音2回
 //  後進信号：前進中に後進をかけたら短音3回
 //  出港の汽笛：スタンバイ（機関用意）のあと、初めて前進を指令したとき（off／長音1回／長音3回）
+//  変針の信号：他の船の近く（2km）で針路を変えたら、右へ短音1回・左へ短音2回（59-traffic.js が見て鳴らす）
+//  警告信号：他の船と進路が重なってきて、相手がよけないときは短音5回（59-traffic.js が見て鳴らす）
 const HORN_DEPART = { off: '鳴らさない', L: '長音1回', LLL: '長音3回' };
 window.HORN_DEPART = HORN_DEPART;
-const hornAuto = { fog: false, astern: false, depart: 'L', _nextFog: 0, _prevTele: 0, _departArmed: false };
+const hornAuto = window.hornAuto = { fog: false, astern: false, turn: true, warn: true, depart: 'L', _nextFog: 0, _prevTele: 0, _departArmed: false };
 (function restoreHornAuto() {
     try {
         const s = JSON.parse(localStorage.getItem('susuru_horn_auto') || 'null');
-        if (s) { hornAuto.fog = !!s.fog; hornAuto.astern = !!s.astern; if (HORN_DEPART[s.depart]) hornAuto.depart = s.depart; }
+        if (s) { hornAuto.fog = !!s.fog; hornAuto.astern = !!s.astern; hornAuto.turn = s.turn !== false; hornAuto.warn = s.warn !== false; if (HORN_DEPART[s.depart]) hornAuto.depart = s.depart; }
     } catch (e) { /* ignore */ }
 })();
 function setHornAuto(key, on) {
     hornAuto[key] = (key === 'depart') ? (HORN_DEPART[on] ? on : 'off') : !!on;
-    try { localStorage.setItem('susuru_horn_auto', JSON.stringify({ fog: hornAuto.fog, astern: hornAuto.astern, depart: hornAuto.depart })); } catch (e) { /* ignore */ }
+    try { localStorage.setItem('susuru_horn_auto', JSON.stringify({ fog: hornAuto.fog, astern: hornAuto.astern, turn: hornAuto.turn, warn: hornAuto.warn, depart: hornAuto.depart })); } catch (e) { /* ignore */ }
 }
 
 // 毎フレーム（35 の updateAudio から）
@@ -653,6 +655,8 @@ function renderSoundPanel() {
     set('audio-bridge', S.bridge != null ? S.bridge : 0.8);
     set('horn-auto-fog', hornAuto.fog, 'checked');
     set('horn-auto-astern', hornAuto.astern, 'checked');
+    set('horn-auto-turn', hornAuto.turn, 'checked');
+    set('horn-auto-warn', hornAuto.warn, 'checked');
     const dp = document.getElementById('horn-auto-depart');
     if (dp) dp.innerHTML = Object.entries(HORN_DEPART).map(([k, l]) => `<option value="${k}"${k === hornAuto.depart ? ' selected' : ''}>${l}</option>`).join('');
 }

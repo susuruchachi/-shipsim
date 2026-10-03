@@ -1128,6 +1128,12 @@
           <label class="sp-toggle"><input type="checkbox" id="horn-auto-astern" onchange="setHornAuto('astern', this.checked)"> 前進中に後進をかけたら短音3回</label>
         </div>
         <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="horn-auto-turn" checked onchange="setHornAuto('turn', this.checked)"> 他の船の近く（3km）で針路を変えたら、右へ短音1回・左へ短音2回</label>
+        </div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="horn-auto-warn" checked onchange="setHornAuto('warn', this.checked)"> 進路が重なってきた船がよけないときは、警告の短音5回</label>
+        </div>
+        <div class="sp-row">
           <label class="sp-toggle"><input type="checkbox" id="horn-echo" checked onchange="setHornEcho(this.checked)"> 陸の近くでは汽笛がこだまする（世界を航海するモード）</label>
         </div>
         <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">出港の汽笛:</span>

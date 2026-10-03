@@ -20,6 +20,9 @@
 const TF_NEAR = 25000;          // ルールで動かす範囲[m]
 const TF_SHOW = 12000;          // 形を作って描く範囲[m]
 const TF_FAR_DT = 2;            // 遠くの船を進める間隔[秒]
+const TF_SUB = 0.25;            // 近くの船を進める刻み[秒]（物理早送りのとき、1 フレームを何回かに分ける）
+const TF_DT_MAX = 3;            // 1 フレームで進める物理の時間の上限[秒]
+const TF_SIG_NEAR = 3000;       // 変針の信号を鳴らす、他の船との距離[m]
 const traffic = {
     on: true, density: 'normal', era: 'mix', horn: true,
     ships: [], key: '', ready: false, nextId: 1,
@@ -554,7 +557,7 @@ function _tfDwell(S) { const C = _tfClassOf(S); return _tfRand(C.dwell[0], C.dwe
 function _tfClear() {
     for (const S of traffic.ships) _tfDropMesh(S);
     traffic.ships = []; traffic.lanes.clear(); traffic.laneQ = []; traffic.quays.clear(); traffic.anch.clear();
-    traffic.ready = false; traffic.laneBusy = false; traffic.msgs = [];
+    traffic.ready = false; traffic.laneBusy = false; traffic.msgs = []; traffic.later = [];
     traffic.player.port = null; traffic.player.reserve = null;
 }
 // 自分の船が埠頭に付いて（止まって）いれば、その所を自分の船の分として押さえる（他の船が重ならないように）
@@ -951,7 +954,7 @@ function _tfMove(S, d, far) {
         if (nk > q.k && S.sigK !== nk && P.cum[nk] - S.s < Math.max(300, 4 * S.L)) {
             S.sigK = nk;
             const c2 = rhumbCourse(P.pts[nk].lat, P.pts[nk].lon, P.pts[nk + 1].lat, P.pts[nk + 1].lon).course, turn = _tfWrap(c2 - crs);
-            if (Math.abs(turn) > 35 && (P.pts[nk].ch || S.dPl < 3000)) _tfHorn(S, turn > 0 ? 'S1' : 'S2');
+            if (Math.abs(turn) > 35 && _tfOtherNear(S, TF_SIG_NEAR)) _tfHorn(S, turn > 0 ? 'S1' : 'S2');
         }
     }
 }
@@ -1002,7 +1005,12 @@ function _tfRules() {
             if (lat) {
                 const passed = c.t <= 0 && c.dist > (S.L + (O.L || 100)) / 2 + 100;
                 if (passed || c.dist > 8000) delete S.avoid[key];
-                else { offT = Math.max(offT, lat.r); offL = Math.max(offL, lat.l); why = why || lat.why; continue; }
+                else {
+                    offT = Math.max(offT, lat.r); offL = Math.max(offL, lat.l); why = why || lat.why;
+                    // よけているのに、相手（自分の船）がまだぶつかる向きに来る：警告（短音 5 回）
+                    if (O.player && lat.r > 0 && traffic.t - (lat.t0 || 0) > 45 && c.t > 0 && c.t < 300 && c.cpa < Math.max(S.L, 250) && c.dist < 4000) _tfWarn(S, O);
+                    continue;
+                }
             }
             const brgO = _tfBrg(S, O), rb = _tfWrap(brgO - S.hdg);            // 相手の見える向き（右が＋）
             const rbFromO = _tfWrap(_tfBrg(O, S) - O.hdg);                      // 相手から見た自分
@@ -1043,14 +1051,22 @@ function _tfRules() {
             if (giveWay) {
                 const amt = inCh ? Math.min(S.B + 60, safe) : Math.min(1500, safe + 300);
                 if (overtaking) offL = Math.max(offL, amt); else offT = Math.max(offT, amt);
-                S.avoid[key] = overtaking ? { r: 0, l: amt, why: `${O.name} を追い越しています` } : { r: amt, l: 0, why: headOn ? `${O.name} と行き会うので右へ` : `${O.name} を右に見るので、よけています` };
+                S.avoid[key] = overtaking ? { r: 0, l: amt, why: `${O.name} を追い越しています`, t0: traffic.t } : { r: amt, l: 0, why: headOn ? `${O.name} と行き会うので右へ` : `${O.name} を右に見るので、よけています`, t0: traffic.t };
+                // 横切りの避航船が右へ変針する：短音 1 回（行き会い・追い越しは下の合図で）
+                if (!headOn && !overtaking && c.dist < 4000) _tfTurnSig(S, key, 'S1');
                 // 行き会い・追い越しでは減速しない（よけるだけ）。横切りの避航船だけ、近ければ少し落とす
                 if (!headOn && !overtaking && c.t < 600) rv = Math.min(rv, inCh ? 0.5 : 0.65);
                 if (headOn) _tfSignal(S, O, 'meet', c.dist); else if (overtaking) _tfSignal(S, O, 'over', c.dist);
                 why = why || (headOn ? `${O.name} と行き会うので右へ` : overtaking ? `${O.name} を追い越すので、よけています` : `${O.name} を右に見るので、よけています`);
-            } else if (!sameDir && c.cpa < Math.max(S.L, 200) && c.t < 240) {
-                // 保持船でも、ぶつかりそうなら最後はよける（減速して右へ）
-                rv = Math.min(rv, 0.4); offT = Math.max(offT, Math.min(safe, 300)); why = why || `${O.name} が近いので減速しています`;
+            } else if (!sameDir) {
+                // 保持船：相手がよけずに近づいてくる（進路が重なってくる）→ 警告（短音 5 回）
+                const doing = !O.player && O.avoid && O.avoid[S.id];
+                if (!doing && c.t < 420 && c.cpa < Math.max(1.5 * S.L, 300) && c.dist < 4000) _tfWarn(S, O);
+                if (c.cpa < Math.max(S.L, 200) && c.t < 240) {
+                    // 保持船でも、ぶつかりそうなら最後はよける（減速して右へ：短音 1 回）
+                    rv = Math.min(rv, 0.4); offT = Math.max(offT, Math.min(safe, 300)); why = why || `${O.name} が近いので減速しています`;
+                    _tfTurnSig(S, key, 'S1');
+                }
             }
         }
         // 追い越し（左へ）は、右へよける理由が無いときだけ
@@ -1082,6 +1098,10 @@ function _tfRules() {
 function _tfHorn(S, pat) {
     if (!traffic.horn || !S || !(S.dPl < 7000)) return;
     if (typeof audioEnsure !== 'function' || !audioEnsure() || !audio.buses || !audio.buses.horn || typeof AudioEmitter === 'undefined') return;
+    // 同じ船の汽笛は重ねない（物理早送りのときは、合図が実時間では詰まって来るので）
+    const nowR = performance.now();
+    if (S.hornEnd > nowR) return;
+    S.hornEnd = nowR + _tfSigLen(pat === 'D' ? 'SSSSS' : /^S\d$/.test(pat) ? 'S'.repeat(+pat[1]) : pat) * 1000;
     const loc = _tfLocal(S, {});
     if (!Number.isFinite(loc.x)) return;
     const c = audio.ctx;
@@ -1412,8 +1432,10 @@ function _tfVisual(S, t, vis, night) {
 // ════════════════════════════════════════════════════════════════
 //  毎フレーム（17-main-loop.js から）
 // ════════════════════════════════════════════════════════════════
+//  t：実時間（見た目・汽笛の音）、dt：物理の時間（物理早送り physicsSpeed を掛けたもの）
+//  船の動き・ルール・合図の間合いは、物理の時間（traffic.t）で進める。早送りのときは、近くの船を細かく刻んで進める
 function updateTraffic(t, dt) {
-    dt = Math.min(0.25, Math.max(0, dt || 0));
+    dt = Math.min(TF_DT_MAX, Math.max(0, dt || 0));
     if (!traffic.on || !window.world || world.mode !== 'world' || typeof scene === 'undefined') {
         if (traffic.ships.length || traffic.key) { _tfClear(); traffic.key = ''; }
         return;
@@ -1422,7 +1444,6 @@ function updateTraffic(t, dt) {
     if (traffic.sig === undefined || !(t - (traffic.sigT || -1e9) < 3) || t < traffic.sigT) { traffic.sigT = t; traffic.sig = _tfSavedSig(); }
     const key = _tfWorldKey() + '|' + traffic.density + '|' + traffic.era + '|' + traffic.sig;
     if (key !== traffic.key) { _tfClear(); traffic.key = key; traffic.initT = t; }
-    traffic.t = t;
     if (!traffic.ready) {
         if (!world.ports || t - traffic.initT < 3) return;
         _tfSpawnFleet(); traffic.ready = true;
@@ -1433,14 +1454,16 @@ function updateTraffic(t, dt) {
     traffic.farAcc += dt;
     const farStep = traffic.farAcc >= TF_FAR_DT, dF = traffic.farAcc;
     if (farStep) traffic.farAcc = 0;
-    for (const S of traffic.ships) {
-        if (S.st === 'gone') continue;
-        if (S.dPl < TF_NEAR) _tfStep(S, dt, false);
-        else if (farStep) _tfStep(S, dF, true);
+    if (farStep) for (const S of traffic.ships) if (S.st !== 'gone' && !(S.dPl < TF_NEAR)) _tfStep(S, dF, true);
+    // 近くの船：0.25 秒以下に刻んで進める（0.5 秒ごとにルール・合図）
+    for (let rem = dt; rem > 1e-6;) {
+        const h = Math.min(TF_SUB, rem); rem -= h;
+        traffic.t += h;
+        for (const S of traffic.ships) if (S.st !== 'gone' && S.dPl < TF_NEAR) _tfStep(S, h, false);
+        traffic.ruleAcc += h;
+        if (traffic.ruleAcc >= 0.5) { traffic.ruleAcc -= 0.5; if (traffic.ruleAcc > 0.5) traffic.ruleAcc = 0; _tfRules(); _tfPlayerAuto(); }
+        _tfLaterTick();
     }
-    traffic.ruleAcc += dt;
-    if (traffic.ruleAcc >= 0.5) { traffic.ruleAcc = 0; _tfRules(); }
-    _tfLaterTick();
     if (farStep) {
         _tfPlayerBerthKeep();
         _tfProtoTick(dF);
@@ -1987,12 +2010,12 @@ function _tfSignal(S, O, kind, dist) {
     if (S.dPl < 8000) _trMsgSafe(`${S.name}：${kind === 'meet' ? '短音 1 回（右へ変針します）' : '長長短短（追い越します）'}`);
     if (O.player) {
         // 自分の船（自動航行中）：返事をする
-        if (typeof autopilot !== 'undefined' && autopilot.active && traffic.horn && typeof playHornSignal === 'function')
-            _tfLater(_tfSigLen(G.call) + G.delay, () => playHornSignal(G.reply));
+        if (typeof autopilot !== 'undefined' && autopilot.active)
+            _tfLater(_tfSigLen(G.call) + G.delay, () => { _tfPlayerHorn(G.reply); _tfPlayerTurnQuiet(); }, _tfSigLen(G.call));
         return;
     }
     O.sigs = O.sigs || {}; O.sigs[S.id] = traffic.t;          // 相手からは、同じ出会いで改めて鳴らさない
-    _tfLater(_tfSigLen(G.call) + G.delay, () => _tfHorn(O, G.reply));
+    _tfLater(_tfSigLen(G.call) + G.delay, () => _tfHorn(O, G.reply), _tfSigLen(G.call));
 }
 // 自分の船（自動航行中）から鳴らす。相手の船（保存した船ならその汽笛で）が返事をする
 function _tfPlayerSignal(O, kind) {
@@ -2002,15 +2025,95 @@ function _tfPlayerSignal(O, kind) {
     traffic.player.sigs[O.id] = traffic.t;
     O.sigs = O.sigs || {}; O.sigs.P = traffic.t;
     const G = TF_SIG[kind];
-    playHornSignal(G.call);
-    _tfLater(_tfSigLen(G.call) + G.delay, () => _tfHorn(O, G.reply));
+    _tfPlayerHorn(G.call); _tfPlayerTurnQuiet();
+    _tfLater(_tfSigLen(G.call) + G.delay, () => _tfHorn(O, G.reply), _tfSigLen(G.call));
 }
 // 合図の長さ[秒]（長音 5＋2 秒・短音 1＋1 秒）
 function _tfSigLen(p) { return p.split('').reduce((a, ch) => a + (ch === 'L' ? 7 : 2), 0); }
-// しばらく後に（船の時間で）
-function _tfLater(sec, fn) { (traffic.later = traffic.later || []).push({ at: traffic.t + sec, fn }); }
+// しばらく後に（船の時間で sec 秒後。realSec を渡せば、実時間でも少なくともそれだけ後：早送りでも、合図を鳴らし終えてから返事）
+function _tfLater(sec, fn, realSec) { (traffic.later = traffic.later || []).push({ at: traffic.t + sec, atR: performance.now() + (realSec || 0) * 1000, fn }); }
 function _tfLaterTick() {
     const L = traffic.later; if (!L || !L.length) return;
-    for (let i = L.length - 1; i >= 0; i--) if (traffic.t >= L[i].at) { const f = L[i].fn; L.splice(i, 1); try { f(); } catch (e) { /* ignore */ } }
+    const nowR = performance.now();
+    for (let i = L.length - 1; i >= 0; i--) if (traffic.t >= L[i].at && nowR >= L[i].atR) { const f = L[i].fn; L.splice(i, 1); try { f(); } catch (e) { /* ignore */ } }
 }
+// 自分の船の汽笛（36-horns.js）。鳴らしている途中の合図は切らない
+function _tfPlayerHorn(pat) {
+    if (!traffic.horn || typeof playHornSignal !== 'function') return false;
+    const nowR = performance.now(), P = traffic.player;
+    if (P.hornEnd > nowR) return false;
+    P.hornEnd = nowR + _tfSigLen(pat) * 1000;
+    playHornSignal(pat);
+    return true;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  警告信号・変針の信号
+// ════════════════════════════════════════════════════════════════
+//  ・警告（短音 5 回）：進路が重なってきて（最接近が近く・7 分以内）、相手がよけていないとき。保持船（よけなくてよい方）が鳴らす
+//    同じ相手には 2 分に 1 回まで
+//  ・変針（右へ短音 1 回・左へ短音 2 回）：他の船（動いている船）が TF_SIG_NEAR（3km）以内にいるときだけ。後進の信号（短音 3 回）は鳴らさない
+//    （出入港で前進・後進を何度も切り替えるので）
+function _tfWarn(S, O) {
+    if (!(S.dPl < 7000)) return;
+    S.sigs = S.sigs || {};
+    const k = 'w' + _tfSigKey(O);
+    if (traffic.t - (S.sigs[k] ?? -1e9) < 120) return;
+    S.sigs[k] = traffic.t;
+    _tfHorn(S, 'D');
+    _trMsgSafe(`${S.name}：短音 5 回（${O.player ? 'あなたの船' : O.name} に警告：そちらの動きが分かりません）`);
+}
+function _tfTurnSig(S, key, pat) {
+    S.sigs = S.sigs || {};
+    const k = 't' + key;
+    if (traffic.t - (S.sigs[k] ?? -1e9) < 300) return;
+    S.sigs[k] = traffic.t;
+    _tfHorn(S, pat);
+}
+// S の近く（r[m]）に、動いている他の船（自分の船を含む）がいるか
+function _tfMovingOther(O) { return _tfShown(O) && O.st !== 'berth' && O.st !== 'anchored' && (O.v || 0) > 0.3; }
+function _tfOtherNear(S, r) {
+    if (S.dPl < r) return true;
+    for (const O of traffic.ships) if (O !== S && O.dPl < TF_NEAR && _tfMovingOther(O) && Math.abs(O.lat - S.lat) < 0.03 && _tfDist(S, O) < r) return true;
+    return false;
+}
+// 自分の船の合図（0.5 秒ごと）：手で動かしているときも、自動航行のときも（音の設定の「自動の汽笛」で切れる）
+//  ・変針：回り始めてから 12° 以上回ったら 1 回（波で振れるくらいの小さな揺れは数えない）
+//  ・警告：自分が保持船で、相手がよけずに進路が重なってくるとき
+function _tfPlayerAuto() {
+    const me = _tfPlayerAsShipSafe();
+    if (!me) return;
+    const P = traffic.player, HA = typeof hornAuto !== 'undefined' ? hornAuto : {};
+    // 回っている量（同じ向きに回り続けている間だけ足す。逆へ回るか、4 秒止まれば数え直す）
+    if (P.hPrev === undefined) { P.hPrev = me.hdg; P.turn = 0; P.calm = 0; P.turnSig = false; }
+    const d = _tfWrap(me.hdg - P.hPrev); P.hPrev = me.hdg;
+    if (Math.abs(d) > 0.15) {
+        if (P.turn && Math.sign(d) !== Math.sign(P.turn)) { P.turn = 0; P.turnSig = false; }
+        P.turn += d; P.calm = 0;
+    } else if ((P.calm += 0.5) > 4) { P.turn = 0; P.turnSig = false; }
+    if (!P.turnSig && Math.abs(P.turn) >= 12 && me.v > 0.75 && HA.turn && !(traffic.t < (P.turnQuiet || 0))) {
+        let near = false;
+        for (const O of traffic.ships) if (O.dPl < TF_SIG_NEAR && _tfMovingOther(O)) { near = true; break; }
+        if (near && _tfPlayerHorn(P.turn > 0 ? 'S' : 'SS')) { P.turnSig = true; _trMsgSafe(`あなたの船：${P.turn > 0 ? '短音 1 回（右へ変針）' : '短音 2 回（左へ変針）'}`); }
+    }
+    if (!HA.warn) return;
+    P.sigs = P.sigs || {};
+    for (const O of traffic.ships) {
+        if (!(O.dPl < 4000) || !_tfMovingOther(O)) continue;
+        if (O.avoid && O.avoid.P) continue;                         // 相手はよけている
+        const c = _tfCPA(me, O);
+        if (!(c.t > 0 && c.t < 420 && c.cpa < Math.max(1.5 * me.L, 300))) continue;
+        const rb = _tfWrap(_tfBrg(me, O) - me.hdg), rbFromO = _tfWrap(_tfBrg(O, me) - O.hdg);
+        const sameDir = Math.abs(_tfWrap(O.hdg - me.hdg)) < 45;
+        const headOn = Math.abs(rb) < 12 && Math.abs(rbFromO) < 12;
+        // 自分が保持船：相手を左に見る横切り・追い越されるとき。行き会いは、近くなっても相手がよけないとき
+        const standOn = (!sameDir && rb < 0 && rb > -112.5) || (sameDir && Math.abs(rb) > 112.5) || (headOn && c.t < 300);
+        if (!standOn) continue;
+        const k = 'w' + O.id;
+        if (traffic.t - (P.sigs[k] ?? -1e9) < 120) continue;
+        if (_tfPlayerHorn('SSSSS')) { P.sigs[k] = traffic.t; _trMsgSafe(`あなたの船：短音 5 回（${O.name} に警告）`); }
+        break;
+    }
+}
+function _tfPlayerTurnQuiet() { traffic.player.turnQuiet = traffic.t + 60; traffic.player.turnSig = true; }
 function _trMsgSafe(s) { try { _tfMsg(s); } catch (e) { /* ignore */ } }
