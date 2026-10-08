@@ -901,6 +901,40 @@ body.hud-hidden #ap-panel { display: none !important; }
 #ap-panel .ap-line .ap-fold { float: none; margin: 0 !important; order: 2; }
 #ap-panel .ap-line span { overflow: hidden; text-overflow: ellipsis; }
 
+/* 測距儀・照準・舵輪の横のボタン（66-sights.js） */
+#rf-scope { position: fixed; inset: 0; pointer-events: none; z-index: 5; display: none; }
+#rf-scope.on { display: block; }
+#rf-scope::before { content: ''; position: absolute; inset: 0; background: radial-gradient(ellipse 62vmin 30vmin at 50% 50%, transparent 0, transparent 92%, rgba(0,0,0,0.92) 100%); }
+#rf-scope::after { content: ''; position: absolute; inset: 0; background:
+    radial-gradient(ellipse 62vmin 30vmin at 50% 50%, transparent 99%, #000 100%); }
+#rf-scope::before, #rf-scope::after { z-index: 0; }
+#rf-scope > div { z-index: 1; }
+#rf-scope .rf-split { position: absolute; left: calc(50% - 62vmin); right: calc(50% - 62vmin); top: 50%; height: 1px; background: rgba(255, 220, 140, 0.55); }
+#rf-scope .rf-h { position: absolute; left: 50%; top: 50%; width: 10vmin; height: 2px; margin: -1px 0 0 -5vmin; background: rgba(255, 220, 140, 0.9); }
+#rf-scope .rf-v { position: absolute; left: 50%; top: 50%; width: 2px; height: 10vmin; margin: -5vmin 0 0 -1px; background: rgba(255, 220, 140, 0.9); }
+#rf-scope .rf-scale { position: absolute; left: calc(50% - 20vmin); width: 40vmin; top: calc(50% + 3vmin); height: 8px;
+    background: repeating-linear-gradient(90deg, rgba(255,220,140,0.7) 0 1px, transparent 1px 4vmin); }
+#rf-scope .rf-info { position: absolute; left: 0; right: 0; bottom: calc(50% - 30vmin - 6px); text-align: center; color: #ffe6a8; font: 13px monospace; text-shadow: 0 0 4px #000; line-height: 1.5; }
+.sg-bar { position: absolute; left: 50%; transform: translateX(-50%); pointer-events: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: center; max-width: 96vw; }
+#rf-scope .rf-bar { bottom: calc(50% - 30vmin - 64px); }
+#sub-scope .ss-bar { bottom: calc(50% - 36vmin - 72px); }
+.sg-bar button { background: rgba(10, 30, 20, 0.75); color: #e9f5d0; border: 1px solid #8fbf80; border-radius: 12px; padding: 4px 12px; font: 12px monospace; cursor: pointer; }
+.sg-bar button.on { background: rgba(120, 60, 10, 0.85); border-color: #ffb060; color: #fff; }
+.sg-bar .sg-fire { background: rgba(90, 20, 10, 0.85); border-color: #ff8a6a; }
+.sg-bar .rf-z { color: #ffe6a8; font: 12px monospace; }
+#sub-scope .sg-tinfo { position: absolute; left: 0; right: 0; top: calc(50% - 36vmin - 4px); text-align: center; color: #ffe6a8; font: 13px monospace; text-shadow: 0 0 4px #000; }
+.sg-msg { color: #ffd27a; }
+#sg-lead { position: fixed; z-index: 6; pointer-events: none; display: none; width: 18px; height: 18px; margin: -9px 0 0 -9px; border: 2px solid #ff6a3a; transform: rotate(45deg); }
+#sg-lead span { position: absolute; left: 16px; top: -18px; transform: rotate(-45deg); color: #ffb08a; font: 11px monospace; white-space: nowrap; text-shadow: 0 0 3px #000; }
+#fire-stack { position: absolute; z-index: 10; bottom: calc(14px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; }
+#fire-stack button { width: 58px; height: 52px; border-radius: 12px; border: 1px solid rgba(255, 200, 140, 0.6); background: rgba(20, 25, 35, 0.78); color: #ffe6c8;
+    font-size: 20px; line-height: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer; }
+#fire-stack button small { font-size: 10px; letter-spacing: 1px; }
+#fire-stack button.on { background: rgba(140, 70, 10, 0.85); border-color: #ffb060; }
+#fire-stack .fs-fire { background: rgba(110, 25, 15, 0.85); border-color: #ff8a6a; }
+#fire-stack button:disabled { opacity: 0.4; }
+body.hud-hidden #fire-stack { display: none !important; }
+
 /* 被害・浸水（63-flooding.js） */
 #btn-flood { width: 48px; height: 48px; font-size: 13px; letter-spacing: 1px; }
 #btn-flood.on { background: rgba(120, 200, 255, 0.45); border-color: #8fd0ff; }

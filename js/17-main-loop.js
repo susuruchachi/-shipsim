@@ -647,6 +647,7 @@ function animate() {
 
     // 見張り台視点カメラ: 船の位置・回転(横揺れ/縦揺れ込み)が確定した直後に計算する。
     if (!isDesignMode && cameraMode === 'viewpoint' && typeof updateViewpointCamera === 'function') {
+        if (typeof updateSightAim === 'function') updateSightAim();      // 捉えた目標を追いかける（66-sights.js）
         updateViewpointCamera();
     }
 
@@ -682,6 +683,7 @@ function animate() {
     if (typeof updateLighthouses === 'function') updateLighthouses(t);            // 実在の灯台の灯り（57-lighthouses.js）
     if (typeof updatePuffs === 'function') updatePuffs(t, dt);                   // タグの排煙・汽笛の蒸気・しぶき（52-puffs.js）
     if (typeof updateSubmarine === 'function') updateSubmarine(t, dt);           // 潜水艦の魚雷・ソナー・潜望鏡（54-submarine.js）
+    if (typeof updateSights === 'function') updateSights(t, dt);                 // 測距儀・照準・舵輪の横のボタン（66-sights.js）
     if (typeof updateLightBake === 'function') updateLightBake(t);
     if (typeof updateAreaLights === 'function') updateAreaLights(t);
     if (typeof updateGlowHalos === 'function') updateGlowHalos();   // 遠景用の光のにじみ（26）

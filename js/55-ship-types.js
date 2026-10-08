@@ -59,10 +59,14 @@ function navalAimCamera() {
 function navalSet(k, v) { naval[k] = v; if (k === 'absolute') naval.brg = v ? Math.round(_nvAimCompass()) : 0; renderSubPanel(); }
 window.navalAimCamera = navalAimCamera; window.navalSet = navalSet;
 
+// 砲の数（砲塔の設定があればその数：66-sights.js）
+function navalGunCount() { const G = _nvGun(); if (!G) return 0; const T = typeof sightTurrets === 'function' ? sightTurrets() : null; return T && T.length ? T.length : Math.max(1, Math.round(G.n)); }
+window.navalGunCount = navalGunCount;
 function navalFire() {
     const G = _nvGun();
     if (!G || typeof scene === 'undefined') return;
-    if (naval.reload.length >= G.n) { _nvMsg('装填中です'); renderSubPanel(); return; }
+    const nG = navalGunCount();
+    if (naval.reload.length >= nG) { _nvMsg('装填中です'); renderSubPanel(); return; }
     const hp = window.hullProfile, sc = physics.scale || 1;
     const top = (typeof _subHullTopAboveWL === 'function') ? _subHullTopAboveWL() : 6;
     const hd = _nvHeadingOfCompass(_nvAimCompass()), r = hd * Math.PI / 180;
@@ -74,13 +78,21 @@ function navalFire() {
     //（空気の抵抗は無し。見やすいよう、飛ぶ時間は実際の 0.6 倍の速さで）
     const g = 9.81, v = G.v;
     const wl0 = Number.isFinite(window._physicsWaveY) ? window._physicsWaveY : 0;
-    const aimX = physics.cgWorldX + Math.sin(r) * range, aimZ = physics.cgWorldZ + Math.cos(r) * range;
-    const salvo = Math.max(1, Math.round(G.n));
+    // 狙う点：照準（66-sights.js：捉えた目標の未来位置・測距儀の十字の所）があればそこ、なければ兵装パネルの方位・距離
+    const sol = typeof sightFireSolution === 'function' ? sightFireSolution('gun') : null;
+    const aimX = sol ? sol.x : physics.cgWorldX + Math.sin(r) * range, aimZ = sol ? sol.z : physics.cgWorldZ + Math.cos(r) * range;
+    if (sol && Math.hypot(aimX - physics.cgWorldX, aimZ - physics.cgWorldZ) > G.range * 1000 * 1.02) { _nvMsg(`射程外です（${(Math.hypot(aimX - physics.cgWorldX, aimZ - physics.cgWorldZ) / 1000).toFixed(1)}km・射程 ${G.range}km）`); renderSubPanel(); return; }
+    // 砲塔の位置（66-sights.js：設定が無ければ艦の前後に分けて）
+    const TW = typeof sightTurretsWorld === 'function' ? sightTurretsWorld() : null;
+    const salvo = Math.max(0, nG - naval.reload.length);
     for (let i = 0; i < salvo; i++) {
-        // 砲塔の位置：艦の前後に分けて置く
-        const along = (i - (salvo - 1) / 2) * half * 0.5 + half * 0.15;
-        const x = physics.cgWorldX + Math.sin(fr) * along, z = physics.cgWorldZ + Math.cos(fr) * along;
-        const y = physics.y + top * 0.7;
+        let x, y, z;
+        if (TW && TW[i]) { x = TW[i].x; y = TW[i].y; z = TW[i].z; }
+        else {
+            const along = (i - (salvo - 1) / 2) * half * 0.5 + half * 0.15;
+            x = physics.cgWorldX + Math.sin(fr) * along; z = physics.cgWorldZ + Math.cos(fr) * along;
+            y = physics.y + top * 0.7;
+        }
         const ri = Math.atan2(aimX - x, aimZ - z), R = Math.max(50, Math.hypot(aimX - x, aimZ - z));
         const dyT = (wl0 + 3) - y;                                                // 的の高さ − 砲の高さ
         const disc = v * v * v * v - g * (g * R * R + 2 * dyT * v * v);
@@ -108,7 +120,10 @@ function navalFire() {
         audioBurst(A.buses.env, { dur: 1.2 + k, attack: 0.005, gain: Math.min(1.6, 0.6 + 0.5 * k), type: 'lowpass', freq: 160 - Math.min(90, k * 40), q: 0.8, kind: 'brown' });
         audioBurst(A.buses.env, { dur: 0.25, attack: 0.002, gain: 0.5, type: 'bandpass', freq: 1200, q: 0.5 });
     }
-    _nvMsg(`主砲 撃て！ 方位 ${Math.round(_nvAimCompass()).toString().padStart(3, '0')}°・距離 ${(range / 1000).toFixed(1)}km`);
+    if (sol) {
+        const ac = ((_nvShipCompass() - (Math.atan2(aimX - physics.cgWorldX, aimZ - physics.cgWorldZ) * 180 / Math.PI - (physics.heading || 0))) % 360 + 360) % 360;
+        _nvMsg(`主砲 撃て！ 方位 ${Math.round(ac).toString().padStart(3, '0')}°・距離 ${(Math.hypot(aimX - physics.cgWorldX, aimZ - physics.cgWorldZ) / 1000).toFixed(1)}km${typeof sight !== 'undefined' && sight.lock ? `（${sight.lock.name} の未来位置へ）` : '（測距儀の十字へ）'}`);
+    } else _nvMsg(`主砲 撃て！ 方位 ${Math.round(_nvAimCompass()).toString().padStart(3, '0')}°・距離 ${(range / 1000).toFixed(1)}km`);
     renderSubPanel();
 }
 window.navalFire = navalFire;
@@ -284,12 +299,13 @@ function navalPanelHTML() {
     const T = shipType(), G = T.gun;
     let h = `<div class="sb-head"><span class="sb-title">${T.icon} ${T.label}</span></div>`;
     if (G) {
-        const ready = G.n - naval.reload.length;
-        h += `<div class="sb-status">主砲 ${G.cal}mm × ${G.n}　装填済み ${ready}/${G.n}${naval.reload.length ? `（次まで ${Math.ceil(Math.min(...naval.reload))}秒）` : ''}　射程 ${G.range}km</div>
+        const nG = navalGunCount(), ready = Math.max(0, nG - naval.reload.length);
+        h += `<div class="sb-status">主砲 ${G.cal}mm × ${nG}　装填済み ${ready}/${nG}${naval.reload.length ? `（次まで ${Math.ceil(Math.min(...naval.reload))}秒）` : ''}　射程 ${G.range}km</div>
         <div class="sb-row">方位：<button onclick="navalSet('absolute', ${!naval.absolute})">${naval.absolute ? '真方位' : '艦首から'}</button>
             <input type="range" min="${naval.absolute ? 0 : -180}" max="${naval.absolute ? 359 : 180}" step="1" value="${Math.round(naval.brg)}" oninput="naval.brg=+this.value;this.nextElementSibling.textContent=this.value+'°'" style="flex:1"><span>${Math.round(naval.brg)}°</span></div>
         <div class="sb-row">距離：<input type="range" min="1" max="${G.range}" step="0.5" value="${Math.min(G.range, naval.rangeKm)}" oninput="naval.rangeKm=+this.value;this.nextElementSibling.textContent=this.value+'km'" style="flex:1"><span>${Math.min(G.range, naval.rangeKm)}km</span></div>
-        <div class="sb-row"><button onclick="navalAimCamera()">👁 見ている方へ</button><button class="sb-fire" onclick="navalFire()" ${ready > 0 ? '' : 'disabled'}>💥 撃て</button></div>`;
+        <div class="sb-row"><button onclick="navalAimCamera()">👁 見ている方へ</button><button onclick="sightRFView(viewpointActiveKey !== 'rangefinder')" ${typeof viewpointActiveKey !== 'undefined' && viewpointActiveKey === 'rangefinder' ? 'class="on"' : ''}>🔭 測距儀</button><button onclick="sightLock()" ${typeof sight !== 'undefined' && sight.lock ? 'class="on"' : ''}>🎯 ${typeof sight !== 'undefined' && sight.lock ? 'はなす' : '捉える'}</button><button class="sb-fire" onclick="navalFire()" ${ready > 0 ? '' : 'disabled'}>💥 撃て</button></div>
+        ${typeof sight !== 'undefined' && sight.lock ? `<div class="sb-note">目標 ${sight.lock.name}：撃つと未来位置へ（測距儀でずらすと、そのずれのまま）</div>` : '<div class="sb-note">測距儀を覗いていれば十字の所へ、目標を捉えればその未来位置へ撃ちます</div>'}`;
     }
     if (T.air) {
         const up = naval.planes.length;

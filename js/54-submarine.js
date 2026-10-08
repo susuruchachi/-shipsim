@@ -9,7 +9,8 @@
 //  ・潜望鏡：設定した位置（模型の座標）から上へ伸ばす。覗くとその頭からの眺め（倍率・照準線付き）。
 //  ・ソナー：パッシブ（タグ・魚雷の方位）とアクティブ（ピン：海底・岸の反響）。測深儀で船底から海底まで。
 //  ・魚雷：艦首から（潜望鏡を覗いていればその向きへ）。岸・海底・タグに当たるか、射程の終わりで爆発。
-const SUB_DEF = { type: 'other', maxDepth: 300, scope: null, scopeLen: 8, tubes: 6, torpSpeed: 45, torpRange: 9 };
+// rf：測距儀の位置・turrets：砲塔の位置（66-sights.js。null は自動）
+const SUB_DEF = { type: 'other', maxDepth: 300, scope: null, scopeLen: 8, tubes: 6, torpSpeed: 45, torpRange: 9, rf: null, turrets: null };
 const subCfg = Object.assign({}, SUB_DEF);
 const sub = {
     depth: 0, vDepth: 0, cmd: 0, ballast: 0, mode: 'surface', pitch: 0, applied: 0, k: 1, under: false,
@@ -438,7 +439,9 @@ function subFire() {
     const hp = window.hullProfile, sc = physics.scale || 1;
     const half = ((hp && hp.ready) ? hp.halfLen : 6) * sc;
     const yawDeg = sub.view && typeof viewpointYaw !== 'undefined' ? viewpointYaw * 180 / Math.PI : 0;
-    const h = (physics.heading || 0) + yawDeg, r = h * Math.PI / 180;
+    // 目標を捉えていれば、目標の未来位置へ（66-sights.js）。でなければ、潜望鏡の向き（覗いていなければ艦首の向き）
+    const sol = typeof sightFireSolution === 'function' ? sightFireSolution('torpedo') : null;
+    const h = sol ? sol.hd : (physics.heading || 0) + yawDeg, r = h * Math.PI / 180;
     const fr = (physics.heading || 0) * Math.PI / 180;
     const x = physics.cgWorldX + Math.sin(fr) * half * 0.9, z = physics.cgWorldZ + Math.cos(fr) * half * 0.9;
     const y = physics.y - _subDraft() * 0.6;
@@ -451,8 +454,8 @@ function subFire() {
     scene.add(mesh);
     sub.torps.push({ x, y, z, h, v: 0, vMax: subCfg.torpSpeed * 0.514, dist: 0, run: Math.max(4, Math.min(sub.depth + 2, 15)), mesh, trailT: 0 });
     sub.loaded--; sub.reload.push(SUB_RELOAD);
-    const brg = ((typeof worldTrueCompass === 'function' ? worldTrueCompass() : worldCompass(physics.heading)) - yawDeg + 720) % 360;
-    _subMsg(`魚雷発射！ 方位 ${brg.toFixed(0).padStart(3, '0')}°`);
+    const brg = ((typeof worldTrueCompass === 'function' ? worldTrueCompass() : worldCompass(physics.heading)) - (h - (physics.heading || 0)) + 720) % 360;
+    _subMsg(sol ? `魚雷発射！ 方位 ${brg.toFixed(0).padStart(3, '0')}°（${sight.lock ? sight.lock.name + ' の' : ''}未来位置へ・${Math.round(sol.t)}秒）` : `魚雷発射！ 方位 ${brg.toFixed(0).padStart(3, '0')}°`);
     // 「シュッ」という圧搾空気の音
     if (typeof audioBurst === 'function' && window.shipAudio && shipAudio.ctx && shipAudio.buses && shipAudio.buses.env) {
         audioBurst(shipAudio.buses.env, { dur: 0.9, attack: 0.01, gain: 0.6, type: 'lowpass', freq: 380, q: 1, kind: 'brown' });
