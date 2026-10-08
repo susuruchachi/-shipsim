@@ -1223,7 +1223,8 @@ function _trCheckGrounding(t, dt) {
     if (!terrain.near && !terrain.ports.size && terrain.depth > worldShipDraft() + 80) { terrain.grounded = false; terrain.good = { x, z, h, score: 0, hard: 0 }; _trGroundAttitude([], dt); return; }
     const hits = [];
     const score = _trHullScore(x, z, h, off, hits), hard = _trHullScore.hard;
-    const wasGrounded = terrain.grounded;
+    const wasGrounded = terrain.grounded, vHit = Math.abs(physics.speed || 0) * 0.514444;
+    let worse = false;
     // 前の位置（good）と、今の波・姿勢のまま比べる（波で船底が上下しただけで「深く入った」としない。
     // そうしないと、波のたびに動きを取り消されて、乗り上げた所から後進で抜けられない）
     let good = terrain.good;
@@ -1232,6 +1233,7 @@ function _trCheckGrounding(t, dt) {
         good = { x: good.x, z: good.z, h: good.h, score: so, hard: ho };
     }
     if (good && _trWorse(score, hard, good)) {
+        worse = true;
         // 調べるとき用：どの点が何に当たったか（船の中の前後 a・横 s・その点の喫水 d）
         terrain._lastHits = hits.slice(0, 12).map(p => ({ a: Math.round(p.a), s: Math.round(p.s), d: +(p.d || 0).toFixed(1), tip: !!p.tip }));
         // 前より深く入った：動いた分を取り消す（向きだけ・位置だけ戻して済むならそれで）
@@ -1266,6 +1268,8 @@ function _trCheckGrounding(t, dt) {
         if (terrain.grounded) physics.speed *= Math.exp(-dt * 0.8);
     }
     terrain.hullHits = hits.length;
+    // 速く乗り上げたら船底に穴（64-damage.js：ゆっくりなら二重底で止まる）
+    if (terrain.grounded && (!wasGrounded || worse) && typeof damageGround === 'function') damageGround(hits, vHit);
     _trGroundAttitude(hits, dt);
     _trSeabedLift(off);
     if (terrain.grounded && !wasGrounded && Math.abs(physics.speed || 0) > 0.6 && typeof audioWaveImpact === 'function') {

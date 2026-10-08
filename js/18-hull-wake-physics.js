@@ -1824,7 +1824,9 @@ function computeHullBuoyancyPhysics(cgWorldX, cgWorldZ, rotY, pitchAngle, shipY,
 
         const baseKeelY = shipY - waterlineYScaled + (hp.designWaterlineY - sl.draft) * physScale;
         const keelY = baseKeelY - alongDistW * Math.sin(pitchAngle);
-        const depthLocal = (waveY - keelY) / physScale;
+        let depthLocal = (waveY - keelY) / physScale;
+        // 浸水しているときは、主甲板より上の船体は浮力にならない（予備浮力を超えれば沈む：63-flooding.js）
+        if (window._wtDeckCap && Number.isFinite(hp.deckY)) depthLocal = Math.min(depthLocal, hp.deckY - (hp.designWaterlineY - sl.draft));
 
         const areaCurrent = _segSubmergedAreaLocal(sl.halfWidth, sl.draft, Math.max(0, depthLocal));
         const areaCurrentWorld = areaCurrent * physScale * physScale; // m²（実断面積）

@@ -252,7 +252,8 @@ function animate() {
             //  buoyancyスライダーは、この実物理量に対する倍率（既定1.0=純物理）として残す。
             const RHO_WATER = 1025;          // kg/m³（海水密度）
             const G_REAL    = 9.81;          // m/s²
-            const massKg    = physics.mass * 1e6; // 「千トン」単位 → kg（千トン×1000=トン、×1000=kg）
+            // 「千トン」単位 → kg（千トン×1000=トン、×1000=kg）。浸水した水の重さも（63-flooding.js）
+            const massKg    = physics.mass * 1e6 + ((typeof flood !== 'undefined' && flood.massKg) || 0);
             const buoyMult  = physics.buoyancy / (physics.buoyancyBase || 12.0); // スライダー倍率（既定1.0）
 
             // ── 質量に応じた応答減衰係数（ヒーブ応答・スラミング減速など複数箇所で共用）──
@@ -472,7 +473,9 @@ function animate() {
             // （実際に数値シミュレーションで確認: pitch+0.05でmomentVolAboutCGも+に
             //   なり、そのままだとpitchをさらに増やす方向に力がかかってしまう）。
             // 復元モーメントになるよう符号を反転する。
-            const torqueBuoyPitch = -RHO_WATER * G_REAL * momentVolAboutCG * buoyMult; // N・m
+            // 浸水した水の重さのモーメント（船首寄りの水は船首を下げる：63-flooding.js）も
+            const torqueBuoyPitch = -RHO_WATER * G_REAL * momentVolAboutCG * buoyMult
+                + ((typeof flood !== 'undefined' && flood.torqueP) || 0); // N・m
 
             const k_gyro_pitch = len * 0.25; // 慣性半径（質量分布の代理指標）
             const h_pend = (physics.waterlineOffsetY - physics.cgOffset.y) * physScale;
@@ -526,7 +529,8 @@ function animate() {
 
             const turnRateRad  = physics.turnRate * Math.PI / 180;
             const turnRollBias = THREE.MathUtils.clamp(physics.speed * turnRateRad * 0.0018, -0.35, 0.35);
-            const targetRoll  = -waveRoll + turnRollBias;
+            // 浸水で片舷に水がかたよると、その舷へ傾いたままになる（63-flooding.js）
+            const targetRoll  = -waveRoll + turnRollBias + ((typeof flood !== 'undefined' && flood.rollBias) || 0);
 
             const accRoll  = ((targetRoll  - physics.roll)  * KRoll  - physics.vRoll  * CRoll)  / IRoll;
             physics.vRoll  += THREE.MathUtils.clamp(accRoll, -maxAcc, maxAcc) * subDt;
@@ -688,6 +692,9 @@ function animate() {
     // 目印を画面上で一定の大きさに・音の位置の目印（10 / 36）
     if (typeof updateSoundMarkers === 'function') updateSoundMarkers();
     if (typeof updateMooring === 'function') updateMooring();          // 係船設備（46-mooring.js）
+    if (typeof updateWatertight === 'function') updateWatertight();    // 水密隔壁の表示（62-watertight.js）
+    if (typeof updateFlooding === 'function') updateFlooding(t, isDesignMode ? 0 : physicsDt);   // 浸水（63-flooding.js）
+    if (typeof updateDamage === 'function') updateDamage(t, isDesignMode ? 0 : physicsDt);       // 穴の見た目・泡（64-damage.js）
     if (typeof updateMarkerScales === 'function') updateMarkerScales();
     // 自動露出（30-auto-exposure.js）：目の慣れのように露出を少しずつ合わせる
     if (typeof applyAutoExposure === 'function') applyAutoExposure(t);

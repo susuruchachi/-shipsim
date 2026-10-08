@@ -163,6 +163,8 @@ function collectShipConfig() {
         bridge: (typeof getBridgeConfig === 'function') ? getBridgeConfig() : null,
         // 係船設備（46-mooring.js）
         mooring: (typeof getMooringConfig === 'function') ? getMooringConfig() : null,
+        // 水密隔壁・区画（62-watertight.js）
+        watertight: (typeof getWTConfig === 'function') ? getWTConfig() : null,
         // 艦種（潜水艦）・潜望鏡・魚雷（54-submarine.js）
         submarine: (typeof getSubmarineConfig === 'function') ? getSubmarineConfig() : null,
         // 機関（スクリューごと：後進できるか・馬力・独立操作）（56-engines.js）
@@ -370,6 +372,7 @@ function applyShipConfig(cfg) {
     if (typeof applyShipSoundConfig === 'function') applyShipSoundConfig(cfg.sound || null);
     if (typeof applyBridgeConfig === 'function') applyBridgeConfig(cfg.bridge || null);
     if (typeof applyMooringConfig === 'function') applyMooringConfig(cfg.mooring || null);
+    if (typeof applyWTConfig === 'function') applyWTConfig(cfg.watertight || null);
     if (typeof applySubmarineConfig === 'function') applySubmarineConfig(cfg.submarine || null);
     if (typeof applyEngineConfig === 'function') applyEngineConfig(cfg.engines || null);
     if (typeof applyManeuverConfig === 'function') applyManeuverConfig(cfg.maneuver || null);

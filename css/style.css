@@ -901,6 +901,26 @@ body.hud-hidden #ap-panel { display: none !important; }
 #ap-panel .ap-line .ap-fold { float: none; margin: 0 !important; order: 2; }
 #ap-panel .ap-line span { overflow: hidden; text-overflow: ellipsis; }
 
+/* 被害・浸水（63-flooding.js） */
+#btn-flood { width: 48px; height: 48px; font-size: 13px; letter-spacing: 1px; }
+#btn-flood.on { background: rgba(120, 200, 255, 0.45); border-color: #8fd0ff; }
+#btn-flood.alert { background: rgba(255, 80, 60, 0.45); border-color: #ff8a7a; }
+body.hud-hidden #btn-flood, body.hud-hidden #flood-panel { display: none !important; }
+#flood-panel {
+    position: fixed; z-index: 30; display: none; width: 320px; max-width: calc(100vw - 16px); overflow-y: auto;
+    overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y;
+    padding: 8px; border-radius: 10px; box-sizing: border-box;
+    background: rgba(6, 18, 34, 0.92); border: 1px solid rgba(120, 200, 255, 0.5);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5); color: #cfe; font-size: 11px;
+}
+#flood-panel.open { display: block; }
+#flood-panel .fp-title { color: #8fd0ff; font-weight: bold; }
+#flood-panel canvas { width: 100%; height: auto; display: block; background: rgba(0, 0, 0, 0.25); border-radius: 6px; margin-top: 4px; }
+#flood-panel .fp-stat { line-height: 1.6; margin: 6px 0; color: #dff; }
+#flood-panel .fp-msg { color: #ffe38a; }
+#flood-panel .fp-btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+#flood-panel button { background: #0a1932; color: #cfe; border: 1px solid rgba(120, 200, 255, 0.45); border-radius: 6px; padding: 5px 7px; font-size: 11px; }
+
 /* 潜水艦（54-submarine.js） */
 #btn-sub { bottom: calc(221px + env(safe-area-inset-bottom)); left: 224px; width: 48px; height: 48px; font-size: 13px; letter-spacing: 1px; }
 #btn-sub.on { background: rgba(120, 200, 255, 0.45); border-color: #8fd0ff; }
