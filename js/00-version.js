@@ -201,7 +201,8 @@
 //               効かないので、港の細かい地形・岸壁の縁・船体の穴の絵は、奥行きそのものを少し手前にずらす（depthBiasMaterial）。
 // 0.03.015.008 甲板が水に入った所では、喫水線の泡の帯・泡をすぐ消す（沈んだ船首の上に白い筋が伸びていた）。輪郭もすぐ縮める。
 // 0.03.015.009 遠くの地形の網は、近くの網と重なる縁の帯で少し奥に描く（境目でちらついていた）。
-var APP_VERSION = '0.03.015.009';
+// 0.03.015.010 他の船の窓の帯を、壁から 10cm 出す（3cm だと遠くから見て壁とちらついた）。
+var APP_VERSION = '0.03.015.010';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

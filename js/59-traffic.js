@@ -1932,7 +1932,8 @@ function _tfBuildMesh(S) {
         cyl(r * 0.93, r * 0.93, h * 0.14, x, fb + h * 0.93, z - Math.sin(rake || 0) * h * 0.45, M.top, 14, rake || 0);
         funnels.push(new THREE.Vector3(x, fb + h, z - Math.sin(rake || 0) * h * 0.5));
     };
-    const winBand = (w, len, y, z) => { box(w + 0.06, 0.9, len * 0.96, 0, y, z, M.win); };
+    // 窓の帯は壁から 10cm ずつ出す（3cm だと、遠くから見ると壁と重なってちらついた）
+    const winBand = (w, len, y, z) => { box(w + 0.2, 0.9, len * 0.96, 0, y, z, M.win); };
     const mast = (z, h, r) => cyl(r || 0.35, (r || 0.35) * 1.4, h, 0, fb + h / 2, z, M.dark, 8, 0.05);
     const tiers = (n, len0, w0, z0, hT, shrink) => {
         let y = fb, len = len0, w = w0;
