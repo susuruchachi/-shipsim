@@ -177,6 +177,17 @@ function _trMaterial() {
     noShipLightProbe(_trMat);
     return _trMat;
 }
+// 遠くの網の材質：近くの網と重なる縁の帯では、奥に描く（近くの網が勝つように：02 の depthBiasMaterial）
+let _trMatFar = null;
+function _trMaterialFar() {
+    if (_trMatFar) return _trMatFar;
+    _trMatFar = _trMaterial().clone();
+    _trMatFar.onBeforeCompile = _trMaterial().onBeforeCompile;
+    _trMatFar.customProgramCacheKey = () => 'worldTerrain';
+    _trMatFar.userData = {}; noShipLightProbe(_trMatFar);
+    depthBiasMaterial(_trMatFar, 0.0008);
+    return _trMatFar;
+}
 // 港のそばの細かい網の材質：重なる所では手前に描く（粗い網と同じ高さの陸で、ちらつかないように）
 let _trMatFine = null;
 function _trMaterialFine() {
@@ -487,7 +498,7 @@ function _trBuildMesh(H, n, half, cx, cz, lowerInside, opts) {
     geo.setIndex(n * n > 65535 ? new THREE.Uint32BufferAttribute(idx, 1) : new THREE.Uint16BufferAttribute(idx, 1));
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
-    const m = new THREE.Mesh(geo, opts && opts.coastOnly ? _trMaterialFine() : _trMaterial());
+    const m = new THREE.Mesh(geo, opts && opts.coastOnly ? _trMaterialFine() : opts && opts.far ? _trMaterialFar() : _trMaterial());
     // 岸壁・桟橋の縁（細かい網だけ）
     if (coastLines && opts.quayWalls) { const qw = _trQuayWalls(coastLines, H, n, step, cx, cz, opts.detail); if (qw) m.add(qw); }
     m.receiveShadow = true;
@@ -568,7 +579,7 @@ function _trOnHeights(msg) {
         if (terrain.fine) scene.add(terrain.fine);
     } else {
         _trDispose(terrain.far);
-        terrain.far = _trBuildMesh(msg.H, TR_FAR.n, TR_FAR.half, cx, cz, { cx, cz, half: TR_NEAR.half });
+        terrain.far = _trBuildMesh(msg.H, TR_FAR.n, TR_FAR.half, cx, cz, { cx, cz, half: TR_NEAR.half }, { far: true });
         if (terrain.far) scene.add(terrain.far);
         terrain.pending = false;
     }

@@ -200,7 +200,8 @@
 //               （頂点だけで決めていたので、大きな三角形の中でずれていた）。画素ごとに奥行きを書く材質には polygonOffset が
 //               効かないので、港の細かい地形・岸壁の縁・船体の穴の絵は、奥行きそのものを少し手前にずらす（depthBiasMaterial）。
 // 0.03.015.008 甲板が水に入った所では、喫水線の泡の帯・泡をすぐ消す（沈んだ船首の上に白い筋が伸びていた）。輪郭もすぐ縮める。
-var APP_VERSION = '0.03.015.008';
+// 0.03.015.009 遠くの地形の網は、近くの網と重なる縁の帯で少し奥に描く（境目でちらついていた）。
+var APP_VERSION = '0.03.015.009';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
