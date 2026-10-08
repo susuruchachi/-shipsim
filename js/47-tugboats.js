@@ -211,12 +211,20 @@ function tugStations() {
 window.tugStations = tugStations;
 // 引くときに索を取る金物：クリートか「タグの索を直接かける」を選んだビット・ボラードだけ
 //（持ち場がそれ以外なら、同じ舷で前後の近い金物から。船の長さの 3 割より遠ければ引けない）
+//（船に、索を取れる金物が一つも無いとき：タグの索を、その所の舷の甲板（ビットがあるものとして）に取る。
+//  以前は引けないので、金物を置いていない船はタグでの離岸が「岸壁から離す」から先へ進まなかった）
 function tugPullHook(st, stations) {
     if (!st) return null;
     if (st.fitting && st.tow) return st;
     const hp = window.hullProfile, hl = (hp && hp.ready) ? hp.halfLen : 6;
+    const L = stations || tugStations();
+    if (!L.some(q => q.fitting && q.tow)) {
+        if (!st.side) return null;
+        const deckY = (hp && hp.ready && Number.isFinite(hp.deckY)) ? hp.deckY : st.y;
+        return Object.assign({}, st, { y: deckY, x: st.side * _tugHalfWidth(st.z) * 0.92, fitting: true, tow: true, deck: true });
+    }
     let best = null, bd = 0.3 * hl;
-    for (const q of stations || tugStations()) {
+    for (const q of L) {
         if (!q.fitting || !q.tow) continue;
         if (st.side && q.side && q.side !== st.side) continue;
         const d = Math.abs(q.z - st.z);
