@@ -178,7 +178,7 @@ function engineSetOrder(i, v) {
     E.order = v;
     if (typeof telegraphBell === 'function') telegraphBell(bridgeUI.telegraph, false, steps);
     const wait = !(window.bridgeUI && bridgeUI.waitAnswer === false);
-    E.answerAt = wait ? performance.now() + 1300 * (0.8 + Math.random() * 0.5) : -1;
+    E.answerAt = wait ? 1.3 * (0.8 + Math.random() * 0.5) : -1;            // 応答までの物理の時間[秒]（engineUpdate で減らす）
     if (!wait) E.answer = v;
     _engDrawAll();
 }
@@ -198,9 +198,8 @@ const ENG_SPOOL_UP = 0.08, ENG_SPOOL_DOWN = 0.14, ENG_REVERSE_DELAY = 3.0;
 function engineUpdate(dt, designMode) {
     const L = engineList();
     if (!L.length) return null;
-    const now = performance.now();
     for (const E of L) {
-        if (E.answerAt > 0 && now >= E.answerAt) { E.answerAt = -1; E.answer = E.order; if (typeof telegraphBell === 'function') telegraphBell(bridgeUI.telegraph, true); _engDrawAll(); }
+        if (E.answerAt > 0) { E.answerAt -= dt; if (E.answerAt <= 0) { E.answerAt = -1; E.answer = E.order; if (typeof telegraphBell === 'function') telegraphBell(bridgeUI.telegraph, true); _engDrawAll(); } }
         // アジポッドのジョイスティック操船（58-maneuvering.js）では、回転数をそちらで決める
         const ov = (!designMode && typeof maneuverRpmTarget === 'function') ? maneuverRpmTarget(E) : null;
         let target = designMode ? 0 : (ov !== null ? ov : ENG_RPM_OF[_engTargetOrder(E)] || 0);

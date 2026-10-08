@@ -181,7 +181,10 @@
 //               視界の真ん中の船を目標にして真ん中に置いたまま追いかけ、目標の向き・速さ・距離から弾・魚雷が着くときの未来位置へ撃つ。
 //               視界を少しずらすと、そのずれ（目標から見た前後・左右）のまま追いかけ、そこへ撃つ（「ずれを戻す」で真ん中へ）。
 //               舵輪の横に「👁 覗く・🎯 捉える・💥 撃て／🚀 魚雷」のボタン。砲塔（数も）・測距儀・潜望鏡の位置を、船種の設定で数字かギズモで。
-var APP_VERSION = '0.03.015.000';
+// 0.03.015.001 自動の離着岸でテレグラフを何度も切り替えていたのを直した：機関室の応答の遅れを物理の時間で数える
+//               （早送りでは機関が何十秒も指令に従わず、行き過ぎては逆をかけていた）。停止と微速の境目に幅を持たせ、
+//               機関を強める指令は前の指令から 12 秒あける。港口・岸壁の手前の減速も、境目で行き来しないように。
+var APP_VERSION = '0.03.015.001';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

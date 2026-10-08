@@ -978,6 +978,7 @@ async function autopilotStart(port) {
 }
 function autopilotStop(msg, silent) {
     const was = autopilot.active;
+    autopilot.pendingOrder = undefined;            // 待たせていた機関の指令は出さない
     // 途中で止まったときは、あとで「再開」できるように覚えておく
     if (was && !silent && autopilot.route && autopilot.dest) {
         autopilot.resume = { dest: autopilot.dest, route: autopilot.route, leg: autopilot.leg, legFrom: autopilot.legFrom,
@@ -1040,11 +1041,32 @@ function _apHelm(cmd, dt) {
         physics.autoRudder = cmd;          // 17-main-loop.js の舵の計算が追いかける
     }
 }
-function _apOrder(v) {
+// 機関の指令。止める・弱める・逆をかける（止めるため）はすぐ出すが、強める（停止から前進・後進、微速から半速など）は、
+// 前の指令から AP_ORDER_DWELL 秒（物理の時間）たつまで待たせる。待っている間に別の指令が来たらそちらに替える。
+// （以前は、離着岸の寄せ・港口の手前の減速で、停止と微速を 2〜3 秒ごとに行き来し、早送りではテレグラフが
+//   ガチャガチャと鳴り続けていた）
+const AP_ORDER_DWELL = 12;
+function _apOrderNow(v) {
+    autopilot.pendingOrder = undefined;
     if (autopilot.lastOrder === v) return;
     autopilot.lastOrder = v;
+    autopilot.orderT = autopilot.gt || 0;
     if (typeof setTelegraphOrder === 'function') setTelegraphOrder(v);
     else physics.telegraphState = v;
+}
+function _apOrder(v) {
+    const cur = autopilot.lastOrder;
+    if (cur === v) { autopilot.pendingOrder = undefined; return; }
+    const c = cur || 0;
+    const stronger = cur !== null && cur !== undefined && Math.abs(v) > Math.abs(c) && (c === 0 || Math.sign(v) === Math.sign(c));
+    if (stronger && (autopilot.gt || 0) - (autopilot.orderT || -1e9) < AP_ORDER_DWELL) { autopilot.pendingOrder = v; return; }
+    _apOrderNow(v);
+}
+// 物理の時間を数え、待たせていた指令を出す（updateAutopilot の最初で）
+function _apOrderClock(dt) {
+    autopilot.gt = (autopilot.gt || 0) + Math.max(0, dt || 0);
+    const v = autopilot.pendingOrder;
+    if (v !== undefined && (autopilot.gt - (autopilot.orderT || -1e9)) >= AP_ORDER_DWELL) _apOrderNow(v);
 }
 
 // ── 座礁から抜け出す ──
@@ -1514,11 +1536,12 @@ function _apAground(dt) {
 
 // ── 毎フレーム ──
 function updateAutopilot(t, dt) {
+    _apOrderClock(dt);
     if (!window.world || world.mode !== 'world') { if (autopilot.active) autopilotStop('世界を航海するモードではないので、自動航行を止めました'); return; }
     // タグなしの出港：岸壁から横へ離れる（ゆっくり加速し、離れたら航路を引いて出る）
     if (autopilot.selfDepart && autopilot.selfDepart.rudder) {
         // スラスターの無い船：スプリングで船首（後進なら船尾）を沖へ振り出し、後進なら船の長さほど下がって、舵で出る
-        const S = autopilot.selfDepart, d = Math.min(0.1, Math.max(0, dt || 0)) * (typeof physicsSpeed !== 'undefined' ? physicsSpeed : 1);
+        const S = autopilot.selfDepart, d = Math.min(2, Math.max(0, dt || 0));      // （dt は物理の時間。早送りの倍率は掛かっている）
         const e = ((S.h1 - physics.heading + 540) % 360) - 180;
         const h = physics.heading * _apRad, fx = Math.sin(h), fz = Math.cos(h), ox = Math.cos(h) * S.out, oz = -Math.sin(h) * S.out;
         if (Math.abs(e) > 0.3 && !S.swung) {
@@ -1562,7 +1585,7 @@ function updateAutopilot(t, dt) {
         return;
     }
     if (autopilot.selfDepart) {
-        const S = autopilot.selfDepart, d = Math.min(0.1, Math.max(0, dt || 0)) * (typeof physicsSpeed !== 'undefined' ? physicsSpeed : 1);
+        const S = autopilot.selfDepart, d = Math.min(2, Math.max(0, dt || 0));      // （dt は物理の時間。早送りの倍率は掛かっている）
         const left = S.need - S.moved;
         if (left > 0.01) {
             S.v = Math.min(S.moved < 25 ? 0.6 : 1.6, S.v + 0.08 * d, Math.max(0.15, left * 0.08));
@@ -1660,7 +1683,8 @@ function updateAutopilot(t, dt) {
         const v = Math.max(0, physics.speed || 0);
         const dStop = v / k;
         const near = rc.dist < Math.max(reach, dStop * 0.6);
-        if (rc.dist < dStop * 1.15) finalOrder = 0;
+        // （止めたあとは、残りが止まるまでの道のりの 2 倍を超えるまでかけ直さない。境目で停止と微速を 2 秒ごとに行き来していた）
+        if (rc.dist < dStop * (autopilot.lastOrder === 0 ? 2 : 1.15)) finalOrder = 0;
         // 後進はスクリューが止まるまで効き続けるので、遅くなったら早めにやめる（後ろへ走り出さないように）
         if ((rc.dist < dStop * 0.6 || autopilot.overshoot) && v > 1.2) finalOrder = v > 4 ? -2 : -1;
         if ((physics.speed || 0) < -0.3) finalOrder = 0;             // 後進で後ろへ動き出したら止める
@@ -1728,7 +1752,8 @@ function updateAutopilot(t, dt) {
     if (!wp.final && R[R.length - 1].final) {
         const vv = Math.max(0, physics.speed || 0), dAll = vv * Math.max(0.05, physics.mass || 1) / 0.3;
         if (remain < Math.max(2000, dAll * 3)) order = Math.min(order, 1);
-        if (remain < dAll * 1.2) order = Math.min(order, 0);
+        // （止めたあとは、残りが止まるまでの道のりの 2 倍を超えるまで機関をかけ直さない。境目で停止と微速を行き来していた）
+        if (remain < dAll * (autopilot.lastOrder === 0 ? 2 : 1.2)) order = Math.min(order, 0);
     }
     if (finalOrder !== null) order = Math.min(order, finalOrder);
     // 狭い水路・浅い水道（航路の点の narrow）：手前でタグを呼び、持ち場に着くまで待って、

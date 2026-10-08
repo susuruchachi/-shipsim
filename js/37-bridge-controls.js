@@ -358,7 +358,8 @@ function onTelegraphOrder(prev, next, prevSpecial) {
     telegraphBell(bridgeUI.telegraph, false, Math.abs((next || 0) - (prev || 0)) || 1);
     // 機関終了で止めた機関を起こすには時間がかかる
     const wake = (physics.telegraphAnswerSpecial === 'fwe' && physics.telegraphSpecial !== 'fwe') ? TG_FWE_WAKE : 1;
-    _br.answerAt = performance.now() + TG_ANSWER_DELAY * wake * 1000 * (0.8 + Math.random() * 0.5);
+    // 応答までの時間は、物理の時間で数える（早送りのときに、機関が何十秒も指令に従わないことのないように）
+    _br.answerAt = TG_ANSWER_DELAY * wake * (0.8 + Math.random() * 0.5);
     _br.dirtyT = true;
 }
 window.onTelegraphOrder = onTelegraphOrder;
@@ -1228,8 +1229,9 @@ function updateBridge(t) {
     if (_br.lastOrder === null) { _br.lastOrder = order; physics.telegraphAnswer = order; _br.answer = order; }
     const special = physics.telegraphSpecial || '';
     if (order !== _br.lastOrder || special !== _br.lastSpecial) { _br.lastOrder = order; _br.lastSpecial = special; _br.dirtyT = true; }
-    // 機関室の応答
-    if (_br.answerAt > 0 && performance.now() >= _br.answerAt) {
+    // 機関室の応答（残り時間は物理の時間：物理早送り physicsSpeed の分だけ速く）
+    if (_br.answerAt > 0) _br.answerAt = Math.max(1e-6, _br.answerAt - dt * (typeof physicsSpeed !== 'undefined' ? physicsSpeed : 1));
+    if (_br.answerAt > 0 && _br.answerAt <= 1e-6) {
         _br.answerAt = -1;
         physics.telegraphAnswer = order;
         physics.telegraphAnswerSpecial = special;

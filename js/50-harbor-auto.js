@@ -461,6 +461,7 @@ function harborAutoStop(msg) {
     harborAuto.mode = null; harborAuto.phase = '';
     for (const t of (window.tugs || [])) { delete t.autoPower; delete t.awaySide; }
     if (typeof _apOrder === 'function') _apOrder(0);
+    if (typeof autopilot !== 'undefined') autopilot.pendingOrder = undefined;
     _haMsg(msg || '');
 }
 function harborAutoBerthNow() {
@@ -601,16 +602,22 @@ function _haControl(target, dt, opt) {
     const dStop = v * v / (2 * aBrake) + v * 7 + 2;                             // 逆転までの遅れ（約 7 秒）の分も
     const toward = Math.sign(vA) === Math.sign(eA) && Math.abs(vA) > 0.05;
     let o = 0;
-    // （機関で止めるのは 0.25 ノットまで。逆転の遅れで行き過ぎないように。残りは惰性と、前後に引くタグで）
-    if (Math.abs(eA) < 6) o = Math.abs(vA) > 0.25 ? -Math.sign(vA) : 0;                        // 着いた：止める
-    else if (toward && Math.abs(eA) < dStop) o = Math.abs(vA) > 0.25 ? -Math.sign(vA) : 0;     // このままでは行き過ぎる：逆をかける
-    else if (!toward && Math.abs(vA) > 0.12) o = Math.sign(eA);                                // 離れる向きに動いている：目標の方へ
-    else if (Math.abs(vA) < vmax - 0.05) o = Math.sign(eA);                                    // まだ遅い：目標の方へ
-    else o = 0;                                                                                 // 十分な速さ：惰性で
-    // 指令は 2 秒に一度まで（ベルが鳴りすぎないよう）。逆をかけるのは急ぐ
+    // 今の指令を続けるときと、新しくかけるときとで、境目に幅を持たせる（境目の近くで、停止と微速を 2〜3 秒ごとに
+    // 行き来して、早送りではテレグラフがガチャガチャ鳴り続けていた）
     const cur = autopilot.lastOrder || 0, gap = harborAuto.t - harborAuto.lastOrderT;
+    const aTol = opt.aTol || 6;
+    const braking0 = cur !== 0 && cur === -Math.sign(vA);                                      // 今、逆をかけて止めている
+    const vBrake = braking0 ? 0.12 : 0.25;                                                      // 止めるのは 0.25 ノットから、0.12 ノットまで
+    // （機関で止めるのは 0.12〜0.25 ノットまで。逆転の遅れで行き過ぎないように。残りは惰性と、前後に引くタグで）
+    if (Math.abs(eA) < aTol) o = Math.abs(vA) > vBrake ? -Math.sign(vA) : 0;                   // 着いた：止める
+    else if (toward && Math.abs(eA) < dStop * (braking0 ? 1.3 : 1)) o = Math.abs(vA) > vBrake ? -Math.sign(vA) : 0;   // このままでは行き過ぎる：逆をかける
+    else if (!toward && Math.abs(vA) > 0.12) o = Math.sign(eA);                                // 離れる向きに動いている：目標の方へ
+    else if (cur === Math.sign(eA) ? Math.abs(vA) < vmax : Math.abs(vA) < vmax * 0.6) o = Math.sign(eA);   // まだ遅い：目標の方へ
+    else o = 0;                                                                                 // 十分な速さ：惰性で
+    // 指令は 2 秒に一度まで（ベルが鳴りすぎないよう）。機関をかけ直すのは 10 秒あけて。逆をかけるのは急ぐ
     const braking = o !== 0 && o === -Math.sign(vA) && toward;
-    if (o !== cur && (gap > 2 || (braking && gap > 0.5))) {
+    const wait = braking ? 0.5 : (o !== 0 && Math.abs(o) >= Math.abs(cur)) ? 10 : 2;
+    if (o !== cur && gap > wait) {
         if (typeof _apOrder === 'function') { _apOrder(o); harborAuto.lastOrderT = harborAuto.t; }
     }
     if (typeof _apHelm === 'function') _apHelm(0, dt);
@@ -733,7 +740,7 @@ function updateHarborAuto(t, dt) {
             harborAuto.remain = Math.abs(e.eA);
             if (Math.abs(e.eA) < 12 && Math.abs(e.eS) < 5 && Math.abs(e.eY) < 2 && Math.abs(physics.speed || 0) < 0.3) next('side', `${P.port.name}：タグで岸壁へ寄せています`);
         } else if (harborAuto.phase === 'side') {
-            const e = _haControl(P.berth, dt, { vA: 0.3, vS: 0.35, r: 0.003, openOnly: true });
+            const e = _haControl(P.berth, dt, { vA: 0.3, vS: 0.35, r: 0.003, openOnly: true, aTol: 10 });
             harborAuto.remain = Math.abs(e.eS);
             if (Math.abs(e.eS) < 0.8 && Math.abs(e.eA) < 15 && Math.abs(e.eY) < 1.5 && Math.abs(e.vS) < 0.06 && Math.abs(physics.speed || 0) < 0.15) {
                 _tugShip.vSway = 0; _tugShip.yawRate = 0; physics.speed = 0; physics.turnRate = 0;
