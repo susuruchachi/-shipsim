@@ -142,7 +142,7 @@ function animate() {
             }
             else if (keys.a || touchLeft) physics.rudderAngle = Math.max(-35.0, physics.rudderAngle - 50 * subDt);
             else if (keys.d || touchRight) physics.rudderAngle = Math.min(35.0, physics.rudderAngle + 50 * subDt);
-            else if (window.autopilot && autopilot.active && Number.isFinite(physics.autoRudder)) {
+            else if (window.autopilot && (autopilot.active || autopilot.selfDepart) && Number.isFinite(physics.autoRudder)) {
                 // 自動航行（49-autopilot.js）：ボタン操作の船でも、指示の舵角へ舵取機の速さで
                 const d = physics.autoRudder - physics.rudderAngle, step = 8 * subDt;
                 physics.rudderAngle += Math.abs(d) <= step ? d : Math.sign(d) * step;

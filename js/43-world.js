@@ -981,6 +981,39 @@ function _rwCarveGrid(fw, R) {
         }
     }
 }
+// 作り込んだ港の細かい地形にも、港の航路を掘る（粗い格子に掘った航路は、枠の中では効かない：枠の中は細かい地形を使うので。
+// サウサンプトン・ウォーターのカルショット沖などで、深い船が通れなかった）。もともと水の所だけ（陸・桟橋は掘らない）を、
+// 航路の線から 150m まで航路の深さに、250m までなだらかに
+function _rwCarveHD(d, ports) {
+    if (!d || !d.h || !ports) return;
+    const RAD = Math.PI / 180, mLat = WORLD_R * RAD, pad = 250, full = 150;
+    const cw = d.dLon * mLat * Math.cos((d.lat0 + d.lat1) / 2 * RAD), ch = d.dLat * mLat;
+    const mLonD = mLat * Math.cos((d.lat0 + d.lat1) / 2 * RAD);
+    const padLat = pad / mLat, padLon = pad / mLonD;
+    for (const p of ports) {
+        const fw = p.real && p.fairway;
+        if (!fw || !fw.pts || fw.pts.length < 2) continue;
+        const Dw = fw.depth || 20;
+        for (let s = 0; s < fw.pts.length - 1; s++) {
+            const A = fw.pts[s], B = fw.pts[s + 1];
+            if (Math.max(A.lat, B.lat) < d.lat0 - padLat || Math.min(A.lat, B.lat) > d.lat1 + padLat || Math.max(A.lon, B.lon) < d.lon0 - padLon || Math.min(A.lon, B.lon) > d.lon1 + padLon) continue;
+            const ax = (A.lon - d.lon0) * mLonD, ay = (d.lat1 - A.lat) * mLat, bx = (B.lon - d.lon0) * mLonD, by = (d.lat1 - B.lat) * mLat;
+            const L2 = (bx - ax) ** 2 + (by - ay) ** 2 || 1;
+            const i0 = Math.max(0, Math.floor((Math.min(ax, bx) - pad) / cw)), i1 = Math.min(d.cols - 1, Math.ceil((Math.max(ax, bx) + pad) / cw));
+            const j0 = Math.max(0, Math.floor((Math.min(ay, by) - pad) / ch)), j1 = Math.min(d.rows - 1, Math.ceil((Math.max(ay, by) + pad) / ch));
+            for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+                const k = j * d.cols + i, h = d.h[k];                 // （高さは 0.1m 単位）
+                if (h >= 0 || (d.k && d.k[k] !== 0 && d.k[k] !== 2)) continue;
+                const px = i * cw, py = j * ch;
+                const t = Math.max(0, Math.min(1, ((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / L2));
+                const dist = Math.hypot(px - ax - t * (bx - ax), py - ay - t * (by - ay));
+                if (dist > pad) continue;
+                const want = 10 * (dist < full ? Dw : Dw * (1 - (dist - full) / (pad - full)));
+                if (h > -want) d.h[k] = -Math.round(want);
+            }
+        }
+    }
+}
 function _rwBuildPorts() {
     const W = REAL_WORLDS[world.realKey];
     const out = [];
@@ -997,6 +1030,7 @@ function _rwBuildPorts() {
         p.fairway = c ? (c.pts ? { depth: c.depth, pts: c.pts.map(([lat, lon]) => ({ lat, lon })) } : null) : _rwFairway(p);
         if (p.fairway) _rwCarve(p.fairway);
     }
+    for (const d of (_RW && _RW.hd) || []) _rwCarveHD(d, out);
     if (typeof terrain !== 'undefined' && terrain.worker) worldWorkerSync(terrain.worker, terrain.rwWin = worldWorkerWindow());
     if (typeof _apWorkerObj !== 'undefined') worldWorkerSync(_apWorkerObj);
     return out;
@@ -1272,7 +1306,7 @@ async function worldEnsureHarbors(pts, rKm) {
     if (!need.length) return;
     await Promise.all(need.map(m => {
         if (!_rwHdLoading.has(m.key)) _rwHdLoading.set(m.key, _rwLoadHarbor(m.key).then(d => {
-            if (_RW === R && !R.hd.some(q => q.key === d.key)) R.hd.push(d);
+            if (_RW === R && !R.hd.some(q => q.key === d.key)) { if (world.ports) _rwCarveHD(d, world.ports); R.hd.push(d); }
         }).catch(e => console.warn('作り込んだ港の地形を読めませんでした：' + m.key, e)).finally(() => _rwHdLoading.delete(m.key)));
         return _rwHdLoading.get(m.key);
     }));

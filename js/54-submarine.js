@@ -344,6 +344,22 @@ function subPing() {
         const dx = tg.pos.x - x0, dz = tg.pos.z - z0, d = Math.hypot(dx, dz);
         if (d < SUB_SONAR_RANGE) echoes.push({ b: _subWorldBearing(dx, dz), d, kind: 'ship' });
     }
+    // 他の船（59-traffic.js）：船体の形（船首から船尾まで、いくつかの点）で返ってくる
+    //（前はタグだけで、他の船は映らなかった。岸より手前の船だけ：岸の向こうの船は陰になる）
+    if (typeof traffic !== 'undefined' && traffic.ships && typeof _tfHullOf === 'function') {
+        const landAt = (b) => { let m = Infinity; for (const e of echoes) if (e.kind === 'land' && Math.abs(((e.b - b + 540) % 360) - 180) < 3 && e.d < m) m = e.d; return m; };
+        for (const T of traffic.ships) {
+            if (!(T.dPl < SUB_SONAR_RANGE + T.L) || T.st === 'off' || T.st === 'gone' || T.st === 'pending') continue;
+            const H = _tfHullOf(T); if (!H) continue;
+            const n = Math.max(3, Math.min(9, Math.round(T.L / 30)));
+            for (let i = 0; i < n; i++) {
+                const a = (i / (n - 1) - 0.5) * T.L * 0.9, dx = H.x + H.fx * a - x0, dz = H.z + H.fz * a - z0, d = Math.hypot(dx, dz);
+                if (d >= SUB_SONAR_RANGE) continue;
+                const b = _subWorldBearing(dx, dz);
+                if (d < landAt(b) + 20) echoes.push({ b, d, kind: 'ship' });
+            }
+        }
+    }
     for (const e of echoes) e.at = now + 2 * e.d / 1500;     // 音が行って帰ってくるまで
     S.echoes = echoes; S.ping = now;
     _subPingSound(echoes);
@@ -382,6 +398,11 @@ function _subDrawSonar() {
     const passive = [];
     for (const tg of (window.tugs || [])) passive.push({ dx: tg.pos.x - x0, dz: tg.pos.z - z0, col: '255,210,120' });
     for (const T of sub.torps) passive.push({ dx: T.x - x0, dz: T.z - z0, col: '255,110,110' });
+    // 他の船の機関の音（動いている船だけ。8km 以内）
+    if (typeof traffic !== 'undefined' && traffic.ships && typeof _tfLocal === 'function') for (const T of traffic.ships) {
+        if (!(T.dPl < 8000) || !((T.v || 0) > 0.3) || T.st === 'off' || T.st === 'gone' || T.st === 'pending') continue;
+        const L = _tfLocal(T, {}); if (Number.isFinite(L.x)) passive.push({ dx: L.x - x0, dz: L.z - z0, col: '255,230,160' });
+    }
     for (const q of passive) {
         const d = Math.hypot(q.dx, q.dz), b = _subWorldBearing(q.dx, q.dz), s = Math.max(0.25, 1 - d / 8000);
         ctx.strokeStyle = `rgba(${q.col},${0.25 + 0.6 * s})`; ctx.lineWidth = 2;
@@ -490,11 +511,18 @@ function _subUpdateTorps(dt) {
         const want = wave - T.run;
         T.y += Math.sign(want - T.y) * Math.min(Math.abs(want - T.y), 1.5 * dt);
         T.mesh.position.set(T.x, T.y, T.z); T.mesh.rotation.y = r;
-        // 浅く走っていれば、水面に泡の筋
+        // 浅く走っていれば、水面に泡の筋（濃く：途切れずに続く白い筋。左右に少しずつずらして幅を出す）
         T.trailT -= dt;
-        if (T.trailT <= 0 && wave - T.y < 14 && typeof puffEmit === 'function') {
-            T.trailT = 0.12;
-            puffEmit({ x: T.x - Math.sin(r) * 8, y: wave + 0.15, z: T.z - Math.cos(r) * 8, r: 0.9, g: 0.95, b: 1, a: 0.3, s0: 1.2, s1: 5, life: 7, rise: 0, drag: 1 });
+        if (T.trailT <= 0) {
+            const n = Math.min(8, Math.ceil(-T.trailT / 0.045) + 1);
+            T.trailT = 0.045;
+            if (wave - T.y < 14 && typeof puffEmit === 'function') {
+                const k = Math.max(0.35, 1 - (wave - T.y) / 14);
+                for (let j = 0; j < n; j++) {
+                    const back = 8 + j * T.v * 0.045, sd = (Math.random() - 0.5) * 1.6;
+                    puffEmit({ x: T.x - Math.sin(r) * back + Math.cos(r) * sd, y: wave + 0.15, z: T.z - Math.cos(r) * back - Math.sin(r) * sd, r: 0.93, g: 0.97, b: 1, a: 0.55 * k, s0: 1.6, s1: 6.5, life: 10, rise: 0, drag: 1 });
+                }
+            }
         }
         let hit = null;
         if (inWorld && worldSeabedAt(T.x, T.z) > T.y - 0.3) hit = '魚雷が岸（海底）に当たって爆発しました';

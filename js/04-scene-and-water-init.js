@@ -845,7 +845,13 @@ function createWater() {
             }
             // 濡れ具合。輪郭の上の点は定義上すべて水と接しているので、
             // 消すべきなのは「その断面がキールより上に出た＝空中にある」場合だけ。
-            const wet = hullShapeWetness(shape, localWaterY);
+            let wet = hullShapeWetness(shape, localWaterY);
+            // 水面が甲板（船体本体の上）より上：その断面は水をかぶっている。喫水線（泡帯・水面の穴）を真ん中へ縮める
+            //（船底が水から出たときに消えるのと同じように。甲板の上に水が見える）
+            if (Number.isFinite(hp.deckY) && hp.hullHeight > 0 && localWaterY > hp.deckY) {
+                const k = Math.max(0, 1 - (localWaterY - hp.deckY) / (hp.hullHeight * 0.08));
+                hwLocal *= k; wet *= k;
+            }
             return { alongLocal, hwLocal, wet };
         };
 

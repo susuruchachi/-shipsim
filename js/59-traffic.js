@@ -22,10 +22,9 @@ const TF_SHOW = 12000;          // 形を作って描く範囲[m]
 const TF_FAR_DT = 2;            // 遠くの船を進める間隔[秒]
 const TF_SUB = 0.25;            // 近くの船を進める刻み[秒]（物理早送りのとき、1 フレームを何回かに分ける）
 const TF_DT_MAX = 3;            // 1 フレームで進める物理の時間の上限[秒]
-const TF_SIG_NEAR = 3000;
-const TF_SAVED_FAR = 5000;      // 保存した船のモデルで描く範囲[m]（その先はふつうの形）
+const TF_SIG_NEAR = 3000;       // 変針の信号を鳴らす、他の船との距離[m]
 const TF_SHADOW_NEAR = 2000;    // 他の船が影を落とす範囲[m]
-const TF_HIT_STOP = 90;         // ぶつかった船が機関を止めている時間[秒]       // 変針の信号を鳴らす、他の船との距離[m]
+const TF_HIT_STOP = 40;         // ぶつかった船が機関を止めている時間[秒]
 const traffic = {
     on: true, density: 'normal', era: 'mix', horn: true,
     ships: [], key: '', ready: false, nextId: 1,
@@ -271,14 +270,57 @@ function _tfFits(S, P) {
 }
 // 岸壁の使っている所
 function _tfQuayList(P) { let a = traffic.quays.get(P.id); if (!a) traffic.quays.set(P.id, a = []); return a; }
-function _tfSlotFind(P, L, who) {
+function _tfSlotFind(P, L, who, S) {
     const Q = _tfQuayFrame(P), list = _tfQuayList(P).filter(o => o.who !== who);
-    if (Q.single) return list.length ? null : 0;
+    if (Q.single) return list.length || !_tfBerthFree(S, P, 0) ? null : 0;
     const need = L + 30;
     for (let b = Q.b0 + need / 2; b <= Q.b1 - need / 2 + 0.1; b += 10) {
-        if (list.every(o => b + need / 2 <= o.b0 || b - need / 2 >= o.b1)) return b;
+        if (list.every(o => b + need / 2 <= o.b0 || b - need / 2 >= o.b1) && _tfBerthFree(S, P, b)) return b;
     }
     return null;
+}
+// 埠頭に付けた形（上から見たカプセル：線分 a→b と半径 r。東・北[m] は ref から）
+function _tfCapOf(ref, q, hdg, L, B) {
+    const c = _tfEN(ref, q), h = hdg * _tfR, fe = Math.sin(h), fn = Math.cos(h), hl = Math.max(0, L / 2 - B / 2);
+    return { ae: c.e - fe * hl, an: c.n - fn * hl, be: c.e + fe * hl, bn: c.n + fn * hl, r: B / 2 };
+}
+function _tfBerthCap(S, P, b, ref) {
+    const g = _tfBerthGeo(S, P, _tfQuayFrame(P).single ? 0 : b);
+    return _tfCapOf(ref, g.pos, g.hdg, S.L, S.B);
+}
+// 点（x, z）からカプセルまでの距離（中に入っていれば負）
+function _tfSegDist(px, pz, c) {
+    const dx = c.be - c.ae, dz = c.bn - c.an, L2 = dx * dx + dz * dz;
+    let u = L2 > 1e-6 ? ((px - c.ae) * dx + (pz - c.an) * dz) / L2 : 0;
+    u = u < 0 ? 0 : u > 1 ? 1 : u;
+    return Math.hypot(px - c.ae - u * dx, pz - c.an - u * dz) - c.r;
+}
+// 2 つのカプセルの間（重なっていれば負）
+function _tfCapDist(A, B) {
+    let m = Infinity;
+    for (let i = 0; i <= 8; i++) { const u = i / 8; m = Math.min(m, _tfSegDist(A.ae + (A.be - A.ae) * u, A.an + (A.bn - A.an) * u, B) + B.r); }
+    for (let i = 0; i <= 8; i++) { const u = i / 8; m = Math.min(m, _tfSegDist(B.ae + (B.be - B.ae) * u, B.an + (B.bn - B.an) * u, A) + A.r); }
+    return m - A.r - B.r;
+}
+// その埠頭（b）にこの船を付けても、となりの埠頭の船（付いている・付けに来る船・自分の船）とぶつからないか
+//（作り込んだ港の埠頭は 1 隻ずつだが、長い船どうしだと、となりの埠頭の船と重なることがある）
+function _tfBerthFree(S, P, b) {
+    if (!S) return true;
+    const me = _tfBerthCap(S, P, b, P);
+    for (const O of traffic.ships) {
+        if (O === S) continue;
+        let P2 = null, b2 = 0;
+        if ((O.port || O.mPort) && (O.st === 'berth' || O.st === 'berthing' || O.st === 'unberth')) { P2 = O.port || O.mPort; b2 = O.slotB || 0; }
+        else if (O.to && O.to.P) { const sl = _tfSlotOf(O.to.P, O.id); if (sl) { P2 = O.to.P; b2 = (sl.b0 + sl.b1) / 2; } }
+        if (!P2 || P2 === P || Math.abs(P2.lat - P.lat) > 0.02 || _tfDist(P, P2) > 1500) continue;
+        if (_tfCapDist(me, _tfBerthCap(O, P2, b2, P)) < 5) return false;
+    }
+    const pp = traffic.player.port;
+    if (pp && pp !== P && _tfDist(P, pp) < 1500) {
+        const M = _tfPlayerAsShipSafe();
+        if (M && _tfCapDist(me, _tfCapOf(P, M, M.hdg, M.L, M.B)) < 5) return false;
+    }
+    return true;
 }
 function _tfSlotTake(P, b, L, who, res) { _tfSlotFree(P, who); _tfQuayList(P).push({ b0: b - L / 2 - 15, b1: b + L / 2 + 15, who, res: !!res }); }
 function _tfSlotFree(P, who) { if (!P) return; const a = _tfQuayList(P); for (let i = a.length - 1; i >= 0; i--) if (a[i].who === who) a.splice(i, 1); }
@@ -309,26 +351,95 @@ function _tfApproach(P) {
 }
 // 岸壁に付ける所と、そこまでの動き方（船首の向き hdg、ドックなら入口の外 out・岸壁の前の線の上 mid、岸壁なら回す所 turn）
 function _tfBerthGeo(S, P, b) {
+    const C = P._tfGeo || (P._tfGeo = new Map()), key = Math.round(S.L) + '|' + Math.round(S.B) + '|' + Math.round(b || 0) + '|' + Math.round(S.d);
+    let g = C.get(key);
+    if (!g) { if (C.size > 200) C.clear(); g = _tfBerthGeo0(S, P, b); C.set(key, g); }
+    return g;
+}
+// その円（中心 c・半径 r）の中が、どこも need[m] より深いか
+function _tfCircleDeep(c, r, need) {
+    if (_tfDepthAt(c.lat, c.lon) < need) return false;
+    for (const f of [0.5, 1]) for (let k = 0; k < 16; k++) { const q = _tfOff(c, k * 22.5, r * f); if (_tfDepthAt(q.lat, q.lon) < need) return false; }
+    return true;
+}
+// 岸壁に沿った向き hdg の船（長さ L）が、a から b まで横へ動く帯が深いか
+function _tfBandMoveDeep(a, b, hdg, L, need) {
+    const n = Math.max(1, Math.ceil(_tfDist(a, b) / 20));
+    for (let i = 0; i <= n; i++) {
+        const u = i / n, c = { lat: a.lat + (b.lat - a.lat) * u, lon: a.lon + (b.lon - a.lon) * u };
+        for (const f of [-0.45, 0, 0.45]) { const q = _tfOff(c, hdg, L * f); if (_tfDepthAt(q.lat, q.lon) < need) return false; }
+    }
+    return true;
+}
+// 狭いスリップの奥の岸壁（前で回せない）：ドックのように、スリップをまっすぐ出入りする（入口・入っていく向きを、深さから見つける）
+function _tfSynthDock(S, P, face, n) {
+    const need = S.d + 1;
+    let w = 0;
+    for (let r = 5; r <= 400; r += 5) { const q = _tfOff(face, n, r); if (_tfDepthAt(q.lat, q.lon) < need) break; w = r; }
+    if (w < S.B + 8) return null;
+    const cl = _tfOff(face, n, Math.min(w / 2, S.B + 15));
+    const run = (brg) => { let r = 0; for (let x = 20; x <= 900; x += 20) { const q = _tfOff(cl, brg, x); if (_tfDepthAt(q.lat, q.lon) < need) break; r = x; } return r; };
+    const a = run(n + 90), c = run(n - 90);
+    if (Math.max(a, c) < 250) return null;
+    const outB = a >= c ? (n + 90) % 360 : (n + 270) % 360;
+    const E = _tfOff(_tfOff(face, n, w / 2), outB, _tfQuayLen(P) / 2 + 20);
+    return { E, ib: (outB + 180) % 360, out: 320 };
+}
+function _tfBerthGeo0(S, P, b) {
     const n = P.seaBearing, Q = _tfQuayFrame(P);
     const face = Q.single ? { lat: P.lat, lon: P.lon } : _tfOff(_tfOff(P, n - 90, b || 0), n, 6);
     const pos = _tfOff(face, n, S.B / 2 + 2.5);
     const geo = { face, pos, n };
-    if (P.dock) {
-        const E = { lat: P.dock.entrance[0], lon: P.dock.entrance[1] }, ib = P.dock.inBearing;
-        const d = _tfEN(E, pos), u = d.e * Math.sin(ib * _tfR) + d.n * Math.cos(ib * _tfR);
-        geo.mid = _tfOff(E, ib, u);
-        geo.out = _tfOff(E, ib + 180, P.dock.turnOut || (typeof DOCK_TURN_OUT !== 'undefined' ? DOCK_TURN_OUT : 320));
-        geo.hdg = ib;
-        geo.dock = true;
-    } else {
-        geo.turn = _tfOff(face, n, S.B / 2 + 2.5 + Math.min(220, S.B * 2 + 70));
-        geo.hdg = (n + 90) % 360;           // 回すときに、近い方の向き（n−90）に替える
+    let dock = P.dock ? { E: { lat: P.dock.entrance[0], lon: P.dock.entrance[1] }, ib: P.dock.inBearing, out: P.dock.turnOut || (typeof DOCK_TURN_OUT !== 'undefined' ? DOCK_TURN_OUT : 320) } : null;
+    if (!dock) {
+        // 岸壁の前で回す（回す所の円が深い所：前が狭ければ沖へずらす）。ずらしても回せなければ（狭いスリップの奥）、ドックのように出入りする
+        const base = S.B / 2 + 2.5 + Math.min(220, S.B * 2 + 70);
+        let turn = null;
+        if (!Q.single) turn = _tfOff(face, n, base);
+        else for (let extra = 0; extra <= 400 && !turn; extra += 40) {
+            const c = _tfOff(face, n, base + extra);
+            if (_tfCircleDeep(c, S.L / 2 + 10, S.d + 1) && _tfBandMoveDeep(pos, c, (n + 90) % 360, S.L, S.d + 0.5)) turn = c;
+        }
+        if (!turn && Q.single) dock = _tfSynthDock(S, P, face, n);
+        if (!dock) { geo.turn = turn || _tfOff(face, n, base); geo.hdg = (n + 90) % 360; return geo; }     // 回すときに、近い方の向き（n−90）に替える
     }
+    // ドック（スリップ）：岸壁から 10m 離れた筋（自分の側）を、まっすぐ出入りする（向かいの岸壁の船に寄らない）
+    const E = dock.E, ib = dock.ib;
+    const mid = _tfOff(pos, n, 10);
+    const dm = _tfEN(E, mid), um = dm.e * Math.sin(ib * _tfR) + dm.n * Math.cos(ib * _tfR);
+    geo.mid = mid;
+    geo.door = _tfOff(mid, ib + 180, Math.max(0, um));          // 入口の線の上（同じ筋）
+    geo.out = _tfOff(E, ib + 180, dock.out);
+    if (Q.single) {
+        let found = false;
+        for (let extra = 0; extra <= 600 && !found; extra += 40) {
+            const c = _tfOff(E, ib + 180, dock.out + extra);
+            if (_tfCircleDeep(c, S.L / 2 + 10, S.d + 1)) { geo.out = c; found = true; }
+        }
+        for (let r = 100; r <= 600 && !found; r += 100) for (let a = 0; a < 360 && !found; a += 30) {
+            const c = _tfOff(geo.out, a, r);
+            if (_tfCircleDeep(c, S.L / 2 + 10, S.d + 1) && _tfBandMoveDeep(geo.door, c, ib, S.L, S.d + 0.5)) { geo.out = c; found = true; }
+        }
+    }
+    geo.hdg = ib;
+    geo.dock = true;
     return geo;
 }
 // 錨地：港の海の出入口のまわり（1.5〜4km）で、喫水＋5m 以上 70m 以下の深さがあり、浅瀬がなく、
 // 港の航路から 600m 以上離れていて、海の出入口までまっすぐ行ける所。いくつか（600m おき）
-function _tfDepth(q) { return (typeof apDepthAt === 'function') ? apDepthAt(q.lat, q.lon) : 50; }
+function _tfDepth(q) { return _tfDepthAt(q.lat, q.lon); }
+// 深さ[m]：apDepthAt は港を全部見るので重い。12m ほどの升目ごとに覚えておく（細かい地形を読んだら忘れる：updateTraffic）
+const _tfDC = new Map();
+function _tfDepthAt(lat, lon) {
+    const i = Math.round(lat * 9000), j = Math.round(lon * 6000), k = i * 4194304 + j;
+    let d = _tfDC.get(k);
+    if (d === undefined) {
+        if (_tfDC.size > 250000) _tfDC.clear();
+        d = (typeof apDepthAt === 'function') ? apDepthAt(i / 9000, j / 6000) : 50;
+        _tfDC.set(k, d);
+    }
+    return d;
+}
 function _tfAnchorages(P) {
     const se = _tfSeaEnd(P);
     let A = traffic.anch.get(se.key);
@@ -338,7 +449,7 @@ function _tfAnchorages(P) {
     const ap = _tfApproach(P);
     const nearFw = (q) => { for (const p of ap) if (_tfDist(p, q) < 600) return true; return false; };
     const cands = [];
-    for (const r of [1500, 2200, 3000, 4000, 5500]) for (let k = 0; k < 24; k++) {
+    for (const r of [1500, 2200, 3000, 4000, 5500, 7000, 8500]) for (let k = 0; k < 24; k++) {
         const q = _tfOff(se, k * 15, r);
         const d = _tfDepth(q);
         if (!(d >= 14 && d <= 70) || nearFw(q)) continue;
@@ -429,8 +540,31 @@ function _tfComposePath(S, from, to, lane) {
         const ap = _tfApproach(to.P);
         arriveIdx = Math.max(0, pts.length - 1);
         for (const q of ap) push(q, q.ch, q.nar);
+        _tfFixArrival(S, pts, arriveIdx, to.P);
     } else if (to.G) push(to.G, false);
     return { pts, arriveIdx };
+}
+// 着く所の道すじの終わりを、その船に合わせる：
+//  ・ドック・スリップの奥の埠頭：入口の外（回して入る所）で終わる（スリップの中へ道すじで入らない）
+//  ・岸壁：船首（長さの半分＋20m 先）が浅い所・陸にかからない所まで戻す
+function _tfFixArrival(S, pts, ai, P) {
+    if (pts.length < 2) return;
+    const g = _tfBerthGeo(S, P, Number.isFinite(S.toB) ? S.toB : 0);
+    if (g && g.dock && g.out) {
+        let j = pts.length - 1, best = Infinity;
+        for (let k = Math.max(0, ai); k < pts.length; k++) { const d = _tfDist(pts[k], g.out); if (d < best) { best = d; j = k; } }
+        pts.length = j + 1;
+        if (best > 40) pts.push({ lat: g.out.lat, lon: g.out.lon, ch: true, nar: !!pts[j].nar });
+        return;
+    }
+    const need = S.d + 1;
+    for (let it = 0; it < 40 && pts.length >= 2; it++) {
+        const a = pts[pts.length - 2], b = pts[pts.length - 1], dir = _tfBrg(a, b), seg = _tfDist(a, b);
+        const bow = _tfOff(b, dir, S.L / 2 + 20), stern = _tfOff(b, dir + 180, S.L * 0.45);
+        if (_tfBandOK(S, bow, dir, need) && _tfBandOK(S, b, dir, need) && _tfBandOK(S, stern, dir, need)) return;
+        if (seg <= 25) { if (pts.length - 1 <= Math.max(1, ai)) return; pts.pop(); continue; }
+        const q = _tfOff(b, dir + 180, 20); b.lat = q.lat; b.lon = q.lon;
+    }
 }
 // 右側通行：港の航路の中の点を、水路の幅に余裕があれば右へ寄せる（行き会う船と左舷どうしですれ違う）
 function _tfKeepRight(S, pts) {
@@ -447,17 +581,133 @@ function _tfKeepRight(S, pts) {
         const width = right + left;
         if (width < 2 * (S.B + 50)) continue;                  // 2 隻が並べるほどの幅が無い
         const off = Math.min(right - S.B / 2 - 20, Math.max(0, (width / 2 - left)) + Math.min(90, width * 0.22));
-        if (off > 5) { const m = _tfOff(q, br, off); q.lat = m.lat; q.lon = m.lon; q.keep = true; }
+        if (!(off > 5)) continue;
+        // 寄せた点と前後の点を結ぶ線も、深い所を通ること（曲がり角の内側の岬・岸を横切らない）
+        for (const f of [1, 0.6, 0.3]) {
+            const m = _tfOff(q, br, off * f);
+            if (_tfSegDeep(S, pts[k - 1], m, need) && _tfSegDeep(S, m, pts[k + 1], need)) { q.lat = m.lat; q.lon = m.lon; q.keep = true; break; }
+        }
     }
 }
+// A から B へまっすぐ進む船の幅の帯が、need[m] より深いか（20m おき）
+function _tfSegDeep(S, A, B, need) {
+    const n = Math.max(1, Math.ceil(_tfDist(A, B) / 20)), br = _tfBrg(A, B);
+    for (let i = 0; i <= n; i++) { const q = _tfLerp(A, B, i / n); if (!_tfBandOK(S, q, br, need)) return false; }
+    return true;
+}
 // 道すじの距離（航程線）と、点ごとの制限速力[m/s]
+//  タグで回す角（円弧が旋回半径より小さい・その場で回す）は、その半径をタグで回せる速さまで
 function _tfPrepPath(S, path) {
     const P = path.pts, cum = [0];
     for (let k = 1; k < P.length; k++) cum.push(cum[k - 1] + rhumbCourse(P[k - 1].lat, P[k - 1].lon, P[k].lat, P[k].lon).dist);
-    const C = _tfClassOf(S);
-    for (const q of P) q.lim = q.nar ? _tfMs(Math.min(5, C.hk)) : q.ch ? _tfMs(C.hk) : S.vSea;
-    path.cum = cum; path.total = cum[cum.length - 1];
+    const C = _tfClassOf(S), w = _tfRotRate(S) * _tfR;
+    for (const q of P) {
+        q.lim = q.nar ? _tfMs(Math.min(5, C.hk)) : q.ch ? _tfMs(C.hk) : S.vSea;
+        if (q.piv || q.rad === 0) q.lim = Math.min(q.lim, 0.3);
+        else if (q.as) q.lim = Math.min(q.lim, Math.max(0.4, q.rad * w));
+    }
+    path.cum = cum; path.total = cum[cum.length - 1]; path.crs = [];
     return path;
+}
+// 旋回半径[m]：ふつうの船は長さの 3 倍。保存した船は、その船の設定から（17-main-loop.js と同じ：舵が重心から離れているほど小さく回れる）
+function _tfTurnR(S) {
+    const sv = S.saved && S.saved.cfg;
+    if (!sv) return 3 * S.L;
+    const ph = sv.physics || {}, f = +ph.turningRadiusFactor > 0 ? +ph.turningRadiusFactor : 3;
+    const lever = Math.abs(((sv.rudder && +sv.rudder.z) || 0) - ((sv.cg && +sv.cg.z) || 0)) * (+ph.scale || 12) / 12;
+    return Math.max(1.2 * S.L, S.L * f / (1 + lever * 0.02));
+}
+function _tfRad(S) { if (S._RL !== S.L) { S._RL = S.L; S.R = _tfTurnR(S); } return S.R; }
+// タグで（その場で）回す速さ[度/秒]
+function _tfRotRate(S) { return Math.max(0.25, Math.min(1.5, 70 / S.L)); }
+// C から東 e・北 n[m] の点
+function _tfFromEN(C, e, n) {
+    const mLat = _tfMLat();
+    return { lat: C.lat + n / mLat, lon: C.lon + e / (mLat * Math.max(0.05, Math.cos(C.lat * _tfR))) };
+}
+// q で向き brg の船の幅の帯（真ん中・左右の舷の少し外）が、need[m] より深いか
+function _tfBandOK(S, q, brg, need) {
+    if (_tfDepthAt(q.lat, q.lon) < need) return false;
+    const w = S.B / 2 + 6, a = _tfOff(q, brg + 90, w), b = _tfOff(q, brg - 90, w);
+    return _tfDepthAt(a.lat, a.lon) >= need && _tfDepthAt(b.lat, b.lon) >= need;
+}
+// 道すじの角を、その船の旋回半径の円弧で丸める（その間を進むときは、船首の向き＝進む向き：横滑りしない）。
+//  円弧が浅い所・陸にかかれば半径を小さくする（タグで回す：その分ゆっくり）。小さくしても無理なら、角で止まってその場で回す
+//  点に付けるもの：rad（その円弧の半径。0 はその場で回す角）・as（タグで回す）・piv（大きく向きを変える角）
+function _tfSmoothPath(S, path) {
+    const P = path.pts;
+    if (!P || P.length < 3) return path;
+    const need = S.d + 1, R0 = _tfRad(S);
+    const out = [], map = new Array(P.length);
+    const push = (q, src, extra) => out.push(Object.assign({ lat: q.lat, lon: q.lon, ch: !!src.ch, nar: !!src.nar, keep: !!src.keep }, extra || {}));
+    push(P[0], P[0]); map[0] = 0;
+    let usedPrev = 0;                        // 前の角の円弧が、この区間を使った長さ
+    for (let k = 1; k < P.length - 1; k++) {
+        const A = P[k - 1], C = P[k], D = P[k + 1];
+        const a = _tfEN(C, A), dd = _tfEN(C, D);
+        const l1 = Math.hypot(a.e, a.n), l2 = Math.hypot(dd.e, dd.n);
+        const b1 = Math.atan2(-a.e, -a.n), b2 = Math.atan2(dd.e, dd.n);   // 入る向き・出る向き（北から右回り）
+        let th = b2 - b1;
+        while (th > Math.PI) th -= 2 * Math.PI;
+        while (th < -Math.PI) th += 2 * Math.PI;
+        const ath = Math.abs(th);
+        if (ath < 3 * _tfR || l1 < 1 || l2 < 1) { push(C, C); map[k] = out.length - 1; usedPrev = 0; continue; }
+        if (ath > 150 * _tfR) { push(C, C, { piv: true, rad: 0, as: true }); map[k] = out.length - 1; usedPrev = 0; continue; }
+        const tanH = Math.tan(ath / 2), sg = Math.sign(th);
+        const T1 = l1 - usedPrev, T2 = (k + 1 === P.length - 1) ? l2 * 0.9 : l2 / 2;
+        let R = Math.min(R0, Math.max(0, Math.min(T1, T2)) / tanH), arc = null;
+        for (let tries = 0; tries < 8 && R > Math.max(8, S.B * 0.5); tries++, R *= 0.6) {
+            const T = R * tanH;
+            const sx = -Math.sin(b1) * T, sz = -Math.cos(b1) * T;                 // 円弧の始まり（角の手前 T）
+            const ce = sx + sg * Math.cos(b1) * R, cn = sz - sg * Math.sin(b1) * R;   // 円の中心（曲がる側へ R）
+            const nSeg = Math.max(2, Math.ceil(ath / (6 * _tfR)));
+            const pts = [];
+            let ok = true;
+            for (let i = 0; i <= nSeg; i++) {
+                const ang = b1 + th * i / nSeg;
+                const q = _tfFromEN(C, ce - sg * Math.cos(ang) * R, cn + sg * Math.sin(ang) * R);
+                if (!_tfBandOK(S, q, ang / _tfR, need)) { ok = false; break; }
+                // 船首・船尾の振れ（小さく回るほど外へ振れる）
+                if (R < 2.5 * S.L && (!_tfBandOK(S, _tfOff(q, ang / _tfR, S.L * 0.45), ang / _tfR, need) || !_tfBandOK(S, _tfOff(q, ang / _tfR + 180, S.L * 0.45), ang / _tfR, need))) { ok = false; break; }
+                pts.push(q);
+            }
+            if (ok) { arc = { pts, R, T }; break; }
+        }
+        if (!arc) { push(C, C, { piv: ath > 60 * _tfR, rad: 0, as: true }); map[k] = out.length - 1; usedPrev = 0; continue; }
+        const as = arc.R < R0 * 0.95;
+        for (const q of arc.pts) push(q, C, { rad: arc.R, as });
+        map[k] = out.length - 1 - (arc.pts.length >> 1);
+        usedPrev = arc.T;
+    }
+    push(P[P.length - 1], P[P.length - 1]); map[P.length - 1] = out.length - 1;
+    path.pts = out;
+    if (path.arriveIdx >= 0) path.arriveIdx = map[path.arriveIdx];
+    return path;
+}
+// 道すじを、今いる所から始める（離岸し終えた所・錨地など）：始めの近すぎる点（回し終えた所から 1.2 隻ぶん）は飛ばし、角を丸める
+function _tfPathNear(S) { return Math.max(S.L * 1.2, 250); }
+function _tfPathFromHere(S, path) {
+    const pts = path.pts;
+    let i = 0, best = Infinity, cum = 0;
+    for (let k = 0; k < pts.length - 1 && cum < 4000; k++) { const d = _tfDist(S, pts[k]); if (d < best) { best = d; i = k; } cum += _tfDist(pts[k], pts[k + 1]); }
+    while (i < pts.length - 1 && _tfDist(S, pts[i]) < _tfPathNear(S)) i++;
+    const np = [{ lat: S.lat, lon: S.lon, ch: pts[i].ch, nar: pts[i].nar }].concat(pts.slice(i).map(q => ({ lat: q.lat, lon: q.lon, ch: q.ch, nar: q.nar, keep: q.keep })));
+    const ai = path.arriveIdx >= 0 ? Math.max(0, path.arriveIdx - i + 1) : -1;
+    return _tfPrepPath(S, _tfSmoothPath(S, { pts: np, arriveIdx: ai }));
+}
+// 区間 k の向き（覚えておく）と、s[m] の所の道すじの向き（円弧の上は、前後の区間となめらかにつなぐ）
+function _tfSegCrs(P, k) {
+    const c = P.crs || (P.crs = []);
+    if (c[k] === undefined) { const a = P.pts[k], b = P.pts[Math.min(P.pts.length - 1, k + 1)]; c[k] = rhumbCourse(a.lat, a.lon, b.lat, b.lon).course; }
+    return c[k];
+}
+function _tfTangent(P, s, k) {
+    k = Math.max(0, Math.min(P.pts.length - 2, k));
+    const crs = _tfSegCrs(P, k);
+    const segL = (P.cum[k + 1] - P.cum[k]) || 1, u = Math.max(0, Math.min(1, (s - P.cum[k]) / segL));
+    if (u < 0.5 && k > 0 && P.pts[k].rad > 0) return (crs + _tfWrap(_tfSegCrs(P, k - 1) - crs) * 0.5 * (1 - 2 * u) + 360) % 360;
+    if (u >= 0.5 && k + 2 < P.pts.length && P.pts[k + 1].rad > 0) return (crs + _tfWrap(_tfSegCrs(P, k + 1) - crs) * 0.5 * (2 * u - 1) + 360) % 360;
+    return crs;
 }
 // 道すじの上の s[m] の所
 function _tfAlong(path, s) {
@@ -495,6 +745,7 @@ function _tfMakeShip(spec) {
         vSea: _tfMs(kn), svc: spec.route ? { route: spec.route, i: 0 } : null,
         st: 'pending', lat: 0, lon: 0, hdg: 0, v: 0, s: 0, path: null, port: null, from: null, to: null, steps: null, t: 0,
         acc: Math.min(0.08, Math.max(0.012, 4 / L)), seed: Math.random(), saved: spec.saved || null,
+        off: 0, offT: 0, clrR: 0, clrL: 0,
     };
     if (!S.name) S.name = _tfNewName(S);
     return S;
@@ -523,7 +774,7 @@ function _tfResolve(S, nm, avoidP) {
     const ok = grp.filter(p => _tfSuits(S.cls, p) && _tfFits(S, p));
     const cands = ok.length ? ok : grp.filter(p => _tfFits(S, p));
     if (!cands.length) return null;
-    const free = cands.filter(p => _tfSlotFind(p, S.L, S.id) !== null);
+    const free = cands.filter(p => _tfSlotFind(p, S.L, S.id, S) !== null);
     return { P: _tfPick(free.length ? free : cands) };
 }
 // 次の行き先：決まった航路ならその次。ほかは、この船に合う港から（小さな船は近くの港、大きな船は遠くへも）
@@ -546,7 +797,7 @@ function _tfChooseDest(S) {
     if (!cands.length) return gates.length ? { G: _tfPick(gates) } : null;
     // 空いている埠頭を少しひいきする。遠すぎる所は少しだけ
     const me = _tfPlayerLL();
-    const w = cands.map(p => (_tfSlotFind(p, S.L, S.id) !== null ? 2 : 1) / (1 + _tfDist(here, p) / 800000)
+    const w = cands.map(p => (_tfSlotFind(p, S.L, S.id, S) !== null ? 2 : 1) / (1 + _tfDist(here, p) / 800000)
         * (S.saved ? 1 / Math.pow(1 + _tfDist(me, p) / 80000, 2) : 1));      // 保存した船は、自分の船の近くの港を多めに
     let r = Math.random() * w.reduce((a, b) => a + b, 0);
     for (let i = 0; i < cands.length; i++) { r -= w[i]; if (r <= 0) return { P: cands[i] }; }
@@ -559,6 +810,7 @@ function _tfChooseDest(S) {
 function _tfDwell(S) { const C = _tfClassOf(S); return _tfRand(C.dwell[0], C.dwell[1]) * 60; }
 function _tfClear() {
     for (const S of traffic.ships) _tfDropMesh(S);
+    if (typeof _tfTugClear === 'function') _tfTugClear();
     traffic.ships = []; traffic.lanes.clear(); traffic.laneQ = []; traffic.quays.clear(); traffic.anch.clear();
     traffic.ready = false; traffic.laneBusy = false; traffic.msgs = []; traffic.later = [];
     traffic.player.port = null; traffic.player.reserve = null;
@@ -609,7 +861,25 @@ function _tfSpawnFleet() {
     }
     // 始めの様子：埠頭に付いている・港の航路を入ってくる・出ていくところ・海の上
     for (const S of traffic.ships) _tfSeed(S);
+    _tfUnstack();
     return true;
+}
+// 航路の上に置いた船が重なっていれば、後ろへずらす（ずらせなければ、居なかったことに：あとで入れ替わる）
+function _tfUnstack() {
+    const L = traffic.ships.filter(S => S.st === 'go' && S.path);
+    for (let it = 0; it < 4; it++) {
+        let moved = false;
+        for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) {
+            const A = L[i], B = L[j];
+            if (A.st !== 'go' || B.st !== 'go' || Math.abs(A.lat - B.lat) > 0.05) continue;
+            if (_tfDist(A, B) > (A.L + B.L) / 2 + 120) continue;
+            const M = A.s >= B.s ? B : A;              // 後ろにいる方（道すじの上で手前）をずらす
+            const back = (A.L + B.L) / 2 + 300;
+            if (M.s > back) { M.s -= back; _tfSnapToPath(M); moved = true; }
+            else { M.st = 'gone'; }
+        }
+        if (!moved) break;
+    }
 }
 function _tfSeed(S) {
     const ports = _tfPorts().filter(p => _tfSuits(S.cls, p) && _tfFits(S, p));
@@ -628,16 +898,17 @@ function _tfSeed(S) {
     const r = S.saved ? Math.random() * 0.82 : Math.random();
     if (r < 0.5 && _tfPlaceBerthed(S, home, Math.random())) return;
     if (r < 0.62 && _tfPlaceBerthed(S, home, 0)) return;            // もうすぐ出港
-    if (r < 0.82) {
-        // 港の航路を入ってくるところ（どこかから来た）
-        const b = _tfSlotFind(home, S.L, S.id);
-        if (b !== null) _tfSlotTake(home, b, S.L, S.id, true);
+    const bIn = r < 0.82 ? _tfSlotFind(home, S.L, S.id, S) : null;
+    if (bIn !== null) {
+        // 港の航路を入ってくるところ（どこかから来た）。（埠頭が空いていなければ、海の上に置く）
+        const b = bIn;
+        _tfSlotTake(home, b, S.L, S.id, true);
         S.to = { P: home }; S.toB = b; S.port = null;
         const others = ports.filter(p => p !== home && _tfGroupOf(p) !== _tfGroupOf(home));
         S.from = others.length ? { P: _tfPick(others) } : null;
         const path = _tfComposePath(S, { pt: _tfSeaEnd(home) }, S.to, null);
         path.arriveIdx = 0;
-        _tfKeepRight(S, path.pts); S.path = _tfPrepPath(S, path);
+        _tfKeepRight(S, path.pts); S.path = _tfPrepPath(S, _tfSmoothPath(S, path));
         S.s = Math.random() * S.path.total * 0.9; S.checked = true;
         _tfSnapToPath(S);
         S.v = Math.min(S.vSea, S.path.pts[Math.min(S.path.pts.length - 1, S.k + 1)].lim);
@@ -648,7 +919,7 @@ function _tfSeed(S) {
     S.port = home; S.seedMid = 0.1 + Math.random() * 0.8; S.st = 'pending';
 }
 function _tfPlaceBerthed(S, P, dwellFrac) {
-    const b = _tfSlotFind(P, S.L, S.id);
+    const b = _tfSlotFind(P, S.L, S.id, S);
     if (b === null) return false;
     _tfSlotTake(P, b, S.L, S.id, false);
     const g = _tfBerthGeo(S, P, b);
@@ -679,7 +950,7 @@ function _tfPlanVoyage(S) {
         const x = _tfChooseDest(S);
         if (!x) return false;
         S.to = x; S.toB = null; S.checked = false;
-        if (x.P) { const b = _tfSlotFind(x.P, S.L, S.id); if (b !== null) { _tfSlotTake(x.P, b, S.L, S.id, true); S.toB = b; } }
+        if (x.P) { const b = _tfSlotFind(x.P, S.L, S.id, S); if (b !== null) { _tfSlotTake(x.P, b, S.L, S.id, true); S.toB = b; } }
     }
     const a = S.port ? _tfSeaEnd(S.port) : S.gate ? { lat: S.gate.lat, lon: S.gate.lon, key: S.gate.key } : null;
     if (!a) return false;
@@ -700,20 +971,20 @@ function _tfTryDepart(S, far) {
     if (!lane || !lane.ok) { S.t = 20; return; }
     const path = _tfComposePath(S, from, S.to, lane);
     _tfKeepRight(S, path.pts);
-    S.path = _tfPrepPath(S, path); S.s = 0; S.k = 0; S.checked = false; S.from = from;
+    S.path = _tfPrepPath(S, far || !S.port ? _tfSmoothPath(S, path) : path); S.s = 0; S.k = 0; S.checked = false; S.from = from; S.off = 0;
     if (S.port) {
         if (!far) {
             const busy = _tfZoneBusy(S, S.geo);
-            if (busy) { S.t = 20; S.waitWhy = busy === 'player' ? '自分の船の離着岸を待っています' : `${busy.name} の離着岸を待っています`; return; }
+            if (busy) { S.t = 20; S.waitSince = S.waitSince ?? traffic.t; S.waitWhy = busy === 'player' ? '自分の船の動きを待っています' : `${busy.name} の離着岸・通過を待っています`; return; }
         }
-        S.waitWhy = '';
-        _tfSlotFree(S.port, S.id);
+        S.waitWhy = ''; S.waitSince = null;
+        //（出ていく埠頭は、離岸し終えるまで押さえたまま：_tfManeuverDone で外す）
         // 行き先の予約は残す（_tfSlotFree は出港する港の分だけ消す）
         //（前に決めた所がその後ふさがった・自分の船が押さえたときは、取り直さない：着く前にもう一度探す）
-        if (S.to.P && !_tfSlotOf(S.to.P, S.id)) { const b = _tfSlotFind(S.to.P, S.L, S.id); if (b !== null) { _tfSlotTake(S.to.P, b, S.L, S.id, true); S.toB = b; } else S.toB = null; }
+        if (S.to.P && !_tfSlotOf(S.to.P, S.id)) { const b = _tfSlotFind(S.to.P, S.L, S.id, S); if (b !== null) { _tfSlotTake(S.to.P, b, S.L, S.id, true); S.toB = b; } else S.toB = null; }
         const P = S.port; S.port = null;
-        if (far) { _tfSnapToPath(S); S.st = 'go'; S.v = 0; return; }
-        S.steps = _tfUnberthSteps(S, S.path); S.st = 'unberth'; S.mPort = P;
+        if (far) { _tfSlotFree(P, S.id); _tfSnapToPath(S); S.st = 'go'; S.v = 0; return; }
+        S.steps = _tfUnberthSteps(S, S.path); S.st = 'unberth'; S.mPort = P; S.v = 0; _tfManeuverBegin(S);
         _tfHorn(S, 'L');
         if (S.dPl < 8000) _tfMsg(`${S.name}（${_tfClassOf(S).label}）が ${P.name} を離岸します`);
     } else {
@@ -722,10 +993,14 @@ function _tfTryDepart(S, far) {
     }
 }
 function _tfUnberthSteps(S, path) {
-    const g = S.geo, nxt = path.pts[Math.min(1, path.pts.length - 1)];
+    const g = S.geo, rp = g.dock ? g.out : g.turn;
+    // 回し終えたら向かう所：道すじの、回す所から 1.2 隻ぶんより先の最初の点（_tfPathFromHere と同じ）
+    let nxt = path.pts[path.pts.length - 1], i0 = 0, best = Infinity, cum = 0;
+    for (let k = 0; k < path.pts.length - 1 && cum < 4000; k++) { const d = _tfDist(rp, path.pts[k]); if (d < best) { best = d; i0 = k; } cum += _tfDist(path.pts[k], path.pts[k + 1]); }
+    for (let k = i0; k < path.pts.length; k++) if (_tfDist(rp, path.pts[k]) >= _tfPathNear(S)) { nxt = path.pts[k]; break; }
     const steps = [{ k: 'wait', t: 40 }];
     if (g.dock) {
-        steps.push({ k: 'move', to: g.mid, v: 0.3 }, { k: 'move', to: g.out, v: 0.9 }, { k: 'rot', hdg: _tfBrg(g.out, nxt) });
+        steps.push({ k: 'move', to: g.mid, v: 0.3 }, { k: 'move', to: g.door, v: 0.8 }, { k: 'move', to: g.out, v: 0.9 }, { k: 'rot', hdg: _tfBrg(g.out, nxt) });
     } else {
         steps.push({ k: 'move', to: g.turn, v: 0.35 }, { k: 'rot', hdg: _tfBrg(g.turn, nxt) });
     }
@@ -733,13 +1008,15 @@ function _tfUnberthSteps(S, path) {
 }
 function _tfBerthSteps(S) {
     const g = S.geo, steps = [];
+    // （泊地から回す所までは、前へ進んで：横へは滑らない。向きが大きく違えば、先にタグで向ける）
     if (g.dock) {
-        steps.push({ k: 'move', to: g.out, v: 0.8 }, { k: 'rot', hdg: g.hdg }, { k: 'move', to: g.mid, v: 0.8 }, { k: 'move', to: g.pos, v: 0.3 });
+        steps.push({ k: 'go', to: g.out, v: 0.8 }, { k: 'rot', hdg: g.hdg }, { k: 'move', to: g.door, v: 0.9 }, { k: 'move', to: g.mid, v: 0.8 }, { k: 'move', to: g.pos, v: 0.3 });
         S.berthHdg = g.hdg;
     } else {
-        const h1 = g.hdg, h2 = (g.hdg + 180) % 360;
-        const h = Math.abs(_tfWrap(h1 - S.hdg)) <= Math.abs(_tfWrap(h2 - S.hdg)) ? h1 : h2;
-        steps.push({ k: 'move', to: g.turn, v: 0.8 }, { k: 'rot', hdg: h }, { k: 'move', to: g.pos, v: 0.3 });
+        // 着いたときの船首の向きに近い方の向きで付ける。回す所が近ければ（船の長さの 4 割まで）、向きを変えずにタグで運ぶ
+        const h1 = g.hdg, h2 = (g.hdg + 180) % 360, hin = S.hdg;
+        const h = Math.abs(_tfWrap(h1 - hin)) <= Math.abs(_tfWrap(h2 - hin)) ? h1 : h2;
+        steps.push(_tfDist(S, g.turn) < Math.max(60, S.L * 0.4) ? { k: 'move', to: g.turn, v: 0.5 } : { k: 'go', to: g.turn, v: 0.8 }, { k: 'rot', hdg: h }, { k: 'move', to: g.pos, v: 0.3 });
         S.berthHdg = h;
     }
     steps.push({ k: 'wait', t: 40 });
@@ -747,20 +1024,51 @@ function _tfBerthSteps(S) {
 }
 // 離着岸のとき、ほかの船（自分の船も）が近くで離着岸していないか（同じスリップ・となりの埠頭）
 function _tfZoneOf(S) { const g = S.geo; return g ? (g.dock ? g.out : g.turn) : null; }
+// 離着岸で使う場所：回す所（船の長さの円）と、岸壁の前から回す所までの間（途中も）
+function _tfZoneCircles(S, g) {
+    const c = g.dock ? g.out : g.turn, z = [{ q: c, r: S.L / 2 + 20 }];
+    const pts = g.dock ? [g.pos, g.mid, g.door, c] : [g.pos, c];
+    for (let i = 0; i < pts.length - 1; i++) {
+        const a = pts[i], b = pts[i + 1], n = Math.max(1, Math.ceil(_tfDist(a, b) / Math.max(40, S.B)));
+        for (let j = 0; j < n; j++) { const u = j / n; z.push({ q: { lat: a.lat + (b.lat - a.lat) * u, lon: a.lon + (b.lon - a.lon) * u }, r: S.L / 2 }); }
+    }
+    return z;
+}
 function _tfZoneBusy(S, g) {
     if (!g) return null;
-    const c = g.dock ? g.out : g.turn, r = Math.max(250, S.L * 0.8);
+    const Z = _tfZoneCircles(S, g), myWait = S.waitSince ?? traffic.t;
+    const inZ = (q, extra) => { for (const z of Z) if (_tfDist(z.q, q) < z.r + extra) return true; return false; };
     for (const O of traffic.ships) {
-        if (O === S || (O.st !== 'berthing' && O.st !== 'unberth')) continue;
-        const oc = _tfZoneOf(O);
-        if (oc && _tfDist(c, oc) < r + Math.max(250, O.L * 0.8)) return O;
+        if (O === S || !_tfShown(O) || Math.abs(O.lat - S.lat) > 0.06) continue;
+        if (O.st === 'berthing' || O.st === 'unberth') {
+            // ほかの船の離着岸（同じドック・となりの埠頭）：終わるまで待つ
+            const Zo = O.geo ? _tfZoneCircles(O, O.geo) : [{ q: O, r: O.L / 2 }];
+            for (const zo of Zo) if (inZ(zo.q, zo.r)) return O;
+            continue;
+        }
+        if (O.st === 'berth' || O.st === 'anchored') continue;
+        if (O.blockBy === S.id) continue;             // （この船を待って止まっている船）
+        // 止まって待っている船は、先に待ち始めた方が先（後から待ち始めた船は、こちらを待つ）
+        const stopped = (O.v || 0) <= 0.3;
+        if (stopped) { const ow = O.st === 'holding' ? O.waitSince : O.blockT0; if (!(ow != null && ow < myWait)) continue; }
+        // 待っている・進んでいる船が、今その場所にいる
+        if (inZ(O, O.L / 2 + 10)) return O;
+        // 止まれないうちに、その場所を通る船
+        if (!stopped && O.path && (O.st === 'go' || O.st === 'anchoring')) {
+            const stop = O.v * O.v / (2 * Math.max(0.01, O.acc * 1.2)) + O.L / 2 + 150;
+            for (let s2 = O.s; s2 <= Math.min(O.path.total, O.s + stop); s2 += 40) if (inZ(_tfAlong(O.path, s2), O.B / 2 + 10)) return O;
+        }
     }
+    // 自分の船：離着岸の途中・動いていてその場所に来る（止まって埠頭に付いているときは、となりでも構わない）
     if (typeof harborAuto !== 'undefined' && harborAuto.mode && harborAuto.plan && harborAuto.plan.turn && typeof worldLocalToUnit === 'function') {
         const t = worldUnitToLatLon(worldLocalToUnit(harborAuto.plan.turn.x, harborAuto.plan.turn.z));
-        if (_tfDist(c, t) < r + 300) return 'player';
+        if (inZ(t, 300)) return 'player';
     }
-    const me = _tfPlayerLL();
-    if (_tfDist(c, me) < r + 100 && Math.abs(physics.speed || 0) > 0.3) return 'player';
+    const M = _tfPlayerAsShipSafe();
+    if (M && !traffic.player.port) {
+        if (inZ(M, M.L / 2 + 10)) return 'player';
+        if (M.v > 0.3) for (let tt = 30; tt <= 180; tt += 30) if (inZ(_tfOff(M, M.hdg, M.v * tt), M.L / 2)) return 'player';
+    }
     return null;
 }
 // 行き先の港の航路に入る前（海の出入口の手前）：埠頭が空いていなければ、錨地で待つ
@@ -770,17 +1078,32 @@ function _tfArriveCheck(S) {
     S.checked = true;
     const P = S.to.P;
     if (_tfSlotOf(P, S.id)) return;
-    const b = _tfSlotFind(P, S.L, S.id);
+    const b = _tfSlotFind(P, S.L, S.id, S);
     if (b !== null) { _tfSlotTake(P, b, S.L, S.id, true); S.toB = b; return; }
     _tfToAnchor(S);
 }
 function _tfToAnchor(S) {
-    const P = S.to.P, sp = _tfAnchorFor(S, P);
-    const tgt = sp || _tfOff(_tfSeaEnd(P), (P.seaBearing || 0) + 30, 1500);
-    S.anch = sp || { lat: tgt.lat, lon: tgt.lon, d: 30 };
-    S.path = _tfPrepPath(S, { pts: [{ lat: S.lat, lon: S.lon, ch: false }, { lat: tgt.lat, lon: tgt.lon, ch: false }], arriveIdx: -1 });
+    const P = S.to.P, se = _tfSeaEnd(P);
+    let tgt = _tfAnchorFor(S, P);
+    if (!tgt) {
+        // 錨地がいっぱい：見えない所なら、ほかへ行ったことにする。見える所なら、海の出入口の少し脇で待つ
+        if (!(S.dPl < TF_SHOW)) { S.st = 'gone'; return; }
+        const ap = _tfApproach(P), inb = ap.length > 1 ? _tfBrg(ap[0], ap[1]) : (P.seaBearing + 180) % 360;
+        for (const side of [90, -90, 135, -135, 0]) {
+            const q = _tfOff(se, inb + 180 + side, 900);
+            if (_tfDepthAt(q.lat, q.lon) >= S.d + 4 && traffic.ships.every(o => o === S || !o.anch || _tfDist(o.anch, q) > 700)) { tgt = { lat: q.lat, lon: q.lon, d: _tfDepthAt(q.lat, q.lon) }; break; }
+        }
+        if (!tgt) tgt = { lat: se.lat, lon: se.lon, d: 30 };
+    }
+    S.anch = tgt;
+    // 道すじ：港の航路の中にいれば、来た道を海の出入口まで戻ってから（港の中は、泊地で回してから）
+    const pts = [{ lat: S.lat, lon: S.lon, ch: true }];
+    const Pa = S.path;
+    if (Pa && Pa.arriveIdx >= 0 && S.k >= Pa.arriveIdx) for (let k = Math.min(S.k, Pa.pts.length - 1); k >= Pa.arriveIdx; k--) pts.push({ lat: Pa.pts[k].lat, lon: Pa.pts[k].lon, ch: Pa.pts[k].ch, nar: Pa.pts[k].nar });
+    pts.push({ lat: tgt.lat, lon: tgt.lon, ch: false });
+    S.path = _tfPrepPath(S, _tfSmoothPath(S, { pts, arriveIdx: -1 }));
     for (const q of S.path.pts) q.lim = Math.min(q.lim, _tfMs(8));
-    S.s = 0; S.k = 0; S.st = 'anchoring';
+    S.s = 0; S.k = 0; S.off = 0; S.st = 'anchoring'; S.checked = true;
     if (S.dPl < 15000) _tfMsg(`${S.name}：${worldBerthLabel ? worldBerthLabel(P) : P.name} がふさがっているので、錨地で待ちます`);
 }
 // 道すじの終わりに着いた
@@ -790,48 +1113,121 @@ function _tfArrive(S, far) {
     if (!S.to || !S.to.P) { S.st = 'gone'; return; }
     const P = S.to.P;
     let sl = _tfSlotOf(P, S.id);
-    if (!sl) { const b = _tfSlotFind(P, S.L, S.id); if (b !== null) { _tfSlotTake(P, b, S.L, S.id, true); S.toB = b; sl = _tfSlotOf(P, S.id); } }
-    if (!sl) { S.st = 'holding'; S.v = 0; S.t = 20; S.waitWhy = '埠頭が空くのを待っています'; return; }
+    if (!sl) { const b = _tfSlotFind(P, S.L, S.id, S); if (b !== null) { _tfSlotTake(P, b, S.L, S.id, true); S.toB = b; sl = _tfSlotOf(P, S.id); } }
+    // 埠頭が空いていない（自分の船が押さえた・となりの船と重なる）：港の中で待たずに、来た道を錨地へ
+    if (!sl) { _tfToAnchor(S); return; }
     const b = (sl.b0 + sl.b1) / 2;
     S.geo = _tfBerthGeo(S, P, _tfQuayFrame(P).single ? 0 : b);
     if (!far) {
         const busy = _tfZoneBusy(S, S.geo);
-        if (busy) { S.st = 'holding'; S.v = 0; S.t = 15; S.waitWhy = busy === 'player' ? '自分の船の離着岸を待っています' : `${busy.name} の離着岸を待っています`; return; }
+        if (busy) { S.st = 'holding'; S.v = 0; S.t = 15; S.waitSince = S.waitSince ?? traffic.t; S.waitWhy = busy === 'player' ? '自分の船の動きを待っています' : `${busy.name} の離着岸・通過を待っています`; return; }
     }
-    sl.res = false; S.port = P; S.slotB = b; S.waitWhy = '';
+    sl.res = false; S.port = P; S.slotB = b; S.waitWhy = ''; S.waitSince = null;
     S.steps = _tfBerthSteps(S);
     if (far) { _tfFinish(S); return; }
-    S.st = 'berthing'; S.mPort = P;
+    S.st = 'berthing'; S.mPort = P; _tfManeuverBegin(S);
     if (S.dPl < 8000) _tfMsg(`${S.name}（${_tfClassOf(S).label}）が ${P.name} に着岸します`);
 }
 // 離着岸の動き（タグに押されて横へ・その場で回る・ドックをまっすぐ出入り）
+// 離着岸の次の動きの場所に、ほかの船（待っている・進んでいる船・自分の船）がいるか：その船の名前
+function _tfStepBlocked(S, st) {
+    const shapes = [];
+    if (st.k === 'rot') { const c = _tfEN(S, S); shapes.push({ ae: c.e, an: c.n, be: c.e, bn: c.n, r: S.L / 2 + 5 }); }
+    else if (st.to) {
+        const h = st.k === 'go' ? _tfBrg(S, st.to) : S.hdg;
+        const n = Math.max(1, Math.ceil(_tfDist(S, st.to) / Math.max(30, S.B)));
+        for (let j = 0; j <= n; j++) { const u = j / n; shapes.push(_tfCapOf(S, { lat: S.lat + (st.to.lat - S.lat) * u, lon: S.lon + (st.to.lon - S.lon) * u }, h, S.L, S.B + 6)); }
+    } else return null;
+    const test = (O, L, B) => {
+        const c = _tfCapOf(S, O, O.hdg, L, B);
+        for (const sh of shapes) if (_tfCapDist(sh, c) < 0) return true;
+        return false;
+    };
+    for (const O of traffic.ships) {
+        if (O === S || !_tfShown(O) || O.st === 'berth' || O.st === 'anchored' || O.st === 'berthing' || O.st === 'unberth') continue;
+        if (Math.abs(O.lat - S.lat) > 0.03 || _tfDist(S, O) > S.L + O.L + 400) continue;
+        if (test(O, O.L, O.B)) { S.pausedById = O.id; return O.name; }
+    }
+    const M = _tfPlayerAsShipSafe();
+    if (M && _tfDist(S, M) < S.L + M.L + 400 && test(M, M.L, M.B)) return 'あなたの船';
+    return null;
+}
 function _tfManeuver(S, d) {
     const st = S.steps && S.steps[0];
+    S.turning = false;
     if (!st) { _tfManeuverDone(S); return; }
     if (st.k === 'wait') { st.t -= d; S.v = 0; if (st.t <= 0) S.steps.shift(); return; }
+    // 次に動く所（回す円・動いていく帯）に、ほかの船がいれば、出ていくまで待つ。
+    // 長く（離岸は 1 分半・着岸は 2 分半）あかなければ、いったん来た所（岸壁・泊地）へ戻って、あとでやり直す
+    //（その船も、こちらを待って動けないことがある：川の中でみんなが止まってしまわないように）
+    if (!S.aborting) {
+        if (traffic.t >= (S.pauseChk || 0)) { S.pauseChk = traffic.t + 1; S.pausedById = null; S.pausedBy = _tfStepBlocked(S, st); }
+        if (S.pausedBy) {
+            S.pauseT = (S.pauseT || 0) + d;
+            if (S.pauseT > (S.st === 'unberth' ? 90 : 150) && S.mStart) { _tfManeuverAbort(S); return; }
+            S.v = 0; S.why = `${S.pausedBy} が出ていくのを待っています`; return;
+        }
+        S.pauseT = 0;
+    }
     if (st.k === 'rot') {
-        const e = _tfWrap(st.hdg - S.hdg), rate = Math.max(0.25, Math.min(1.5, 70 / S.L)) * d;
-        S.hdg = (S.hdg + Math.sign(e) * Math.min(Math.abs(e), rate) + 360) % 360; S.v = 0;
+        const e = _tfWrap(st.hdg - S.hdg), rate = _tfRotRate(S) * d;
+        S.hdg = (S.hdg + Math.sign(e) * Math.min(Math.abs(e), rate) + 360) % 360; S.v = 0; S.turning = true;
         if (Math.abs(e) < 0.4) S.steps.shift();
         return;
     }
-    const dd = _tfEN(S, st.to), dist = Math.hypot(dd.e, dd.n);
+    const dd = _tfEN(S, st.to), dist = Math.hypot(dd.e, dd.n), dir = Math.atan2(dd.e, dd.n) / _tfR;
+    if (st.k === 'go' && dist > Math.max(60, S.L * 0.4)) {
+        // 前へ進んで向かう：向きが 20° より違えば、止まってタグで向けてから。進みながら少しずつ向ける（船首の向きに進む）
+        const e = _tfWrap(dir - S.hdg), w = _tfRotRate(S) * d;
+        if (Math.abs(e) > 20) { S.hdg = (S.hdg + Math.sign(e) * Math.min(Math.abs(e), w) + 360) % 360; S.v = Math.max(0, S.v - 0.05 * d); S.turning = true; return; }
+        const v = Math.min(st.v, 0.15 + dist * 0.01);
+        S.v += Math.max(-0.05 * d, Math.min(0.02 * d, v - S.v));
+        S.hdg = (S.hdg + Math.sign(e) * Math.min(Math.abs(e), w) + 360) % 360;
+        const m = _tfOff(S, S.hdg, Math.min(dist, S.v * d)); S.lat = m.lat; S.lon = m.lon;
+        return;
+    }
+    // （タグで押す・引く：横へ、またはドックの中をまっすぐ）
     const v = Math.min(st.v, 0.05 + dist * 0.04);
-    const step = Math.min(dist, v * d), dir = Math.atan2(dd.e, dd.n) / _tfR;
+    const step = Math.min(dist, v * d);
     if (dist > 0.01) { const m = _tfOff(S, dir, step); S.lat = m.lat; S.lon = m.lon; }
     S.v = v * Math.cos(_tfWrap(dir - S.hdg) * _tfR);
-    if (dist - step < 0.4) S.steps.shift();
+    if (Math.abs(_tfWrap(dir - S.hdg)) > 30 && Math.abs(_tfWrap(dir - S.hdg)) < 150) S.turning = true;
+    if (dist - step < 0.4) { S.steps.shift(); if (S.mHist && !S.aborting) S.mHist.push({ lat: st.to.lat, lon: st.to.lon }); }
+}
+function _tfManeuverBegin(S) {
+    S.mStart = { lat: S.lat, lon: S.lon, hdg: S.hdg }; S.mHist = [{ lat: S.lat, lon: S.lon }];
+    S.pauseT = 0; S.aborting = false; S.pausedBy = null;
+}
+// 離着岸をやめて、来た所へ戻る（向きを戻してから、通った所を逆にたどって）
+function _tfManeuverAbort(S) {
+    const back = [];
+    if (Math.abs(_tfWrap(S.mStart.hdg - S.hdg)) > 1) back.push({ k: 'rot', hdg: S.mStart.hdg });
+    const H = (S.mHist || []).slice();
+    for (let i = H.length - 1; i >= 0; i--) if (_tfDist(S, H[i]) > 3 || i === 0) back.push({ k: 'move', to: H[i], v: 0.4 });
+    S.steps = back; S.aborting = true; S.pausedBy = null; S.pauseT = 0;
+    if (S.dPl < 8000) _tfMsg(`${S.name}：場所があかないので、いったん${S.st === 'unberth' ? '岸壁' : '泊地'}へ戻ります`);
 }
 function _tfManeuverDone(S) {
-    S.steps = null; S.mPort = null;
-    if (S.st === 'unberth') { S.st = 'go'; S.s = 0; S.k = 0; S.v = 0.3; S.checked = false; }
+    if (S.aborting) {
+        S.aborting = false; S.steps = null; S.turning = false; S.mHist = null;
+        if (S.st === 'unberth') { S.st = 'berth'; S.port = S.mPort; S.mPort = null; S.v = 0; S.t = 120 + Math.random() * 120; S.hdg = S.mStart.hdg; }
+        else { S.st = 'holding'; S.port = null; S.mPort = null; S.v = 0; S.t = 40 + Math.random() * 40; S.hdg = S.mStart.hdg; S.waitSince = traffic.t; }
+        return;
+    }
+    if (S.st === 'unberth' && S.mPort) _tfSlotFree(S.mPort, S.id);
+    S.steps = null; S.mPort = null; S.turning = false;
+    if (S.st === 'unberth') {
+        S.st = 'go'; S.v = 0.3; S.checked = false; S.off = 0;
+        // 道すじを、回し終えた今の所から始める
+        if (S.path) { S.path = _tfPathFromHere(S, S.path); S.s = 0; S.k = 0; }
+    }
     else if (S.st === 'berthing') {
         S.st = 'berth'; S.v = 0; S.t = _tfDwell(S); S.to = null; S.from = null; S.path = null;
         if (S.berthHdg !== undefined) S.hdg = S.berthHdg;
     }
 }
 function _tfFinish(S) {
-    if (S.steps) for (const st of S.steps) { if (st.k === 'move') { S.lat = st.to.lat; S.lon = st.to.lon; } else if (st.k === 'rot') S.hdg = st.hdg; }
+    if (S.steps) for (const st of S.steps) { if (st.k === 'move' || st.k === 'go') { S.lat = st.to.lat; S.lon = st.to.lon; } else if (st.k === 'rot') S.hdg = st.hdg; }
     if (S.st !== 'unberth' && S.st !== 'berthing') S.st = 'berthing';
     S.steps = [];
     _tfManeuverDone(S);
@@ -855,7 +1251,7 @@ function _tfSeedMid(S) {
     if (!lane || !lane.ok) return false;
     const path = _tfComposePath(S, from, S.to, lane);
     _tfKeepRight(S, path.pts);
-    S.path = _tfPrepPath(S, path);
+    S.path = _tfPrepPath(S, _tfSmoothPath(S, path));
     const a0 = _tfApproach(S.port).length - 1, a1 = path.arriveIdx >= 0 ? path.arriveIdx : path.pts.length - 1;
     const s0 = S.path.cum[Math.min(a0, S.path.cum.length - 1)], s1 = S.path.cum[a1];
     S.s = s0 + (s1 - s0) * S.seedMid; S.seedMid = undefined;
@@ -868,12 +1264,12 @@ function _tfFromAnchor(S) {
     const P = S.to && S.to.P;
     if (!P || (S.anchorTries = (S.anchorTries || 0) + 1) > 60) { S.st = 'gone'; return; }     // （30 分ほど待っても空かなければ、よそへ）
     let sl = _tfSlotOf(P, S.id);
-    if (!sl) { const b = _tfSlotFind(P, S.L, S.id); if (b !== null) { _tfSlotTake(P, b, S.L, S.id, true); S.toB = b; sl = true; } }
+    if (!sl) { const b = _tfSlotFind(P, S.L, S.id, S); if (b !== null) { _tfSlotTake(P, b, S.L, S.id, true); S.toB = b; sl = true; } }
     if (!sl) { S.t = 20 + Math.random() * 20; return; }
     const path = _tfComposePath(S, { pt: { lat: S.lat, lon: S.lon } }, S.to, null);
     path.arriveIdx = 0;
     _tfKeepRight(S, path.pts);
-    S.path = _tfPrepPath(S, path); S.s = 0; S.k = 0; S.checked = true; S.anch = null;
+    S.path = _tfPrepPath(S, _tfSmoothPath(S, path)); S.s = 0; S.k = 0; S.checked = true; S.anch = null; S.off = 0;
     S.st = 'go'; S.v = 0;
     _tfHorn(S, 'S1');
     if (S.dPl < 15000) _tfMsg(`${S.name}：錨を上げて ${worldBerthLabel ? worldBerthLabel(P) : P.name} へ向かいます`);
@@ -916,19 +1312,21 @@ function _tfStep(S, d, far) {
 function _tfMove(S, d, far) {
     const P = S.path;
     if (!P) { S.st = 'gone'; return; }
-    // この先（止まれる距離＋余裕）の制限速力
+    if (!far) S.turning = false;
+    // この先（止まれる距離＋余裕）の制限速力（港の中・タグで回す角・その場で回す角）
     let vT = S.vSea;
     const look = Math.max(400, S.v * S.v / (2 * Math.max(0.01, S.acc)) + 3 * S.L);
-    for (let k = S.k + 1; k < P.pts.length && P.cum[k] <= S.s + look; k++) vT = Math.min(vT, P.pts[k].lim + Math.max(0, (P.cum[k] - S.s - S.L) * 0.004));
-    vT = Math.min(vT, P.pts[Math.min(P.pts.length - 1, S.k + 1)].lim);
+    for (let k = S.k + 1; k < P.pts.length && P.cum[k] <= S.s + look; k++) vT = Math.min(vT, P.pts[k].lim + Math.max(0, (P.cum[k] - S.s - S.L * 0.5) * 0.004));
     // 終わり（泊地・錨地）の手前で止まる
     const left = P.total - S.s;
-    vT = Math.min(vT, Math.max(0.6, Math.sqrt(2 * S.acc * 0.6 * Math.max(0, left - 20))));
+    vT = Math.min(vT, Math.max(0.4, Math.sqrt(2 * S.acc * 0.6 * Math.max(0, left - 20))));
     // ぶつかった船：しばらく機関を止めて、その場に（押された分だけ流れる）
     const hit = !far && traffic.t - (S.hitT ?? -1e9) < TF_HIT_STOP;
     if (hit) vT = 0;
     if (!far) {
         vT *= (S.rv === undefined ? 1 : S.rv);
+        // 前をふさぐ船（_tfScan）：その手前で止まる・前の船に付いていく
+        if (Number.isFinite(S.vCap)) vT = Math.min(vT, S.vCap);
         // 霧：安全な速力（見える距離の中で止まれる速さ）
         const vis = _tfVisM();
         if (vis < 4000) vT = Math.min(vT, Math.max(1.5, Math.sqrt(2 * S.acc * 0.5 * vis * 0.5)));
@@ -936,34 +1334,72 @@ function _tfMove(S, d, far) {
     if (far) S.v = vT;
     else S.v += Math.max(-S.acc * 1.5 * d, Math.min(S.acc * d, vT - S.v));
     S.v = Math.max(0, S.v);
-    S.s += S.v * d;
+    let ds = S.v * d;
+    // 道をあけるために下がる（後進：止まってから、ゆっくり）
+    if (!far && traffic.t < (S.backT || 0)) {
+        S.v = Math.max(0, S.v - S.acc * 2 * d);
+        if (S.v < 0.05) { S.vBack = Math.min(0.6, (S.vBack || 0) + S.acc * 0.5 * d); ds = -Math.min(S.s, S.vBack * d); }
+        else ds = S.v * d;
+    } else S.vBack = 0;
+    if (!far) {
+        // 道すじの向きと船首の向きが大きく違う（錨を上げた所・その場で回す角を過ぎた所など）：止まって、その場で向きを変えてから（タグで）
+        const herr = _tfWrap(_tfTangent(P, S.s, S.k) - S.hdg);
+        if (Math.abs(herr) > 25 && S.v < 1.5) {
+            S.v = Math.max(0, S.v - S.acc * 2 * d); ds = S.v * d * 0.3;
+            S.hdg = (S.hdg + Math.sign(herr) * Math.min(Math.abs(herr), _tfRotRate(S) * d) + 360) % 360; S.turning = true;
+        }
+        // その場で回す角の手前：角の上で止まって、次の区間の向きにそろえてから
+        const kn = S.k + 1;
+        if (kn < P.pts.length - 1 && (P.pts[kn].piv || P.pts[kn].rad === 0) && S.s + ds >= P.cum[kn] - 0.5) {
+            const e = _tfWrap(_tfSegCrs(P, kn) - S.hdg);
+            if (Math.abs(e) > 8) {
+                ds = Math.max(0, P.cum[kn] - S.s); S.v = Math.min(S.v, 0.15);
+                S.hdg = (S.hdg + Math.sign(e) * Math.min(Math.abs(e), _tfRotRate(S) * d) + 360) % 360; S.turning = true;
+            }
+        }
+    }
+    // 船首の向きで進む：道すじに沿う分（s）と、横へずれる分（off）に分ける（横へは、船首を斜めに向けた分だけ動く：横滑りしない）
+    const tan0 = far ? 0 : _tfTangent(P, S.s, S.k), dl = far ? 0 : _tfWrap(S.hdg - tan0) * _tfR;
+    S.s += far ? ds : ds * Math.cos(dl);
     _tfArriveCheck(S);
-    if (S.s >= P.total - 1) { S.s = P.total; _tfSnapToPath(S); S.off = 0; _tfArrive(S, far); return; }
+    if (S.s >= P.total - 1) {
+        S.s = P.total;
+        if (far) { _tfSnapToPath(S); S.off = 0; }
+        else { const q = _tfAlong(P, P.total), m = Math.abs(S.off || 0) > 0.5 ? _tfOff(q, _tfSegCrs(P, P.pts.length - 2) + 90, S.off) : q; S.lat = m.lat; S.lon = m.lon; }
+        _tfArrive(S, far);
+        return;
+    }
+    if (S.s < 0) S.s = 0;
     const q = _tfAlong(P, S.s);
     S.k = q.k;
-    const a = P.pts[q.k], b = P.pts[Math.min(P.pts.length - 1, q.k + 1)];
-    const crs = rhumbCourse(a.lat, a.lon, b.lat, b.lon).course;
-    // 横へのずれ（よけるとき）：少しずつ
-    if (S.pushV) { S.off = (S.off || 0) + S.pushV * d; S.pushV *= Math.exp(-0.4 * d); if (Math.abs(S.pushV) < 0.01) S.pushV = 0; }
-    // （ぶつかってから 20 秒は押された所に留まる。そのあとは止まったまま、よける向きへ少しずつ）
-    const offT = far ? 0 : (hit && traffic.t - S.hitT < 20) ? (S.off || 0) : (S.offT || 0);
-    S.off = (S.off || 0) + Math.max(-0.6 * d * Math.max(1, S.v), Math.min(0.6 * d * Math.max(1, S.v), offT - (S.off || 0)));
+    const crs = _tfSegCrs(P, q.k);
+    if (far) { S.off = 0; S.lat = q.lat; S.lon = q.lon; S.hdg = crs; return; }
+    const hitNow = hit && traffic.t - S.hitT < 20;
+    S.off = (S.off || 0) + ds * Math.sin(dl);
+    // 押された横流れ（ぶつかったとき）：水の抵抗でゆっくり止まる
+    if (S.pushV) { S.off += S.pushV * d; S.pushV *= Math.exp(-0.4 * d); if (Math.abs(S.pushV) < 0.01) S.pushV = 0; }
     const m = Math.abs(S.off) > 0.5 ? _tfOff(q, crs + 90, S.off) : q;
     S.lat = m.lat; S.lon = m.lon;
-    // 船首の向き：道すじの向き（＋ずれていく向き）へ、回れる速さで
-    const want = (crs + Math.atan2(Math.max(-1, Math.min(1, offT - S.off)) * 0.25, 1) / _tfR + 360) % 360;
-    if (far) S.hdg = crs;
-    else {
-        const rate = Math.max(0.4, Math.min(3, S.v / (2.2 * S.L) / _tfR)) * d;
-        const e = _tfWrap(want - S.hdg);
-        S.hdg = (S.hdg + Math.sign(e) * Math.min(Math.abs(e), rate) + 360) % 360;
-        // 曲がり角の手前で短音（変針の信号：右へ 1 回・左へ 2 回）
-        const nk = Math.min(P.pts.length - 2, q.k + 1);
-        if (nk > q.k && S.sigK !== nk && P.cum[nk] - S.s < Math.max(300, 4 * S.L)) {
-            S.sigK = nk;
-            const c2 = rhumbCourse(P.pts[nk].lat, P.pts[nk].lon, P.pts[nk + 1].lat, P.pts[nk + 1].lon).course, turn = _tfWrap(c2 - crs);
-            if (Math.abs(turn) > 35 && _tfOtherNear(S, TF_SIG_NEAR)) _tfHorn(S, turn > 0 ? 'S1' : 'S2');
-        }
+    // 船首の向き：道すじの向き（円弧の上はなめらかに）＋ずれたい所へ向かう斜め（14° まで）。その船の旋回半径で回れる速さまで（タグで回す角は、タグの速さまで）
+    //（ぶつかってから 20 秒は押された所に留まる。後進で下がるときは、斜めの向きが逆）
+    const tan = _tfTangent(P, S.s, q.k);
+    const offT = hitNow ? S.off : (S.offT || 0);
+    const lookL = Math.max(S.L * 1.5, 6 * S.B, 150);
+    let drift = Math.max(-14, Math.min(14, Math.atan2(offT - S.off, lookL) / _tfR));
+    if (S.vBack > 0.05) drift = -drift;
+    const want = (tan + drift + 360) % 360;
+    const a = P.pts[q.k], b = P.pts[Math.min(P.pts.length - 1, q.k + 1)];
+    let rate = Math.max(0.15, 1.3 * (S.v + (S.vBack || 0)) / (a.rad > 0 ? a.rad : _tfRad(S)) / _tfR);
+    if (a.as || b.as) { rate = Math.max(rate, _tfRotRate(S)); S.tugKeep = traffic.t + 40; }
+    if (S.turning) S.tugKeep = traffic.t + 40;
+    const e = _tfWrap(want - S.hdg);
+    S.hdg = (S.hdg + Math.sign(e) * Math.min(Math.abs(e), rate * d) + 360) % 360;
+    // 曲がり角の手前で短音（変針の信号：右へ 1 回・左へ 2 回）：大きく曲がる所（円弧の始まり）で
+    if (a.rad === undefined && b.rad !== undefined && S.sigK !== q.k + 1 && P.cum[q.k + 1] - S.s < Math.max(300, 2 * S.L)) {
+        S.sigK = q.k + 1;
+        let kk = q.k + 1; while (kk < P.pts.length - 1 && P.pts[kk].rad !== undefined) kk++;
+        const turn = _tfWrap(_tfSegCrs(P, Math.min(P.pts.length - 2, kk - 1)) - crs);
+        if (Math.abs(turn) > 35 && _tfOtherNear(S, TF_SIG_NEAR)) _tfHorn(S, turn > 0 ? 'S1' : 'S2');
     }
 }
 
@@ -992,10 +1428,177 @@ function _tfCPA(A, B) {
     const cx = r.e + dvx * tc, cy = r.n + dvy * tc;
     return { cpa: Math.hypot(cx, cy), t: tc, dist: Math.hypot(r.e, r.n) };
 }
+// ── よけられる幅 ──
+// 今の所と、この先（横へずれ終わるまでの距離）の何か所かで、道すじから右・左へどこまで深い所が続くか。
+// 返すのは、船の真ん中のずれの上限[m]（船の半幅と余裕を引いたもの。want の向きと、今ずれている向きだけ調べる）
+function _tfClearance(S, want) {
+    const P = S.path, need = S.d + 1.5, mg = S.B / 2 + 10;
+    const reachR = Math.min(1600, Math.max(want, S.off || 0, 0) + mg + 15), reachL = Math.min(1600, Math.max(-want, -(S.off || 0), 0) + mg + 15);
+    const LA = Math.min(3000, Math.max(2 * S.L, (Math.abs(want) + Math.abs(S.off || 0)) / 0.25 + S.L));
+    let R = Infinity, Lf = Infinity;
+    const nF = Math.max(3, Math.min(8, Math.ceil(LA / 150)));
+    for (let fi = 0; fi <= nF; fi++) {
+        const s0 = Math.min(P.total, S.s + LA * fi / nF), q = _tfAlong(P, s0), crs = _tfSegCrs(P, q.k);
+        for (const side of [1, -1]) {
+            const reach = side > 0 ? reachR : reachL;
+            if (reach <= mg + 15.01 && !(side > 0 ? want > 0 || (S.off || 0) > 0 : want < 0 || (S.off || 0) < 0)) { if (side > 0) R = Math.min(R, 0); else Lf = Math.min(Lf, 0); continue; }
+            const step = Math.max(12, reach / 25);
+            let c = 0;
+            for (let r = step; r <= reach + 0.1; r += step) { const p2 = _tfOff(q, crs + 90 * side, r); if (_tfDepthAt(p2.lat, p2.lon) < need) break; c = r; }
+            const v = c + step > reach ? Infinity : Math.max(0, c - mg);
+            if (side > 0) R = Math.min(R, v); else Lf = Math.min(Lf, v);
+        }
+    }
+    return { r: R, l: Lf };
+}
+// ── 前をふさぐ船 ──
+// O の上から見た形（S から見た東・北[m] のカプセルのいくつか）。離着岸中の船は、これから回す所（船の長さの円）・動いていく先も
+// その船が占める（これから占める）所の広がり[m]（船の位置からの距離）：離着岸中なら、動いていく先・回す所まで
+function _tfReach(O) {
+    let r = (O.L || 100) / 2 + 20;
+    if ((O.st === 'berthing' || O.st === 'unberth') && O.steps) for (const st of O.steps) if (st.to) r = Math.max(r, _tfDist(O, st.to) + O.L / 2 + 20);
+    return r;
+}
+function _tfObsShapes(S, O) {
+    const out = [];
+    if (O.player) { out.push(_tfCapOf(S, O, O.hdg, O.L, O.B)); out[0].r += 5; return out; }
+    if (O.st === 'anchored') { const c = _tfEN(S, O); out.push({ ae: c.e, an: c.n, be: c.e, bn: c.n, r: O.L / 2 + 15 }); return out; }
+    if (O.st === 'berthing' || O.st === 'unberth') {
+        const circ = (q) => { const c = _tfEN(S, q); out.push({ ae: c.e, an: c.n, be: c.e, bn: c.n, r: O.L / 2 + 10 }); };
+        const st0 = O.steps && O.steps[0];
+        if (st0 && st0.k === 'rot') circ(O); else out.push(_tfCapOf(S, O, O.hdg, O.L, O.B + 10));
+        let at = O, h = O.hdg;
+        for (const st of (O.steps || [])) {
+            if (st.k === 'rot') { circ(at); h = st.hdg; continue; }
+            if (st.k !== 'move' && st.k !== 'go') continue;
+            if (st.k === 'go') h = _tfBrg(at, st.to);
+            const n = Math.max(1, Math.ceil(_tfDist(at, st.to) / Math.max(30, O.B)));
+            for (let j = 1; j <= n; j++) { const u = j / n; out.push(_tfCapOf(S, { lat: at.lat + (st.to.lat - at.lat) * u, lon: at.lon + (st.to.lon - at.lon) * u }, h, O.L, O.B + 10)); }
+            at = st.to;
+        }
+        // この船が、もうその船の動く先にかかっている：先の形では止まらない（止まると、相手もこの船を待って動けなくなる。出ていく）
+        const me = _tfCapOf(S, S, S.hdg, S.L, S.B);
+        for (let i = 1; i < out.length; i++) if (_tfCapDist(me, out[i]) < 0) return [_tfCapOf(S, O, O.hdg, O.L, O.B + 6)];
+        return out;
+    }
+    out.push(_tfCapOf(S, O, O.hdg, O.L, O.B));
+    return out;
+}
+// この船の道すじ（ずれも入れて）の、船首から D[m] 先までの点（S から見た東・北）：{ e, n, sig（船首から）, te, tn（向き） }
+function _tfAheadPts(S, D, offT) {
+    const P = S.path, out = [];
+    if (!P) return out;
+    const s0 = S.s + S.L / 2, s1 = Math.min(P.total, s0 + D);
+    const step = Math.max(8, Math.min(25, S.B * 0.7));
+    const sStart = Math.max(0, S.s - S.L / 2 + step * 0.5);
+    const en = new Map(), EN = (k) => { let v = en.get(k); if (!v) en.set(k, v = _tfEN(S, P.pts[k])); return v; };
+    const off0 = S.off || 0;
+    let k = Math.max(0, Math.min(P.pts.length - 2, S.k || 0));
+    while (k > 0 && P.cum[k] > sStart) k--;
+    for (let sg = sStart; sg <= s1 + 0.01; sg += step) {
+        while (k < P.pts.length - 2 && P.cum[k + 1] <= sg) k++;
+        const A = EN(k), B = EN(k + 1), segL = (P.cum[k + 1] - P.cum[k]) || 1, u = Math.max(0, Math.min(1, (sg - P.cum[k]) / segL));
+        const te = (B.e - A.e) / segL, tn = (B.n - A.n) / segL;
+        const off = sg <= S.s ? off0 : off0 + Math.max(-(sg - S.s) * 0.25, Math.min((sg - S.s) * 0.25, offT - off0));
+        const pe = A.e + (B.e - A.e) * u + tn * off, pn = A.n + (B.n - A.n) * u - te * off;
+        out.push({ e: pe, n: pn, sig: sg - s0, te, tn });
+        // 小さく回る円弧の上：船首・船尾の振れる所
+        const pa = P.pts[k];
+        if (sg > S.s && pa.rad > 0 && pa.rad < 2.5 * S.L) {
+            const h = S.L * 0.45;
+            out.push({ e: pe + te * h, n: pn + tn * h, sig: sg - s0, te, tn }, { e: pe - te * h, n: pn - tn * h, sig: sg - s0, te, tn });
+        }
+    }
+    // この先の、その場で回す角：船の長さの円（その角に着くまでに空いていること）
+    for (let j = Math.max(1, S.k + 1); j < P.pts.length - 1 && P.cum[j] <= s1; j++) {
+        const pv = P.pts[j];
+        if (!(pv.piv || pv.rad === 0) || P.cum[j] < S.s) continue;
+        const c = EN(j), sig = Math.max(0, P.cum[j] - s0);
+        for (let a = 0; a < 16; a++) { const an = a * Math.PI / 8; for (const r of [S.L * 0.25, S.L * 0.5]) out.push({ e: c.e + Math.sin(an) * r, n: c.n + Math.cos(an) * r, sig, te: Math.sin(an), tn: Math.cos(an) }); }
+    }
+    return out;
+}
+// 前をふさぐ船：この船の道すじの帯（船の幅＋余裕）に、ほかの船がかかる所の手前で止まれる速さ vCap と、その船 by
+//  ・同じ向きに進む前の船：間をあけて付いていく
+//  ・向かってくる船：遠いうちは行き会いのルール（右へよけ合う）に任せ、近くなってもふさいでいれば止まる（間の半分で）
+//  ・止まっている船（停泊・錨泊・待っている船）・離着岸中の船（回す所も）・横切っていく船：その手前で止まる
+// 横に並んでいる船の方へ、ずれすぎない（真ん中のずれの上限・下限を、相手の舷との間が空くように）
+function _tfSideLimit(S, obs, offT) {
+    const P = S.path, q = _tfAlong(P, S.s), crs = _tfSegCrs(P, q.k) * _tfR, te = Math.sin(crs), tn = Math.cos(crs);
+    const off0 = S.off || 0;
+    let hi = Infinity, lo = -Infinity;
+    for (const O of obs) {
+        if (O === S || Math.abs(O.lat - S.lat) > 0.03) continue;
+        const c = _tfEN(q, O), along = c.e * te + c.n * tn;
+        if (Math.abs(along) > (S.L + (O.L || 100)) / 2 + 30) continue;
+        const lat = c.e * tn - c.n * te;                                  // 道すじから右（＋）への位置
+        const dh = Math.abs(Math.sin(((O.hdg || 0) * _tfR) - crs));
+        const room = S.B / 2 + (O.B || 20) / 2 + (O.L || 100) / 2 * dh + 12 + 0.02 * S.L;
+        if (lat > off0) hi = Math.min(hi, Math.max(off0, lat - room));
+        else lo = Math.max(lo, Math.min(off0, lat + room));
+    }
+    return Math.max(lo, Math.min(hi, offT));
+}
+function _tfScan(S, obs, offT) {
+    const aB = Math.max(0.01, S.acc * 1.2);
+    const D = Math.min(4000, Math.max(500, S.v * S.v / (2 * aB) + 3 * S.L));
+    const g0 = 15 + 0.08 * S.L;
+    let vCap = Infinity, by = null, pts = null;
+    const half = S.B / 2 + 6 + 0.03 * S.L;
+    for (const O of obs) {
+        if (O === S || O.st === 'off' || O.st === 'gone' || O.st === 'pending') continue;
+        if (S.ghost && S.ghost.k === _tfSigKey(O) && traffic.t < S.ghost.until) continue;
+        if (Math.abs(O.lat - S.lat) > 0.06) continue;
+        if (_tfDist(S, O) > D + S.L / 2 + _tfReach(O) + 30) continue;
+        if (!pts) { pts = _tfAheadPts(S, D, offT); pts.sort((x, y) => x.sig - y.sig); }
+        const shapes = _tfObsShapes(S, O);
+        let hit = null;
+        for (const p of pts) {
+            for (const sh of shapes) if (_tfSegDist(p.e, p.n, sh) < half) { hit = p; break; }
+            if (hit) break;
+        }
+        if (!hit) continue;
+        const gap = hit.sig;
+        let vA = 0;
+        const moving = (O.v || 0) > 0.05 && (O.player || O.st === 'go' || O.st === 'anchoring');
+        if (moving) { const h = O.hdg * _tfR; vA = (Math.sin(h) * hit.te + Math.cos(h) * hit.tn) * O.v; }
+        let cap;
+        if (gap < 0) {
+            // 船の横に並んで、帯にかかっている（追い越し・寄ってくる船）：前寄りにいる動いている船なら、こちらが下がって先に行かせる
+            //（後ろ寄りの船・止まっている船・離着岸中の船は、相手が待つ・こちらはそのまま通り過ぎる）
+            if (!moving || (O.v || 0) < 0.3) continue;
+            const c = _tfEN(S, O), h0 = S.hdg * _tfR;
+            if (c.e * Math.sin(h0) + c.n * Math.cos(h0) <= 0) continue;
+            cap = Math.max(0, vA - 0.4);
+        } else if (vA > 0.3) {
+            const want = g0 + 30 + S.v * 25;
+            cap = Math.max(0, Math.min(vA + (gap - want) * 0.02, vA + Math.sqrt(2 * aB * Math.max(0, gap - g0))));
+        } else if (vA < -0.3) {
+            if (gap > Math.max(3 * S.L, 700)) continue;
+            cap = Math.sqrt(2 * aB * Math.max(0, gap / 2 - g0));
+        } else {
+            if (moving && (O.v || 0) > 0.5 && gap > Math.max(4 * S.L, S.v * S.v / (2 * aB) + 400)) continue;
+            cap = Math.sqrt(2 * aB * Math.max(0, gap - g0));
+        }
+        if (cap < vCap) { vCap = cap; by = O; }
+    }
+    return { vCap, by };
+}
+// 優先：港を出ていく船（3）＞ 港の間を行く船（2）＞ 港へ入ってくる船（1）。自分の船はいちばん上
+function _tfPri(S) {
+    if (!S || S.player) return 9;
+    const P = S.path;
+    if (S.st === 'anchoring') return 1;
+    if (P && S.to && S.to.P && P.arriveIdx >= 0 && S.k >= P.arriveIdx) return 1;
+    if (P && S.from && S.from.P && P.pts[Math.min(P.pts.length - 1, S.k + 1)].ch && !(P.arriveIdx >= 0 && S.k >= P.arriveIdx)) return 3;
+    return 2;
+}
 function _tfRules() {
     const near = traffic.ships.filter(S => S.dPl < TF_NEAR && (S.st === 'go' || S.st === 'anchoring' || S.st === 'anchored' || S.st === 'berthing' || S.st === 'unberth' || S.st === 'holding'));
     const me = _tfPlayerAsShip();
     const all = me ? near.concat([me]) : near;
+    // 前をふさぐ船を探すときは、埠頭に付いている船も
+    const obs = all.concat(traffic.ships.filter(S => S.st === 'berth' && S.dPl < TF_NEAR));
     const vis = _tfVisM();
     for (const S of near) {
         if (S.st !== 'go' && S.st !== 'anchoring') continue;
@@ -1049,8 +1652,19 @@ function _tfRules() {
             }
             if (!(c.t > 0 && c.t < 1500 && c.cpa < safe)) continue;
             if ((O.v || 0) < 0.3) {
-                // 止まっている船（錨泊・待機中）：右によけて通る
-                offT = Math.max(offT, Math.min(safe, inCh ? S.B + 40 : 600)); why = why || `${O.name} をよけています`;
+                // 止まっている船（錨泊・待機中・自分の船）：横を通る。相手の右（こちらから見て右）を通れれば右、浅くて通れなければ左
+                if (S.path) {
+                    const need = (S.B + (O.B || 20)) / 2 + 25 + 0.03 * S.L;
+                    const q0 = _tfAlong(S.path, S.s), c0 = _tfSegCrs(S.path, q0.k) * _tfR, rel = _tfEN(q0, O);
+                    const latO = rel.e * Math.cos(c0) - rel.n * Math.sin(c0);           // 道すじから右（＋）への相手の位置
+                    if (Math.abs(latO - (S.off || 0)) < need && Math.abs(latO) < need + 400) {
+                        const goR = Math.max(0, latO + need), goL = Math.min(0, latO - need);
+                        const cR = _tfClearance(S, goR);
+                        if (cR.r >= goR) offT = Math.max(offT, goR);
+                        else { const cL = _tfClearance(S, goL); if (cL.l >= -goL) offL = Math.max(offL, -goL); }
+                    }
+                } else offT = Math.max(offT, Math.min(safe, inCh ? S.B + 40 : 600));
+                why = why || `${O.player ? 'あなたの船' : O.name} をよけています`;
                 continue;
             }
             const headOn = Math.abs(rb) < 12 && Math.abs(rbFromO) < 12;
@@ -1079,16 +1693,58 @@ function _tfRules() {
                 }
             }
         }
+        // 埠頭に付いている船が、この船の帯にはみ出している（長い船が岸壁の端から出ている・航路の脇の埠頭）：横を通る
+        if (S.path) {
+            const P = S.path, q0 = _tfAlong(P, S.s), c0 = _tfSegCrs(P, q0.k) * _tfR, te = Math.sin(c0), tn = Math.cos(c0);
+            const half = S.B / 2 + 25 + 0.03 * S.L, look = Math.min(2500, Math.max(600, S.v * 240));
+            for (const O of obs) {
+                if (O.st !== 'berth' || Math.abs(O.lat - S.lat) > 0.04) continue;
+                const c = _tfEN(q0, O), al = c.e * te + c.n * tn;
+                if (al < -O.L / 2 || al > look + O.L / 2) continue;
+                const h = O.hdg * _tfR, fe = Math.sin(h), fn = Math.cos(h);
+                let lo = Infinity, hi = -Infinity;
+                for (const f of [-0.5, 0, 0.5]) { const e = c.e + fe * O.L * f, n = c.n + fn * O.L * f, lat = e * tn - n * te; lo = Math.min(lo, lat - O.B / 2); hi = Math.max(hi, lat + O.B / 2); }
+                const off0 = S.off || 0;
+                if (off0 + half < lo || off0 - half > hi) continue;              // 帯にかかっていない
+                const goR = hi + half, goL = lo - half;
+                if (goR > 0 && _tfClearance(S, goR).r >= goR) offT = Math.max(offT, goR);
+                else if (goL < 0 && _tfClearance(S, goL).l >= -goL) offL = Math.max(offL, -goL);
+                why = why || `${O.name}（停泊中）の横を通ります`;
+            }
+        }
         // 追い越し（左へ）は、右へよける理由が無いときだけ
         if (!(offT > 0) && offL > 0) offT = -offL;
-        // よける所が浅ければ、よけずに減速
-        if (offT !== 0 && S.path) {
-            const a = S.path.pts[S.k], b = S.path.pts[Math.min(S.path.pts.length - 1, S.k + 1)];
-            const crs = rhumbCourse(a.lat, a.lon, b.lat, b.lon).course;
-            let okOff = offT;
-            for (const f of [1, 0.6, 0.3]) { const q = _tfOff(S, crs + 90, offT * f - (S.off || 0)); if (_tfDepth(q) >= S.d + 2) { okOff = offT * f; break; } okOff = 0; }
-            if (Math.abs(okOff) < Math.abs(offT) * 0.5 && offT > 0) rv = Math.min(rv, 0.4);
-            offT = okOff;
+        // 道すじの終わり（泊地・錨地）の手前では、真ん中へ戻る（待つ所・離着岸の始まりは道すじの上）
+        if (S.path && S.path.total - S.s < 2 * S.L + 300) offT = 0;
+        // よけられる幅：浅い所・陸にかからない所まで（今の所と、この先の横へずれ終わるまでの所で）。よけきれなければ減速
+        if (S.path && (offT !== 0 || Math.abs(S.off || 0) > 1)) {
+            const c = _tfClearance(S, offT);
+            S.clrR = c.r; S.clrL = c.l;
+            const ok = Math.max(-c.l, Math.min(c.r, offT));
+            if (offT > 0 && ok < offT * 0.5) rv = Math.min(rv, 0.5);
+            offT = ok;
+        } else { S.clrR = 0; S.clrL = 0; }
+        // 横に並んでいる船（追い越し・追い越される・となりの航路）の方へは、ずれていかない
+        if (S.path) offT = _tfSideLimit(S, obs, offT);
+        // 前をふさぐ船（近い船から：停泊中・離着岸中・待っている船・自分の船も）：その手前で止まる・前の船に付いていく
+        const sc = _tfScan(S, obs, offT);
+        S.vCap = sc.vCap;
+        if (sc.by && sc.vCap < 0.3) {
+            const k = _tfSigKey(sc.by);
+            if (S.blockBy !== k) { S.blockBy = k; S.blockT0 = traffic.t; }
+            why = `${sc.by.player ? 'あなたの船' : sc.by.name} が前をふさいでいるので、待っています`;
+        } else { S.blockBy = null; S.blockT0 = null; if (sc.by && sc.vCap < S.v - 0.2) why = why || `${sc.by.player ? 'あなたの船' : sc.by.name} が前にいるので、速力を落としています`; }
+        // 動けないまま待っている（ふさいでいる船も、こちらを待って止まっている：狭い所で向かい合った など）：
+        //  優先の低い方が、少し下がって（後進で）道をあける。5 分たっても動けず、自分の船から遠ければ（見えない所）、すり抜けさせる
+        if (S.blockBy != null && S.blockT0 != null) {
+            const O = S.blockBy === 'P' ? null : traffic.ships.find(o => o.id === S.blockBy);
+            const waited = traffic.t - S.blockT0;
+            if (O && O.blockBy === S.id && waited > 30 && !(traffic.t < (O.backT || 0))) {
+                const pS = _tfPri(S), pO = _tfPri(O);
+                if ((pS < pO || (pS === pO && S.id > O.id)) && !(traffic.t < (S.backT || 0)) && S.s > 10) { S.backT = traffic.t + 60; why = `${O.name} に道をあけるため、少し下がります`; }
+            }
+            if (O && (O.st === 'berthing' || O.st === 'unberth') && O.pausedBy && O.pausedById === S.id && waited > 20 && !(traffic.t < (S.backT || 0)) && S.s > 10) { S.backT = traffic.t + 60; why = `${O.name} の離着岸の場所をあけるため、少し下がります`; }
+            if (O && waited > 300 && S.dPl > 4000 && O.dPl > 4000) S.ghost = { k: O.id, until: traffic.t + 240 };
         }
         // 霧の中は、レーダーで見る分だけ早めに減速（視程の 2 倍の中に他の船がいれば半分の速さ）
         if (vis < 2000 && all.some(O => O !== S && _tfDist(S, O) < vis * 2)) rv = Math.min(rv, 0.5);
@@ -1383,19 +2039,14 @@ const _tfV = new THREE.Vector3(), _tfD3 = new THREE.Vector3();
 function _tfVisual(S, t, vis, night) {
     const loc = _tfLocal(S, {});
     if (!Number.isFinite(loc.x)) { _tfDropMesh(S); return; }
-    // 保存した船：遠く（TF_SAVED_FAR より先）は、ふつうの形で描く（重いモデルを遠くの小さな船に使わない）。
-    // 近づいたら、モデルを読み込み終えてから差し替える（読み込む間も、ふつうの形で見えるように）
+    // 保存した船：その船のモデルだけで描く（読み込むまで・メモリが足りずに読み込めない間は描かない。ほかの形で代わりに出さない）
     if (S.saved) {
-        const near = S.dPl < TF_SAVED_FAR;
-        const P = near ? _tfProto.get(S.saved.key) : null;
-        if (near && !P && !_tfProtoBusy && _tfProtoRoom()) _tfLoadProto(S.saved);
-        if (P && P.state === 'fail') S.saved = null;
-        const ready = P && P.state === 'ok';
-        if (S.mesh) {
-            const isSaved = !!S.mesh.userData.saved;
-            if (isSaved ? S.dPl > TF_SAVED_FAR + 500 : (ready && S.dPl < TF_SAVED_FAR - 500)) _tfDropMesh(S);
-        }
-        if (!S.mesh && ready && S.dPl < TF_SAVED_FAR) { S.mesh = _tfBuildSavedMesh(S, P); scene.add(S.mesh); }
+        const P = _tfProto.get(S.saved.key);
+        if (!P && !_tfProtoBusy && S.protoOK && _tfProtoRoom()) _tfLoadProto(S.saved);
+        if (P && P.state === 'fail') { _tfDropMesh(S); S.st = 'gone'; S.noRespawn = true; return; }      // モデルが読めない船は出さない
+        if (!S.mesh && P && P.state === 'ok' && S.protoOK) { S.mesh = _tfBuildSavedMesh(S, P); scene.add(S.mesh); }
+        if (S.mesh && !S.protoOK) _tfDropMesh(S);
+        if (!S.mesh) return;
     }
     if (!S.mesh) { S.mesh = _tfBuildMesh(S); scene.add(S.mesh); }
     const g = S.mesh, yaw = _tfYaw(S, loc);
@@ -1455,6 +2106,104 @@ function _tfVisual(S, t, vis, night) {
 // ════════════════════════════════════════════════════════════════
 //  t：実時間（見た目・汽笛の音）、dt：物理の時間（物理早送り physicsSpeed を掛けたもの）
 //  船の動き・ルール・合図の間合いは、物理の時間（traffic.t）で進める。早送りのときは、近くの船を細かく刻んで進める
+
+// ════════════════════════════════════════════════════════════════
+//  他の船のタグ（大きな船の離着岸・港の中でその場で回すとき）
+// ════════════════════════════════════════════════════════════════
+//  自分の船から 3km 以内で見えている大きな船（長さ 110m 以上）に、2 隻（船首・船尾）付ける。形は 47-tugboats.js と同じ。
+//  ・その場で回す：船首と船尾を反対の向きへ押す
+//  ・岸壁へ寄せる：岸壁から遠い側から押す。岸壁から離す：岸壁から遠い側から引く
+//  終わったら離れていって、見えなくなったら次の船に使う（いちどに 6 隻まで）
+const TF_TUG_MAX = 6;
+const _tfTugs = [];
+function _tfTugWanted(S) {
+    if (S.L < 110 || S.cls === 'fishing' || S.cls === 'destroyer' || !(S.dPl < 3000) || !S.mesh || !S.mesh.visible) return false;
+    if (S.st === 'berthing' || S.st === 'unberth') return true;
+    return (S.st === 'go' || S.st === 'anchoring') && traffic.t < (S.tugKeep || 0);
+}
+// 船の中の持ち場（物理の面の x, z と、タグの向き yaw）
+function _tfTugStation(S, H, i) {
+    const st = S.steps && S.steps[0];
+    const w = S.B / 2 + TUG_LEN / 2 + 0.8, a = (i === 0 ? 1 : -1) * S.L * 0.3;
+    const at = (sd, k) => ({ x: H.x + H.fx * a + H.sx * sd * w * k, z: H.z + H.fz * a + H.sz * sd * w * k });
+    // その場で回す：右へ回すなら、船首のタグは左舷側（+）から右へ、船尾のタグは右舷側から左へ押す
+    const rotTo = st && st.k === 'rot' ? st.hdg : (S.turning && S.path ? _tfTangent(S.path, S.s, S.k) : null);
+    if (rotTo !== null && Math.abs(_tfWrap(rotTo - S.hdg)) > 1) {
+        const sd = (i === 0 ? 1 : -1) * (Math.sign(_tfWrap(rotTo - S.hdg)) || 1);
+        return Object.assign(at(sd, 1), { yaw: Math.atan2(-sd * H.sx, -sd * H.sz), force: 0.6 });
+    }
+    // 岸壁の側（+：左舷側）。タグは反対の側に付く
+    let quay = 0;
+    if (S.geo && S.geo.face && (S.st === 'berthing' || S.st === 'unberth')) { const c = _tfLocal(S.geo.face, {}); quay = Math.sign((c.x - H.x) * H.sx + (c.z - H.z) * H.sz) || 1; }
+    const away = quay ? -quay : (i === 0 ? 1 : -1);
+    let toward = 1;
+    if (st && st.k === 'move' && st.to && quay) { const c = _tfLocal(st.to, {}); const m = (c.x - H.x) * H.sx + (c.z - H.z) * H.sz; if (Math.abs(m) > 0.5) toward = Math.sign(m) === quay ? 1 : -1; }
+    if (toward < 0) return Object.assign(at(away, 1.8), { yaw: Math.atan2(away * H.sx, away * H.sz), force: 0.6 });   // 引く（索の分だけ離れて）
+    return Object.assign(at(away, 1), { yaw: Math.atan2(-away * H.sx, -away * H.sz), force: st && st.k === 'move' ? 0.5 : 0.15 });
+}
+function _tfTugTake(S, i, H) {
+    let T = _tfTugs.find(x => x.state === 'idle');
+    if (!T) {
+        if (_tfTugs.length >= TF_TUG_MAX || typeof _tugBuild !== 'function') return null;
+        const g = _tugBuild();
+        if (typeof _tfMergeProto === 'function') _tfMergeProto(g);
+        g.name = 'TrafficTug';
+        T = { g, S: null, i: 0, x: 0, z: 0, yaw: 0, vel: { x: 0, z: 0 }, state: 'idle', action: 'push', force: 0 };
+        _tfTugs.push(T);
+    }
+    // 船から 250m ほど離れた所（岸壁から遠い側の水の上）から来る
+    const st = _tfTugStation(S, H, i);
+    const dx = st.x - H.x, dz = st.z - H.z, d = Math.hypot(dx, dz) || 1;
+    T.x = H.x + dx / d * 250 + H.fx * (i === 0 ? 1 : -1) * 120; T.z = H.z + dz / d * 250 + H.fz * (i === 0 ? 1 : -1) * 120;
+    T.yaw = Math.atan2(st.x - T.x, st.z - T.z);
+    T.S = S; T.i = i; T.state = 'coming'; T.t = 0; T.force = 0.5;
+    if (!T.g.parent) scene.add(T.g);
+    T.g.visible = true;
+    return T;
+}
+function _tfTugTick(t, dt) {
+    if (!_tfTugs.length && !traffic.ships.some(_tfTugWanted)) return;
+    // 要る船に（近い船から）2 隻ずつ
+    for (const S of traffic.ships.filter(_tfTugWanted).sort((a, b) => a.dPl - b.dPl)) {
+        const H = _tfHullOf(S); if (!H) continue;
+        for (let i = 0; i < 2; i++) if (!_tfTugs.some(T => T.S === S && T.i === i && T.state !== 'leaving')) _tfTugTake(S, i, H);
+    }
+    for (const T of _tfTugs) {
+        if (T.state === 'idle') continue;
+        const S = T.S;
+        let tx, tz, tyaw = null, spd = 6;
+        if (T.state !== 'leaving' && S && traffic.ships.includes(S) && _tfTugWanted(S)) {
+            const H = _tfHullOf(S);
+            if (H) { const st = _tfTugStation(S, H, T.i); tx = st.x; tz = st.z; tyaw = st.yaw; T.force = st.force; T.action = st.force > 0 && Math.abs(_tfWrap((st.yaw - Math.atan2(-H.sx, -H.sz)) / _tfR)) > 90 ? 'pull' : 'push'; }
+        }
+        if (tx === undefined) {
+            if (T.state !== 'leaving') { T.state = 'leaving'; T.t = 0; T.lx = T.x + Math.sin(T.yaw) * -500; T.lz = T.z + Math.cos(T.yaw) * -500; T.force = 0.4; }
+            T.t += dt; tx = T.lx; tz = T.lz;
+            if (T.t > 100) { T.state = 'idle'; T.S = null; T.g.visible = false; if (T.g.parent) T.g.parent.remove(T.g); continue; }
+        }
+        const dx = tx - T.x, dz = tz - T.z, d = Math.hypot(dx, dz);
+        const step = Math.min(d, spd * dt);
+        if (d > 0.05) { T.x += dx / d * step; T.z += dz / d * step; }
+        T.vel.x = d > 0.05 ? dx / d * step / Math.max(1e-3, dt) : 0; T.vel.z = d > 0.05 ? dz / d * step / Math.max(1e-3, dt) : 0;
+        if (T.state === 'coming' && d < 3) T.state = 'on';
+        if (T.state === 'on' && d > 30) T.state = 'coming';
+        // 向き：動いている間は進む向き、持ち場ではその向き
+        const yw = (d > 10 || tyaw === null) ? Math.atan2(dx, dz) : tyaw;
+        let e = yw - T.yaw; while (e > Math.PI) e -= 2 * Math.PI; while (e < -Math.PI) e += 2 * Math.PI;
+        T.yaw += e * Math.min(1, dt * 1.2);
+        // 形
+        const H2 = (x, z) => (typeof getOceanHeight === 'function') ? getOceanHeight(x, z, t) : 0;
+        const fx = Math.sin(T.yaw), fz = Math.cos(T.yaw);
+        const pitch = Math.atan2(H2(T.x + fx * 10, T.z + fz * 10) - H2(T.x - fx * 10, T.z - fz * 10), 20);
+        const roll = Math.atan2(H2(T.x + fz * 4, T.z - fx * 4) - H2(T.x - fz * 4, T.z + fx * 4), 8);
+        T.g.position.set(T.x, H2(T.x, T.z), T.z);
+        T.g.rotation.set(-pitch * 0.8, T.yaw, roll * 0.8, 'YXZ');
+        T.g.updateMatrixWorld();
+        if (typeof _tugLights === 'function') _tugLights(T);
+        if (typeof _tugSmoke === 'function') _tugSmoke(T, t);
+    }
+}
+function _tfTugClear() { for (const T of _tfTugs) { T.state = 'idle'; T.S = null; T.g.visible = false; if (T.g.parent) T.g.parent.remove(T.g); } }
 function updateTraffic(t, dt) {
     dt = Math.min(TF_DT_MAX, Math.max(0, dt || 0));
     if (!traffic.on || !window.world || world.mode !== 'world' || typeof scene === 'undefined') {
@@ -1469,6 +2218,8 @@ function updateTraffic(t, dt) {
         if (!world.ports || t - traffic.initT < 3) return;
         _tfSpawnFleet(); traffic.ready = true;
     }
+    const hdSig = traffic.key + '|' + ((typeof _RW !== 'undefined' && _RW && _RW.hd) ? _RW.hd.map(d => d.key).join(',') : '');
+    if (hdSig !== traffic.hdSig) { traffic.hdSig = hdSig; _tfDC.clear(); for (const P of _tfPorts()) P._tfGeo = null; }
     _tfLanePump();
     const me = _tfPlayerLL();
     for (const S of traffic.ships) S.dPl = (S.st === 'off' || S.st === 'gone') ? Infinity : _tfDist(me, S);
@@ -1501,9 +2252,9 @@ function updateTraffic(t, dt) {
     if (farStep) for (let i = traffic.ships.length - 1; i >= 0; i--) {
         const S = traffic.ships[i];
         if (S.st !== 'gone') continue;
-        _tfDropMesh(S); if (S.port) _tfSlotFree(S.port, S.id); if (S.to && S.to.P) _tfSlotFree(S.to.P, S.id);
+        _tfDropMesh(S); if (S.port) _tfSlotFree(S.port, S.id); if (S.mPort) _tfSlotFree(S.mPort, S.id); if (S.to && S.to.P) _tfSlotFree(S.to.P, S.id);
         traffic.ships.splice(i, 1);
-        if (!S.svc && !S.transient) { const N = _tfMakeShip({ cls: S.cls, saved: S.saved }); if (S.saved) Object.assign(N, { name: S.name, line: S.line, L: S.L, B: S.B, d: S.d, kn: S.kn, vSea: S.vSea }); _tfSeed(N); traffic.ships.push(N); }
+        if (!S.svc && !S.transient && !S.noRespawn) { const N = _tfMakeShip({ cls: S.cls, saved: S.saved }); if (S.saved) Object.assign(N, { name: S.name, line: S.line, L: S.L, B: S.B, d: S.d, kn: S.kn, vSea: S.vSea }); _tfSeed(N); traffic.ships.push(N); }
     }
     // 世界地図・一覧を開いていれば、ときどき描き直す
     if ((traffic.mapT = (traffic.mapT || 0) + dt) > 2) {
@@ -1517,11 +2268,19 @@ function updateTraffic(t, dt) {
     // 保存した船の窓の明かり：昼は消し、夜は点ける（自分の船の updateWindowGlow と同じ係数）
     const glowK = night * ((typeof lightSettings !== 'undefined' && Number.isFinite(lightSettings.windowGlowMult)) ? lightSettings.windowGlowMult : 1);
     for (const P of _tfProto.values()) if (P.glow && P.users > 0 && P.glowK !== glowK) { P.glowK = glowK; for (const [m, base] of P.glow) m.emissiveIntensity = base * glowK; }
+    {
+        const show = traffic.ships.filter(S => S.saved && S.dPl < Math.min(TF_SHOW, vis * 1.5 + 2000) && _tfShown(S)).sort((a, b) => a.dPl - b.dPl);
+        const keys = new Set(), mx = _tfProtoMax();
+        for (const S of show) { if (keys.size < mx || keys.has(S.saved.key)) keys.add(S.saved.key); }
+        for (const S of traffic.ships) if (S.saved) S.protoOK = keys.has(S.saved.key) && !(traffic.savedHoldUntil && performance.now() < traffic.savedHoldUntil);
+    }
     for (const S of traffic.ships) {
         if (S.dPl < Math.min(TF_SHOW, vis * 1.5 + 2000) && S.st !== 'off' && S.st !== 'gone' && S.st !== 'pending') _tfVisual(S, t, vis, night);
         else if (S.mesh && !(S.dPl < TF_SHOW + 1500)) _tfDropMesh(S);
         else if (S.mesh) S.mesh.visible = false;
     }
+    _tfTugTick(t, Math.min(0.5, Math.max(0, t - (traffic.tugT ?? t))));
+    traffic.tugT = t;
 }
 window.updateTraffic = updateTraffic;
 
@@ -1644,7 +2403,7 @@ function _tfClearBerthFor(P) {
         if (S.port !== P) continue;
         _tfSlotFree(P, S.id); S.port = null;
         const me = _tfPlayerLL();
-        const alt = _tfPorts().filter(q => q !== P && _tfSuits(S.cls, q) && _tfFits(S, q) && _tfSlotFind(q, S.L, S.id) !== null)
+        const alt = _tfPorts().filter(q => q !== P && _tfSuits(S.cls, q) && _tfFits(S, q) && _tfSlotFind(q, S.L, S.id, S) !== null)
             .sort((a, b) => _tfDist(P, a) - _tfDist(P, b))[0];
         _tfDropMesh(S);
         if (!S.svc && alt && _tfDist(alt, me) > TF_SHOW && _tfPlaceBerthed(S, alt, Math.random())) continue;
@@ -1661,6 +2420,53 @@ function _tfBerthBlocker(P) {
         const sl = _tfSlotOf(P, S.id);
         if (!sl || (sl.b1 > R.b0 && sl.b0 < R.b1)) return S;
     }
+    return null;
+}
+// 自分の船が、針路 crs へ向かったとき、この先（止まれる距離＋余裕）が深いか（船の幅の帯）
+function _tfPlayerCourseOK(me, crs) {
+    const need = ((typeof worldShipDraft === 'function') ? worldShipDraft() : 8) + 1.5;
+    const D = Math.min(4000, Math.max(3 * me.L, me.v * 150 + me.L));
+    for (let x = me.L / 2; x <= D; x += 25) {
+        const u = Math.min(1, x / (2 * me.L)), h = me.hdg + _tfWrap(crs - me.hdg) * u;
+        const c = _tfOff(me, h, x);
+        if (!_tfBandOK(me, c, h, need)) return false;
+    }
+    return true;
+}
+// 自分の船の前をふさぐ船：船首から、今の向きから針路 crs へ向かう帯に、ほかの船（離着岸中の船は動く先・回す所も）がかかる所
+function _tfPlayerScan(me, crs) {
+    const v = me.v, dStop = Math.max(1.5 * me.L, v * 90);
+    const D = Math.min(5000, dStop * 2 + me.L);
+    const half = me.B / 2 + 8 + 0.03 * me.L;
+    const pts = [];
+    let e = 0, n = 0, h = me.hdg;
+    const step = Math.max(10, me.B * 0.6);
+    // 船首まで
+    e = Math.sin(h * _tfR) * me.L / 2; n = Math.cos(h * _tfR) * me.L / 2;
+    for (let x = 0; x <= D; x += step) {
+        const u = Math.min(1, x / (2 * me.L)); h = me.hdg + _tfWrap(crs - me.hdg) * u;
+        e += Math.sin(h * _tfR) * step; n += Math.cos(h * _tfR) * step;
+        pts.push({ e, n, sig: x, te: Math.sin(h * _tfR), tn: Math.cos(h * _tfR) });
+    }
+    let best = null;
+    for (const O of traffic.ships) {
+        if (!_tfShown(O) || !(O.dPl < D + me.L + _tfReach(O))) continue;
+        const shapes = _tfObsShapes(me, O);
+        let hit = null;
+        for (const p of pts) { for (const sh of shapes) if (_tfSegDist(p.e, p.n, sh) < half) { hit = p; break; } if (hit) break; }
+        if (!hit) continue;
+        let vA = 0;
+        if ((O.v || 0) > 0.3 && (O.st === 'go' || O.st === 'anchoring')) { const hh = O.hdg * _tfR; vA = (Math.sin(hh) * hit.te + Math.cos(hh) * hit.tn) * O.v; }
+        if (vA < -0.3 && hit.sig > Math.max(3 * me.L, 700)) continue;           // 遠くの向かってくる船は、行き会いのルールで
+        if (vA > 0.3 && v < vA + 0.3 && hit.sig > 2 * me.L) continue;           // 同じ向きに離れていく船
+        if ((O.v || 0) > 0.5 && vA <= 0.3 && vA >= -0.3 && hit.sig > dStop + 400) continue;   // 遠くを横切る船
+        if (!best || hit.sig < best.gap) best = { gap: hit.sig, O, vA };
+    }
+    if (!best) return null;
+    const nm = best.O.name;
+    if (best.gap < dStop * 0.6 && v > 0.4) return { order: -1, why: `${nm} が前をふさいでいるので、後進をかけています` };
+    if (best.gap < dStop * 1.3) return { order: 0, why: `${nm} が前をふさいでいるので、機関を止めて待っています` };
+    if (best.gap < dStop * 2.5) return { order: 1, why: `${nm} が前にいるので、微速にしています` };
     return null;
 }
 function trafficAdvice(ctx) {
@@ -1717,6 +2523,20 @@ function trafficAdvice(ctx) {
         } else if (!sameDir && c.cpa < Math.max(L, 200) && c.t < 240) {
             order = Math.min(order, 0); if (!inCh) dc = Math.max(dc, 20);
             why = why || `${O.name} が近いので、減速して右へよけています`;
+        }
+    }
+    // よける向きに浅い所・陸があれば、よけ方を小さく（無理なら、よけずに速力を落とす：前をふさがれれば下で止まる）
+    if (dc && ctx && Number.isFinite(ctx.course)) {
+        let ok = 0;
+        for (const f of [1, 0.6, 0.3]) if (_tfPlayerCourseOK(me, ctx.course + dc * f)) { ok = dc * f; break; }
+        if (ok !== dc) { if (!ok) { order = Math.min(order, 1); why = why ? why + '（浅いので、よけずに減速）' : why; } dc = ok; }
+    }
+    // 前をふさぐ船（近い船から：針路の先の帯に、ほかの船の船体・離着岸の場所がかかる）：止まれる距離の中なら、機関を止める・後進
+    if (ctx && Number.isFinite(ctx.course)) {
+        const sc = _tfPlayerScan(me, ctx.course + dc);
+        if (sc) {
+            if (sc.order < order) order = sc.order;
+            why = sc.why;
         }
     }
     // 埠頭がふさがっている：港の近くで待つ
@@ -2005,7 +2825,7 @@ function _tfSpawnEncounter(me) {
         for (let u = 0; u <= 1; u += 0.05) if (_tfDepth(_tfLerp(A, B, u)) < S.d + 6) return false;      // 浅い所を通るなら、今は出さない
         pts = [{ lat: A.lat, lon: A.lon, ch: false }, { lat: B.lat, lon: B.lon, ch: false }];
     }
-    S.path = _tfPrepPath(S, { pts, arriveIdx: -1 });
+    S.path = _tfPrepPath(S, _tfSmoothPath(S, { pts, arriveIdx: -1 }));
     // 自分の船から 15〜22km 手前（自分の船の方へ向かう所）から
     let sNear = 0, dBest = Infinity;
     for (let s = 0; s <= S.path.total; s += Math.max(500, S.path.total / 400)) { const d = _tfDist(me, _tfAlong(S.path, s)); if (d < dBest) { dBest = d; sNear = s; } }
@@ -2301,20 +3121,42 @@ function _tfHullPen(A, B) {
     return best.pen > 0 ? best : null;
 }
 // 他の船の重さ[kg]（方形係数 0.7 ほど）。動かない状態なら Infinity
-function _tfMassOf(S) { return (S.st === 'go' || S.st === 'anchoring') ? Math.max(5e5, 0.7 * S.L * S.B * Math.max(2, S.d) * 1025) : Infinity; }
+function _tfMassOf(S) {
+    if (S.st === 'berth' || S.st === 'berthing' || S.st === 'unberth') return Infinity;
+    const m = Math.max(5e5, 0.7 * S.L * S.B * Math.max(2, S.d) * 1025);
+    return S.st === 'anchored' ? m * 3 : m;
+}
 function _tfPlayerMass() { return Math.max(1e5, (physics.mass || 1) * 1e6); }
 // 他の船を（物理の面で）dx, dz だけ動かす：道すじに沿う分は s、横は off へ
 function _tfShove(S, H, dx, dz) {
-    if (!S.path || !(S.st === 'go' || S.st === 'anchoring')) return;
-    const along = dx * H.fx + dz * H.fz, stbd = -(dx * H.sx + dz * H.sz);
-    S.s = Math.max(0, Math.min(S.path.total - 1, S.s + along));
-    S.off = (S.off || 0) + stbd;
-    const q = _tfAlong(S.path, S.s);
-    S.k = q.k;
-    const a = S.path.pts[q.k], b = S.path.pts[Math.min(S.path.pts.length - 1, q.k + 1)];
-    const crs = rhumbCourse(a.lat, a.lon, b.lat, b.lon).course;
-    const m = Math.abs(S.off) > 0.5 ? _tfOff(q, crs + 90, S.off) : q;
-    S.lat = m.lat; S.lon = m.lon;
+    if (S.path && (S.st === 'go' || S.st === 'anchoring' || S.st === 'holding')) {
+        const along = dx * H.fx + dz * H.fz, stbd = -(dx * H.sx + dz * H.sz);
+        const s0 = S.s, off0 = S.off || 0;
+        S.s = Math.max(0, Math.min(S.path.total, S.s + along));
+        S.off = off0 + stbd;
+        let q = _tfAlong(S.path, S.s);
+        const crs = _tfSegCrs(S.path, q.k);
+        let m = Math.abs(S.off) > 0.5 ? _tfOff(q, crs + 90, S.off) : q;
+        // 横へ押されて浅い所・陸に乗り上げるなら、横へは動かさず前後へ
+        if (Math.abs(stbd) > 0.01 && !_tfBandOK(S, m, crs, S.d)) {
+            S.off = off0;
+            S.s = Math.max(0, Math.min(S.path.total, s0 + along + Math.abs(stbd) * (along >= 0 ? 1 : -1)));
+            q = _tfAlong(S.path, S.s);
+            m = Math.abs(S.off) > 0.5 ? _tfOff(q, _tfSegCrs(S.path, q.k) + 90, S.off) : q;
+            S.pushV = 0;
+        }
+        S.k = q.k;
+        S.lat = m.lat; S.lon = m.lon;
+        return;
+    }
+    if (S.st === 'anchored') {
+        const loc = _tfLocal(S, {});
+        if (!Number.isFinite(loc.x)) return;
+        const ll = worldUnitToLatLon(worldLocalToUnit(loc.x + dx, loc.z + dz));
+        if (_tfDepthAt(ll.lat, ll.lon) < S.d) return;
+        S.lat = ll.lat; S.lon = ll.lon;
+        if (S.anch) { S.anch = { lat: ll.lat, lon: ll.lon, d: S.anch.d }; }
+    }
 }
 function _tfCollide(dt) {
     const B = traffic.bump;
@@ -2351,8 +3193,9 @@ function _tfCollide(dt) {
     for (let i = 0; i < cand.length; i++) for (let j = i + 1; j < cand.length; j++) {
         const A = cand[i], C = cand[j];
         if (Math.abs(A.lat - C.lat) > 0.01 || _tfDist(A, C) > (A.L + C.L) / 2 + 10) continue;
-        // （航行中の船どうしだけ：停泊中の船の横を通る道すじは、もともと離してある）
-        if (_tfMassOf(A) === Infinity || _tfMassOf(C) === Infinity) continue;
+        // （どちらも動かない船（停泊・離着岸中）どうしは押し合わない：離着岸の場所は、ほかの船が空くのを待ってから使う）
+        if (_tfMassOf(A) === Infinity && _tfMassOf(C) === Infinity) continue;
+        if ((A.ghost && A.ghost.k === C.id && traffic.t < A.ghost.until) || (C.ghost && C.ghost.k === A.id && traffic.t < C.ghost.until)) continue;
         const HA = _tfHullOf(A), HC = _tfHullOf(C); if (!HA || !HC) continue;
         const c = _tfHullPen(HA, HC); if (!c) continue;
         _tfContact(HA, HC, c, A, C);
@@ -2389,7 +3232,7 @@ function _tfContact(A, Bh, c, SA, SB) {
         if (!inv) return;
         const dvx = sgn * Jx * inv, dvz = sgn * Jz * inv;
         const dF = dvx * H.fx + dvz * H.fz, dS = dvx * H.sx + dvz * H.sz;
-        if (S) { S.v = Math.max(0, (S.v || 0) + dF); S.pushV = (S.pushV || 0) - dS / 1.8; return; }
+        if (S) { if (S.st === 'go' || S.st === 'anchoring') S.v = Math.max(0, (S.v || 0) + dF); S.pushV = (S.pushV || 0) - dS / 1.8; return; }
         physics.speed = (physics.speed || 0) + dF / 0.514444;
         traffic.bump.vS += dS / 1.8;                       // 横は周りの水も一緒に動かす（付加質量）
         // 回頭：当たった所（船の中の前後 a・横 s）と力の向き
@@ -2401,7 +3244,7 @@ function _tfContact(A, Bh, c, SA, SB) {
     apply(A, SA, 1, iA); apply(Bh, SB, -1, iB);
     // ぶつかった（軽く触れただけでなければ）：他の船は機関を止める
     const hard = -vn;
-    if (hard > 0.3) { if (SA) SA.hitT = traffic.t; SB.hitT = traffic.t; }
+    if (hard > 0.6) { if (SA) SA.hitT = traffic.t; SB.hitT = traffic.t; }
     // 音・知らせ（強く当たったときだけ。同じ相手には 5 秒に 1 回）
     const key = (SA ? SA.id : 'P') + '-' + SB.id;
     traffic.hitMsg = traffic.hitMsg || {};

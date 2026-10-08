@@ -1176,6 +1176,32 @@ function _trGroundAttitude(hits, dt) {
     physics.groundPitch = (physics.groundPitch || 0) + (tp - (physics.groundPitch || 0)) * k;
     physics.groundRoll = (physics.groundRoll || 0) + (tr - (physics.groundRoll || 0)) * k;
 }
+// 船底を海底の上に乗せる：船体の点（船底の真ん中・舷の丸み）が海底より下に入っていれば、その分だけ船を持ち上げる
+//（描いている船の高さ physics.y から測る。縦・横の傾きは _trGroundAttitude。持ち上げると浮力が減るので、
+//  次のフレームでまた沈もうとして、海底に乗ったまま止まる。岸壁・陸（水面より上）は横から当たる所なので持ち上げない）
+function _trSeabedLift(off) {
+    physics.groundLift = 0;
+    if (typeof shipGroup === 'undefined' || !shipGroup || (window.sub && sub.applied > 0.5)) return;
+    const x = physics.cgWorldX || 0, z = physics.cgWorldZ || 0, r = (physics.heading || 0) * Math.PI / 180;
+    const fx = Math.sin(r), fz = Math.cos(r), sx = Math.cos(r), sz = -Math.sin(r);
+    const ox = x + fx * off.a + sx * off.s, oz = z + fz * off.a + sz * off.s;
+    shipGroup.updateMatrixWorld();
+    const M = shipGroup.matrixWorld.elements, scl = physics.scale || 1;
+    let lift = 0;
+    for (const p of _trHullPoints()) {
+        const px = ox + fx * p.a + sx * p.s, pz = oz + fz * p.a + sz * p.s;
+        const b = worldSeabedAt(px, pz);
+        if (b > -0.3) continue;
+        const keel = physics.y + M[1] * (p.s / scl) + M[9] * (p.a / scl) - p.d;
+        if (b - keel > lift) lift = b - keel;
+    }
+    lift = Math.min(lift, worldShipDraft() * 0.9);
+    if (!(lift > 0.01)) return;
+    physics.groundLift = lift;
+    physics.y += lift; shipGroup.position.y += lift;
+    if (physics.vy < 0) physics.vy = 0;
+    shipGroup.updateMatrixWorld();
+}
 function _trCheckGrounding(t, dt) {
     const hp = window.hullProfile;
     if (typeof shipGroup === 'undefined' || !shipGroup) return;
@@ -1241,6 +1267,7 @@ function _trCheckGrounding(t, dt) {
     }
     terrain.hullHits = hits.length;
     _trGroundAttitude(hits, dt);
+    _trSeabedLift(off);
     if (terrain.grounded && !wasGrounded && Math.abs(physics.speed || 0) > 0.6 && typeof audioWaveImpact === 'function') {
         audioWaveImpact(shipGroup.position.clone(), Math.min(2, 0.5 + Math.abs(physics.speed) / 6), true);
     }

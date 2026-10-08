@@ -246,6 +246,21 @@ function tugCall(stationKey) {
     // 持ち場の指定が無ければ、まだ誰も付いていない持ち場から（引ける金物を先に）
     const used = new Set(tugs.filter(t => t.state !== 'leaving').map(t => t.station));
     const pick = (stationKey && st.find(s => s.key === stationKey)) || st.find(s => s.fitting && !used.has(s.key)) || st.find(s => !used.has(s.key)) || st[0];
+    // 帰りかけのタグがまだ近く（2km 以内）にいれば、新しく呼ばずに、そのタグを呼び戻す
+    {
+        let back = null, bd = 2000;
+        for (const t of tugs) {
+            if (t.state !== 'leaving' || t.aground) continue;
+            const d = Math.hypot(t.pos.x - shipGroup.position.x, t.pos.z - shipGroup.position.z);
+            if (d < bd) { bd = d; back = t; }
+        }
+        if (back) {
+            Object.assign(back, { station: pick.key, action: 'standby', dir: 'side', power: 'half', state: 'coming', force: 0, arrivedAt: 0, engaged: false, lineOn: null, path: null, stallT: 0, bestDist: undefined, stuck: false });
+            _tugToot(back, 1);
+            renderTugPanel();
+            return back;
+        }
+    }
     const F = _shipFrame();
     const side = pick.side || (tugs.length % 2 ? -1 : 1);
     // 沖（水の上で、まわりも水の所）から来る

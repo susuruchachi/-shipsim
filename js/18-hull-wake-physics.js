@@ -610,6 +610,8 @@ function scanHullProfile() {
     // 排水量自動計算（estimateDisplacementTons）で使うため保存しておく
     hp.designWaterlineY = wlY;
     hp.keelY = keelY;
+    hp.deckY = minY + hullHeight;            // 船体本体の上（主甲板のあたり）。水面がこれより上なら、喫水線は甲板の上（04 の喫水線の輪郭を縮める）
+    hp.hullHeight = hullHeight;
 
     // ─── v19: 高さ方向インデックス付き断面プロファイル ───
     // 「静止喫水線での幅を1つ求め、そこからの深度比でテーパーさせる」という

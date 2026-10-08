@@ -747,7 +747,7 @@ function animateSmoke(t, dt) {
     globalSmokeMat.uniforms.sizeScale.value = THREE.MathUtils.clamp(physics.scale / 22.0, 0.18, 1.6);
     if (globalSmokeMat.uniforms.uResK && typeof particleResK === 'function') globalSmokeMat.uniforms.uResK.value = particleResK();   // 画質で大きさが変わらないように（03）
 
-    const solidOn = typeof shipSolidPushUp === 'function' && window.shipSolid && shipSolid.G;
+    const solidOn = typeof shipSolidPushOut === 'function' && window.shipSolid && shipSolid.G;
     // Update existing particles
     for(let i=0; i<perf.smokeCap; i++) {
         if (ageAttr.array[i] <= 1.0) {
@@ -762,9 +762,11 @@ function animateSmoke(t, dt) {
             posAttr.array[i*3]   += (smokeData[i].vel.x + wX + turbX) * dt;
             posAttr.array[i*3+1] += (smokeData[i].vel.y + spd * 1.7 + smokeData[i].rand * 1.1) * dt;
             posAttr.array[i*3+2] += (smokeData[i].vel.z + wZ + turbZ) * dt;
-            // 船体・上部構造・煙突の中に入ったら、上へ押し出す（60-ship-solid.js。煙が船を突き抜けて見えないように）
-            if (solidOn && shipSolidPushUp(posAttr.array[i*3], posAttr.array[i*3+1], posAttr.array[i*3+2], _smokePush)) {
+            // 船体・上部構造・煙突・マストの中に入ったら、いちばん近い外へ押し出す（60-ship-solid.js。煙が船を突き抜けて見えないように。
+            // マストなどの細い物は左右に分かれて流れる：押し出した横の向きへ少し流す）
+            if (solidOn && shipSolidPushOut(posAttr.array[i*3], posAttr.array[i*3+1], posAttr.array[i*3+2], _smokePush)) {
                 posAttr.array[i*3] = _smokePush.x; posAttr.array[i*3+1] = _smokePush.y; posAttr.array[i*3+2] = _smokePush.z;
+                if (_smokePush.nx || _smokePush.nz) { const vv = smokeData[i].vel, vn = vv.x * _smokePush.nx + vv.z * _smokePush.nz; if (vn < 0.6) { vv.x += (0.6 - vn) * _smokePush.nx; vv.z += (0.6 - vn) * _smokePush.nz; } }
             }
         }
     }

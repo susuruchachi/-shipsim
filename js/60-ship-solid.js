@@ -4,7 +4,7 @@
 //  船のモデルを読み込んだら、船の中の座標（shipGroup）で、船を細かい升目（船の大きさの 1/320 ほど）に
 //  分け、面が通る升目と、そのすき間の「外から入れない」升目（船体・部屋の中）を「中」とする。
 //  ・排煙（12-bloom-and-deck-lighting-fx.js）・タグの煙や汽笛の湯気（52-puffs.js）：中に入った粒は、
-//    上へ押し出す（船の上を越えて流れる）
+//    いちばん近い外へ押し出す（マスト・煙突は左右に分かれて、甲板室の屋根は上を越えて流れる：shipSolidPushOut）
 //  ・落ちてくるしぶき：中に入ったら消す
 //  面の升目を付けるのは重いので、少しずつ（1 フレームに 6 万面ほど）進める。
 
@@ -138,4 +138,40 @@ function shipSolidPushUp(x, y, z, out) {
     out.x = _ssUp.x; out.y = _ssUp.y; out.z = _ssUp.z;
     return true;
 }
-window.shipSolidAt = shipSolidAt; window.shipSolidPushUp = shipSolidPushUp;
+// 船の中なら、いちばん近い外へ押し出す：左右（船の横の向き）を先に見て、上へ出る方がずっと近いときだけ上へ
+//（上へだけ押し出すと、マスト・煙突に当たった煙がそれに沿って打ち上げられて見えた。マストは細いので左右に分かれて流れる。
+//  甲板室の屋根をかすめる煙・甲板に降りた煙は、上へ出る方が近いので上へ）
+// out：押し出したワールドの点（x, y, z）と、押し出した横の向き（nx, nz：ワールドの水平の単位。上へなら 0）
+const _ssSide = new THREE.Vector3();
+function shipSolidPushOut(x, y, z, out) {
+    if (!shipSolidAt(x, y, z)) return false;
+    const G = shipSolid.G, D = G.data, nx = G.nx, ny = G.ny, nz = G.nz;
+    const i = Math.floor((_ssV.x - G.lo.x) / G.v), j = Math.floor((_ssV.y - G.lo.y) / G.v), k = Math.floor((_ssV.z - G.lo.z) / G.v);
+    const lim = Math.max(nx, nz);
+    // 横（船の中の x：左右）・前後（z）・上（y）へ、外に出るまでの升目の数
+    const run = (di, dj, dk) => {
+        let a = i, b = j, c = k, n = 0;
+        while (n < lim) {
+            a += di; b += dj; c += dk; n++;
+            if (a < 0 || b < 0 || c < 0 || a >= nx || b >= ny || c >= nz) return n;
+            if (D[(c * ny + b) * nx + a] !== 1) return n;
+        }
+        return Infinity;
+    };
+    const cand = [[run(1, 0, 0), 1, 0, 0], [run(-1, 0, 0), -1, 0, 0], [run(0, 0, 1), 0, 0, 1], [run(0, 0, -1), 0, 0, -1]];
+    // 左右がほぼ同じなら、その粒の位置（升目の端からの割合）で分ける（煙が左右に割れて流れる）
+    const fx = (_ssV.x - G.lo.x) / G.v - i;
+    cand.sort((A, B) => (A[0] - B[0]) || ((A[1] !== 0 && B[1] !== 0) ? (fx < 0.5 ? A[1] - B[1] : B[1] - A[1]) : 0));
+    const best = cand[0], up = run(0, 1, 0);
+    if (up * 2 < best[0] || !Number.isFinite(best[0])) {
+        _ssUp.set(_ssV.x, G.lo.y + (j + up + 0.6) * G.v, _ssV.z).applyMatrix4(shipGroup.matrixWorld);
+        out.x = _ssUp.x; out.y = _ssUp.y; out.z = _ssUp.z; out.nx = 0; out.nz = 0;
+        return true;
+    }
+    const n = best[0] + 0.6;
+    _ssUp.set(_ssV.x + best[1] * n * G.v, _ssV.y, _ssV.z + best[3] * n * G.v).applyMatrix4(shipGroup.matrixWorld);
+    _ssSide.set(best[1], 0, best[3]).transformDirection(shipGroup.matrixWorld); _ssSide.y = 0; _ssSide.normalize();
+    out.x = _ssUp.x; out.y = _ssUp.y; out.z = _ssUp.z; out.nx = _ssSide.x; out.nz = _ssSide.z;
+    return true;
+}
+window.shipSolidAt = shipSolidAt; window.shipSolidPushUp = shipSolidPushUp; window.shipSolidPushOut = shipSolidPushOut;
