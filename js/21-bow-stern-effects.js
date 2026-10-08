@@ -151,9 +151,19 @@ function computeBowSubmergedVolume(cgWorldX, cgWorldZ, rotY, pitchAngle, shipY, 
 //  “超過分” に対して働くべきものなので、drag計算にはこちらの基準値を使い、
 //  computeBowForces側で excess = max(0, volBow - volBowDesign) を取って使う。
 // ─────────────────────────────────────────
+// （設計喫水での値なので、船の形・喫水・大きさが変わらない限り同じ。物理の刻みごとに計算し直していた）
+const _bowDV = { key: '', v: 0 };
 function computeBowDesignVolume(physScale, len) {
     const hp = window.hullProfile;
     if (!hp || !hp.ready || hp.slices.length < 2) return 0;
+    const key = physScale + '|' + len + '|' + physics.waterlineOffsetY + '|' + physics.draftOffset + '|' + hp.designWaterlineY + '|' + hp.slices.length;
+    if (_bowDV.key === key && _bowDV.slices === hp.slices) return _bowDV.v;
+    _bowDV.key = key; _bowDV.slices = hp.slices;
+    _bowDV.v = _computeBowDesignVolume(physScale, len);
+    return _bowDV.v;
+}
+function _computeBowDesignVolume(physScale, len) {
+    const hp = window.hullProfile;
 
     const slices = hp.slices;
     const n = slices.length;
@@ -321,15 +331,18 @@ function _lerpEfficiencyCurve(depthRatio) {
 //  propulsors[] 全基の没水深さから平均推力効率(0〜1)を算出する。
 //  1基も定義されていない場合は 1.0（従来通りペナルティ無し）を返す。
 // ─────────────────────────────────────────
+const _propEffV = new THREE.Vector3();
 function getPropellerEfficiency(t, physScale) {
     if (typeof propulsors === 'undefined' || !propulsors || propulsors.length === 0 || !shipGroup) {
         return { efficiency: 1.0, racingIntensity: 0.0 };
     }
-    shipGroup.updateMatrixWorld(true);
+    // 船そのものの行列だけ（以前は物理の刻みのたびに、船の部品すべての行列を強制的に計算し直していた）
+    shipGroup.updateWorldMatrix(false, false);
 
     let sumEff = 0, count = 0;
+    const worldPos = _propEffV;
     for (const p of propulsors) {
-        const worldPos = new THREE.Vector3(p.x, p.y, p.z).applyMatrix4(shipGroup.matrixWorld);
+        worldPos.set(p.x, p.y, p.z).applyMatrix4(shipGroup.matrixWorld);
         const waveY = getWaveHeight(worldPos.x, worldPos.z, t, true);
         const depth = waveY - worldPos.y; // 正=没水、負=露出（プロペラが波面より上）
 
@@ -388,9 +401,19 @@ function computeSternSubmergedVolume(cgWorldX, cgWorldZ, rotY, pitchAngle, shipY
 //  computeBowDesignVolume()と同じ方式で、船尾域(alongNorm <= STERN_ALONG_THRESHOLD)の
 //  設計喫水における没水体積[m³]を返す（船尾スラミングの無次元化基準用）。
 // ─────────────────────────────────────────
+// （設計喫水での値なので、船の形・喫水・大きさが変わらない限り同じ。物理の刻みごとに計算し直していた）
+const _sternDV = { key: '', v: 0 };
 function computeSternDesignVolume(physScale, len) {
     const hp = window.hullProfile;
     if (!hp || !hp.ready || hp.slices.length < 2) return 0;
+    const key = physScale + '|' + len + '|' + physics.waterlineOffsetY + '|' + physics.draftOffset + '|' + hp.designWaterlineY + '|' + hp.slices.length;
+    if (_sternDV.key === key && _sternDV.slices === hp.slices) return _sternDV.v;
+    _sternDV.key = key; _sternDV.slices = hp.slices;
+    _sternDV.v = _computeSternDesignVolume(physScale, len);
+    return _sternDV.v;
+}
+function _computeSternDesignVolume(physScale, len) {
+    const hp = window.hullProfile;
 
     const slices = hp.slices;
     const n = slices.length;

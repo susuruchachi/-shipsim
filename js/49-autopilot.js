@@ -516,11 +516,23 @@ function apMargins(draftOpt) {
 }
 window.apMargins = apMargins;
 // 点検用：その点の深さ（港の航路・泊地は掘った深さ）
+// 港を緯度 0.3° ごとの箱に分けておく（深さを測るたびに全部の港を見ていた。他の船の航路の確かめで何千回も呼ばれる）
+const _apPortBins = { ports: null, bins: null };
+function _apPortsNear(lat) {
+    const ports = worldBuildPorts();
+    if (_apPortBins.ports !== ports) {
+        const bins = new Map();
+        for (const P of ports) { const k = Math.floor(P.lat / 0.3); if (!bins.has(k)) bins.set(k, []); bins.get(k).push(P); }
+        _apPortBins.ports = ports; _apPortBins.bins = bins;
+    }
+    const k = Math.floor(lat / 0.3), B = _apPortBins.bins;
+    return [B.get(k - 1), B.get(k), B.get(k + 1)];
+}
 function apDepthAt(lat, lon) {
     const u = worldLatLonToUnit(lat, lon);
     const nat = -worldHeightAt(u.x, u.y, u.z, 16);
     let d = nat;
-    for (const P of worldBuildPorts()) {
+    for (const bin of _apPortsNear(lat)) if (bin) for (const P of bin) {
         if (Math.abs(P.lat - lat) > 0.3) continue;
         const T = PORT_TYPES[P.type], br = P.seaBearing * _apRad, sx = Math.sin(br), sz = Math.cos(br);
         const dE = _apDLon(P.lon, lon) * _apRad * WORLD_R * Math.cos(P.lat * _apRad), dN = (lat - P.lat) * _apRad * WORLD_R;

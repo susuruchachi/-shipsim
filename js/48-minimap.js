@@ -92,7 +92,10 @@ function _mmDraw() {
     const el = document.getElementById('minimap');
     // TELEMETRY のすぐ下へ。下の舵輪などとぶつかる（画面が低い）ときは TELEMETRY の左へ
     const tp = document.getElementById('telemetry-panel');
-    if (tp) {
+    //（並べ直しは 0.5 秒ごと：画面の部品の位置を測ると、ブラウザが配置を計算し直すので、地図を描くたびにしていると重い）
+    const nowL = performance.now();
+    if (tp && nowL - (_mm.layT || 0) > 500) {
+        _mm.layT = nowL;
         const r = tp.getBoundingClientRect(), mh = el.offsetHeight || 150;
         const wh = document.getElementById('wheel-widget');
         const floor = (wh && wh.offsetParent) ? wh.getBoundingClientRect().top : window.innerHeight;

@@ -162,6 +162,22 @@ function _trWorker() {
 // 海は海底も網にする（この深さ[m]まで。波の谷や水中から海底が見え、座礁した船が海底に載って見える。
 // 潜水艦で潜っても海底が見えるように 100m まで）
 const TR_SEABED = -100;
+// これより深いマス（4 隅とも）は、カメラが水の上にあるときは描かない（海面は不透明で見えない）
+const TR_DEEP = -12;
+// 網を分ける区画の数（1 辺）。画面に入らない区画は描かない
+const TR_CHUNKS = 4;
+let _trSeeDeep = false;
+// カメラが水の中（潜水艦の視点・波の谷の下など）にあるときだけ、深い海底まで描く
+function _trDeepRange() {
+    const wy = Number.isFinite(window._physicsWaveY) ? window._physicsWaveY : 0;
+    const see = typeof camera !== 'undefined' && camera && camera.position.y < wy + 3;
+    if (see === _trSeeDeep) return;
+    _trSeeDeep = see;
+    for (const m of [terrain.near, terrain.far, terrain.fine]) {
+        if (!m) continue;
+        for (const c of m.children) { const g = c.geometry; if (g && g.userData.nAll) g.setDrawRange(0, see ? g.userData.nAll : g.userData.nShallow); }
+    }
+}
 // ── 地面の材質：海底の網より深い所は描かない ──
 let _trMat = null;
 function _trMaterial() {
@@ -446,7 +462,7 @@ function _trQuayWalls(lines, H, n, step, cx, cz, detail) {
 }
 function _trBuildMesh(H, n, half, cx, cz, lowerInside, opts) {
     const geo = new THREE.BufferGeometry();
-    const P = new Float32Array(n * n * 3), Cc = new Float32Array(n * n * 3);
+    const P = new Float32Array(n * n * 3), Cc = new Float32Array(n * n * 3), Hr = new Float32Array(n * n);
     const step = half * 2 / (n - 1);
     for (let j = 0; j < n; j++) {
         for (let i = 0; i < n; i++) {
@@ -458,7 +474,7 @@ function _trBuildMesh(H, n, half, cx, cz, lowerInside, opts) {
                 && (!lowerInside.waterOnly || _trNearWater(H, n, i, j, 1))) h = Math.min(h - 25, -30);   // 細かい網の海底より下へ
             // 惑星の丸み：中心から離れるほど下がる
             const d2 = (x - cx) * (x - cx) + (z - cz) * (z - cz);
-            P[k * 3] = x; P[k * 3 + 1] = h - d2 / (2 * WORLD_R); P[k * 3 + 2] = z;
+            P[k * 3] = x; P[k * 3 + 1] = h - d2 / (2 * WORLD_R); P[k * 3 + 2] = z; Hr[k] = h;
             const hx = H[j * n + Math.min(n - 1, i + 1)] - H[j * n + Math.max(0, i - 1)];
             const hz = H[Math.min(n - 1, j + 1) * n + i] - H[Math.max(0, j - 1) * n + i];
             _trColor(h, Math.hypot(hx, hz) / (2 * step), x, z, Cc, k * 3);
@@ -483,28 +499,66 @@ function _trBuildMesh(H, n, half, cx, cz, lowerInside, opts) {
             for (let b = -r; b <= r; b++) { const jj = j + b; if (jj < 0 || jj >= n) continue; for (let a = -r; a <= r; a++) { const ii = i + a; if (ii >= 0 && ii < n) nearW[jj * n + ii] = 1; } }
         }
     }
-    const idx = [];
-    for (let j = 0; j < n - 1; j++) {
-        for (let i = 0; i < n - 1; i++) {
+    // 網は TR_CHUNKS × TR_CHUNKS の区画に分け、区画ごとに別の三角形の並び（頂点は共有）にする。
+    // 船を中心にした 1 枚の網だと、カメラの後ろ・画面の外の部分まで毎フレーム全部描いていた。区画に分ければ、
+    // three.js が画面に入らない区画を描かずに済ませる（区画ごとの外接球で判定）。
+    // 区画の中は、陸と浅い所のマスを先に、深い海底（4 隅とも TR_DEEP より深いマス）を後ろに並べる。海面は不透明なので、
+    // カメラが水の上にあるときは深い海底は見えない：描く範囲（drawRange）を浅い所までにする（_trDeepRange）。
+    // 港のまわりでは地形の三角形の半分ほどが深い海底で、毎フレーム数十万の三角形を無駄に描いていた
+    const C = TR_CHUNKS, cells = n - 1, per = Math.ceil(cells / C);
+    const lists = [];
+    for (let q = 0; q < C * C; q++) lists.push({ sh: [], dp: [] });
+    let total = 0;
+    for (let j = 0; j < cells; j++) {
+        for (let i = 0; i < cells; i++) {
             const a = j * n + i, b = a + 1, c = a + n, d = c + 1;
-            if (Math.max(P[a * 3 + 1], P[b * 3 + 1], P[c * 3 + 1], P[d * 3 + 1]) < TR_SEABED) continue;
+            const top = Math.max(P[a * 3 + 1], P[b * 3 + 1], P[c * 3 + 1], P[d * 3 + 1]);
+            if (top < TR_SEABED) continue;
             if (nearW && !(nearW[a] || nearW[b] || nearW[c] || nearW[d])) continue;
-            idx.push(a, c, b, b, c, d);
+            const L = lists[Math.min(C - 1, (j / per) | 0) * C + Math.min(C - 1, (i / per) | 0)];
+            // （深さは丸みで下げる前の高さで見る。遠くは丸みで何十 m も下がっているが、陸は陸）
+            (Math.max(Hr[a], Hr[b], Hr[c], Hr[d]) < TR_DEEP ? L.dp : L.sh).push(a, c, b, b, c, d);
+            total += 6;
         }
     }
-    if (!idx.length) return null;
-    geo.setAttribute('position', new THREE.BufferAttribute(P, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(Cc, 3));
-    geo.setIndex(n * n > 65535 ? new THREE.Uint32BufferAttribute(idx, 1) : new THREE.Uint16BufferAttribute(idx, 1));
-    geo.computeVertexNormals();
-    geo.computeBoundingSphere();
-    const m = new THREE.Mesh(geo, opts && opts.coastOnly ? _trMaterialFine() : opts && opts.far ? _trMaterialFar() : _trMaterial());
+    if (!total) return null;
+    // 法線は網全体で一度だけ（区画の境目で陰がずれないように）
+    const posA = new THREE.BufferAttribute(P, 3), colA = new THREE.BufferAttribute(Cc, 3);
+    {
+        const all = new (n * n > 65535 ? Uint32Array : Uint16Array)(total); let o = 0;
+        for (const L of lists) { all.set(L.sh, o); o += L.sh.length; all.set(L.dp, o); o += L.dp.length; }
+        geo.setAttribute('position', posA); geo.setIndex(new THREE.BufferAttribute(all, 1)); geo.computeVertexNormals();
+    }
+    const nrmA = geo.getAttribute('normal');
+    geo.dispose();
+    const mat = opts && opts.coastOnly ? _trMaterialFine() : opts && opts.far ? _trMaterialFar() : _trMaterial();
+    const m = new THREE.Group();
+    m.name = 'terrain';
+    for (let q = 0; q < C * C; q++) {
+        const L = lists[q], cnt = L.sh.length + L.dp.length;
+        if (!cnt) continue;
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', posA); g.setAttribute('color', colA); g.setAttribute('normal', nrmA);
+        const ix = new (n * n > 65535 ? Uint32Array : Uint16Array)(cnt); ix.set(L.sh, 0); ix.set(L.dp, L.sh.length);
+        g.setIndex(new THREE.BufferAttribute(ix, 1));
+        // 外接球は、この区画の点だけから（共有の頂点全体から測ると、網全体の大きさになって画面外でも描かれる）
+        let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+        for (let k = 0; k < cnt; k++) {
+            const v = ix[k] * 3, x = P[v], y = P[v + 1], z = P[v + 2];
+            if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; if (z < z0) z0 = z; if (z > z1) z1 = z;
+        }
+        g.boundingBox = new THREE.Box3(new THREE.Vector3(x0, y0, z0), new THREE.Vector3(x1, y1, z1));
+        g.boundingSphere = new THREE.Sphere(new THREE.Vector3((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2), 0.5 * Math.hypot(x1 - x0, y1 - y0, z1 - z0));
+        g.userData.nShallow = L.sh.length; g.userData.nAll = cnt;
+        g.setDrawRange(0, _trSeeDeep ? cnt : L.sh.length);
+        const cm = new THREE.Mesh(g, mat);
+        cm.receiveShadow = true; cm.castShadow = false;
+        cm.userData.noLightBake = true; cm.userData.noBloom = true; cm.userData.terrainChunk = true;
+        m.add(cm);
+    }
     // 岸壁・桟橋の縁（細かい網だけ）
-    if (coastLines && opts.quayWalls) { const qw = _trQuayWalls(coastLines, H, n, step, cx, cz, opts.detail); if (qw) m.add(qw); }
-    m.receiveShadow = true;
-    m.castShadow = false;
+    if (coastLines && opts.quayWalls) { const qw = _trQuayWalls(coastLines, H, n, step, cx, cz, opts.detail); if (qw) { qw.userData.noBloom = true; m.add(qw); } }
     m.userData.noLightBake = true; m.userData.noBloom = true;      // 地面は光らない（ブルームに入れない）
-    if (m.children[0]) m.children[0].userData.noBloom = true;
     if (typeof bloomTargetsDirty === 'function') bloomTargetsDirty();
     return m;
 }
@@ -512,7 +566,7 @@ function _trBuildMesh(H, n, half, cx, cz, lowerInside, opts) {
 function _trDispose(m) {
     if (!m) return;
     if (m.parent) m.parent.remove(m);
-    m.geometry.dispose();
+    if (m.geometry) m.geometry.dispose();
     for (const c of m.children) if (c.geometry) c.geometry.dispose();
 }
 
@@ -1388,6 +1442,7 @@ function updateWorldTerrain(t, dt) {
         return;
     }
     _trFarWaterUpdate();
+    _trDeepRange();
     if (!world.ports) worldBuildPorts();
     // 前回の続き：向きを戻す
     if (world._resumeHeading !== undefined && t > 0.5) { physics.heading = world._resumeHeading; world._resumeHeading = undefined; }

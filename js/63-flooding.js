@@ -362,12 +362,12 @@ function _flTotals(e, sc) {
 // 横傾斜のつり合い：船を起こすモーメント Δ·g·GZ(φ)（GZ ＝ sinφ·(GM ＋ BM·tan²φ／2)：舷側が立った船）と、
 // 傾けるモーメント（水の重心の偏り ＋ 自由水面の水が傾いた側へ寄る分。寄れる量には上限）が等しくなる角度 φ（左舷へ＋）。
 // まっすぐで復原力が足りなければ、傾いた方へ（ロール角）。0.75rad まで起こせなければ転覆
-//（甲板の縁が水に入る角度 phD から先は、舷側が立った船の式は使えない：起こす力は、そこから 0.6rad 先で無くなるまで落ちていく）
+//（甲板の縁が水に入る角度 phD から先は、舷側が立った船の式は使えない：起こす力は、そこから 1rad 先で無くなるまで落ちていく）
 function _flHeel(Mh, disp, GM, BM, fs, phD) {
     const HM = (ph) => { const t = Math.abs(Math.tan(ph)), sg = ph < 0 ? -1 : 1; let v = Mh * Math.cos(ph); for (const f of fs) v += sg * FL_RHO * FL_G * Math.min(f.i * t, f.cap); return v; };
     const ws = (ph) => { const t = Math.tan(ph); return disp * FL_G * Math.sin(ph) * (GM + Math.max(0, BM) * t * t / 2); };
     const pd = Number.isFinite(phD) ? Math.max(0.05, phD) : 9;
-    const RM = (ph) => Math.abs(ph) <= pd ? ws(ph) : ws(Math.sign(ph) * pd) * Math.max(0, 1 - (Math.abs(ph) - pd) / 0.6);
+    const RM = (ph) => Math.abs(ph) <= pd ? ws(ph) : ws(Math.sign(ph) * pd) * Math.max(0, 1 - (Math.abs(ph) - pd) / 1.0);
     const s = Math.abs(Mh) > disp * FL_G * 1e-5 ? Math.sign(Mh) : (physics.roll > 0 ? -1 : 1);
     for (let k = 1; k <= 75; k++) {
         const ph = s * k * 0.01;
@@ -387,8 +387,9 @@ function _flSinkCheck(e, t) {
         _flMsg('浸水が予備浮力を超えました。船は沈みます。');
     }
     if (flood.sunk) return;
-    // 傾いた側へ寄った水を起こせない（つり合う角度が無い）まま 20 秒：転覆
-    if (flood.noEqT > 20) {
+    // 傾いた側へ寄った水を起こせない（つり合う角度が無い）まま 60 秒：転覆
+    //（区画に入りかけの水が寄って一時的に起こせなくなっても、区画が満ちれば戻ることが多いので、少し待つ）
+    if (flood.noEqT > 60) {
         flood.sunk = true; flood.capsized = Math.sign(physics.roll) || Math.sign(flood.rollBias) || 1;
         _flMsg('傾きを起こせず、船は転覆しました。');
         if (typeof setTelegraphOrder === 'function') try { setTelegraphOrder(0); } catch (err) { /* */ }

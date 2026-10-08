@@ -667,7 +667,8 @@ function animate() {
     waterMesh.position.x = Math.round(physics.cgWorldX);
     waterMesh.position.z = Math.round(physics.cgWorldZ);
 
-    updateUI();
+    // 右上の数値は 1 秒に 10 回で十分（毎フレームだと、揺れで横傾斜・縦傾斜の数字が毎回変わって書き換えが続く）
+    if (!(_frameNow - (updateUI._t || 0) < 100)) { updateUI._t = _frameNow; updateUI(); }
 
     // 水中表現。updateDayNightCycle()が決めた「水上での正しい霧・背景・光量」を
     // 入力として、カメラが水没していればその上から水中ぶんを掛ける。
@@ -1161,40 +1162,42 @@ function updateSky(t) {
     skyMesh.material.uniforms.skyExposure.value = 0.75 * lightSettings.skyMult;
 }
 
+// 表示の文字は、変わったときだけ書き換える（毎フレーム十数か所を書き換えると、そのたびにブラウザが配置を計算し直す）
+function _uiTxt(el, s) { if (el && el._txt !== s) { el._txt = s; el.innerText = s; } }
 function updateUI() {
     const labels = {
         '-3': 'FULL ASTERN (全速後進)', '-2': 'HALF ASTERN (半速後進)', '-1': 'SLOW ASTERN (微速後進)',
         '0': 'STOP (停止)', '1': 'SLOW (微速前進)', '2': 'HALF (半速前進)', '3': 'FULL (全速前進)'
     };
     const _sp = physics.telegraphSpecial && window.TG_SPECIAL ? TG_SPECIAL[physics.telegraphSpecial] : null;
-    $('ui-telegraph').innerText = `Telegraph: ${_sp ? `${_sp.en} (${_sp.jp})` : labels[physics.telegraphState]}`;
+    _uiTxt($('ui-telegraph'), `Telegraph: ${_sp ? `${_sp.en} (${_sp.jp})` : labels[physics.telegraphState]}`);
     const _eng = $('ui-engine');
     if (_eng) {
         const r = physics.propRpm || 0;
         const pct = Math.round(Math.abs(r) * 100);
-        _eng.innerText = (Math.abs(r) < 0.005)
+        _uiTxt(_eng, (Math.abs(r) < 0.005)
             ? `Screw    : STOP${(typeof _engineReverseHold !== 'undefined' && _engineReverseHold > 0) ? ' (逆転操作中)' : ''}`
-            : `Screw    : ${r > 0 ? 'AHEAD' : 'ASTERN'} ${pct}%`;
+            : `Screw    : ${r > 0 ? 'AHEAD' : 'ASTERN'} ${pct}%`);
     }
-    $('ui-speed').innerText = `Speed    : ${Math.abs(physics.speed).toFixed(1)} kn`;
+    _uiTxt($('ui-speed'), `Speed    : ${Math.abs(physics.speed).toFixed(1)} kn`);
 
     let rudderStr = '0.0°';
     if (physics.rudderAngle < -2) rudderStr = '< '.repeat(Math.floor(Math.abs(physics.rudderAngle) / 5)) + physics.rudderAngle.toFixed(1) + '°';
     else if (physics.rudderAngle > 2) rudderStr = physics.rudderAngle.toFixed(1) + '°' + ' >'.repeat(Math.floor(Math.abs(physics.rudderAngle) / 5));
-    $('ui-rudder').innerText = `Rudder   : ${rudderStr}`;
+    _uiTxt($('ui-rudder'), `Rudder   : ${rudderStr}`);
 
     // 羅針盤の方位（右に回ると増える）。physics.heading は上から見て左回りに増えるので逆にする
     let deg = Math.floor((360 - physics.heading % 360) % 360); if (deg < 0) deg += 360; if (deg >= 360) deg -= 360;
     // 世界を航海するモード：その場所での真方位（49-autopilot.js）
     if (window.world && world.mode === 'world' && typeof worldTrueCompass === 'function') deg = Math.floor(worldTrueCompass()) % 360;
-    $('ui-heading').innerText = `Heading  : ${deg}°`;
+    _uiTxt($('ui-heading'), `Heading  : ${deg}°`);
 
     const gameHours = Math.floor(physics.gameTime / (physics.dayDuration / 24)) % 24;
     const gameMinutes = Math.floor((physics.gameTime % (physics.dayDuration / 24)) / (physics.dayDuration / 24 / 60));
-    $('ui-time').innerText = `Time     : ${gameHours.toString().padStart(2, '0')}:${gameMinutes.toString().padStart(2, '0')}`;
+    _uiTxt($('ui-time'), `Time     : ${gameHours.toString().padStart(2, '0')}:${gameMinutes.toString().padStart(2, '0')}`);
 
-    $('ui-roll').innerText = `Roll     : ${(physics.roll * 180 / Math.PI).toFixed(1)}°`;
-    $('ui-pitch').innerText = `Pitch    : ${(physics.pitch * 180 / Math.PI).toFixed(1)}°`;
+    _uiTxt($('ui-roll'), `Roll     : ${(physics.roll * 180 / Math.PI).toFixed(1)}°`);
+    _uiTxt($('ui-pitch'), `Pitch    : ${(physics.pitch * 180 / Math.PI).toFixed(1)}°`);
 
     // 天気・風・位置（右上の TELEMETRY の下の段）
     const _w = window.weather;
@@ -1209,38 +1212,38 @@ function updateUI() {
             if ((_w.fog || 0) > 0.3) extra.push('霧');
             if (extra.length) lab += '（' + extra.join('・') + '）';
         } else lab = '固定（天候オフ）';
-        _wx.innerText = `Weather  : ${lab}`;
+        _uiTxt(_wx, `Weather  : ${lab}`);
     }
     const _wd = $('ui-wind');
     if (_wd) {
         const dir = (((Math.round(physics.windDir || 0)) % 360) + 360) % 360;
         const pts = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
         const ms = Math.max(0, physics.windSpeed || 0);
-        _wd.innerText = `Wind     : ${dir}° ${pts[Math.round(dir / 22.5) % 16]}  ${ms.toFixed(1)} m/s (${(ms * 1.9438).toFixed(0)} kn)`;
+        _uiTxt(_wd, `Wind     : ${dir}° ${pts[Math.round(dir / 22.5) % 16]}  ${ms.toFixed(1)} m/s (${(ms * 1.9438).toFixed(0)} kn)`);
     }
     const _ps = $('ui-pos'), _pp = $('ui-port');
     if (_ps) {
         if (window.world && world.mode === 'world' && typeof worldShipLatLon === 'function') {
             // 世界を航海するモード：緯度・経度と、いちばん近い港
             const ll = worldShipLatLon();
-            _ps.innerText = `Position : ${worldFmtLatLon(ll.lat, ll.lon)}`;
+            _uiTxt(_ps, `Position : ${worldFmtLatLon(ll.lat, ll.lon)}`);
             if (_pp) {
                 if (!updateUI._np || performance.now() - updateUI._npT > 2000) { updateUI._np = worldNearestPort(ll.lat, ll.lon); updateUI._npT = performance.now(); }
                 const np = updateUI._np, T = window.terrain;
                 const depth = (T && T.depth != null) ? `  水深 ${Math.max(0, T.depth).toFixed(0)} m` : '';
-                _pp.style.display = '';
+                if (_pp.style.display) _pp.style.display = '';
                 // キールの下の余裕が 5m を切ったら黄色で知らせる
                 const ukc = (T && T.depth != null && typeof worldShipDraft === 'function') ? T.depth - worldShipDraft() : 99;
                 const shallow = !(T && T.grounded) && (ukc < 5 || (T && (T._bowWarn || T._sternWarn)));
-                _pp.style.color = (T && T.grounded) ? '#ff8a73' : shallow ? '#ffd35a' : '#c9f0ff';
-                _pp.innerText = (T && T.grounded) ? `⚠ 座礁しています${depth}` : shallow ? `⚠ 浅い！${depth}（キール下 ${Math.max(0, ukc).toFixed(1)} m）` : `Port     : ${np ? np.port.name + ' ' + (np.dist / 1852).toFixed(1) + ' NM' : '—'}${depth}`;
+                { const c = (T && T.grounded) ? '#ff8a73' : shallow ? '#ffd35a' : '#c9f0ff'; if (_pp._col !== c) { _pp._col = c; _pp.style.color = c; } }
+                _uiTxt(_pp, (T && T.grounded) ? `⚠ 座礁しています${depth}` : shallow ? `⚠ 浅い！${depth}（キール下 ${Math.max(0, ukc).toFixed(1)} m）` : `Port     : ${np ? np.port.name + ' ' + (np.dist / 1852).toFixed(1) + ' NM' : '—'}${depth}`);
             }
         } else {
             // 海だけのモード：出発点からの位置[m]
             const x = physics.cgWorldX || 0, z = physics.cgWorldZ || 0;
             const nm = Math.hypot(x, z) / 1852;
-            _ps.innerText = `Position : X ${x.toFixed(0)}  Z ${z.toFixed(0)} m (${nm.toFixed(2)} NM)`;
-            if (_pp) _pp.style.display = 'none';
+            _uiTxt(_ps, `Position : X ${x.toFixed(0)}  Z ${z.toFixed(0)} m (${nm.toFixed(2)} NM)`);
+            if (_pp && _pp.style.display !== 'none') _pp.style.display = 'none';
         }
     }
 }

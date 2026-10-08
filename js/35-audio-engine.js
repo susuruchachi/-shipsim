@@ -20,6 +20,29 @@
 //  最初のタップ／キー入力で音の仕組みを起動する。消音スイッチがONだと
 //  鳴らないことがある。
 
+// 同じ目標の音量・音の高さを毎フレーム送り直さない：機関・環境音・汽笛の位置の効果などで、毎フレーム数十回
+// setTargetAtTime を呼んでいた（そのたびに音の仕組みの中に予定が積まれる）。前に送った目標とほぼ同じ（0.2% 以内）で、
+// 0.5 秒以内なら送らない。ほかの指示（すぐ値を変える・ランプ・予定の取り消し）が入ったら、次は必ず送る
+(function () {
+    if (typeof AudioParam === 'undefined' || AudioParam.prototype._dedupe) return;
+    const P = AudioParam.prototype, orig = P.setTargetAtTime;
+    P._dedupe = true;
+    P.setTargetAtTime = function (v, t, tc) {
+        const last = this._lastTgt;
+        if (last !== undefined && tc === this._lastTc && t - this._lastTgtT < 0.5 && t >= this._lastTgtT
+            && Math.abs(v - last) <= Math.abs(last) * 0.002 + 1e-6) return this;
+        this._lastTgt = v; this._lastTgtT = t; this._lastTc = tc;
+        return orig.call(this, v, t, tc);
+    };
+    for (const k of ['setValueAtTime', 'linearRampToValueAtTime', 'exponentialRampToValueAtTime', 'cancelScheduledValues', 'setValueCurveAtTime', 'cancelAndHoldAtTime']) {
+        const f = P[k]; if (typeof f !== 'function') continue;
+        P[k] = function () { this._lastTgt = undefined; return f.apply(this, arguments); };
+    }
+    // 値を直接書いたときも
+    const d = Object.getOwnPropertyDescriptor(P, 'value');
+    if (d && d.set && d.configurable) Object.defineProperty(P, 'value', { get: d.get, set(v) { this._lastTgt = undefined; d.set.call(this, v); }, configurable: true, enumerable: d.enumerable });
+})();
+
 const audio = {
     ctx: null,
     master: null, comp: null, muffle: null,

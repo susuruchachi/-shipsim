@@ -1940,13 +1940,27 @@ function _hullOriginWorld(cgWX, cgWZ, rotRad, physScale) {
 // hp.bowTipWidth、hp.sternTipAlongNorm/hp.sternTipWidth)を持っているので、
 // 最後の通常スライスからそのタイポイントへ向けて線形に減衰させ、
 // タイポイントより外側は0を返す。
+// 実測形状での設計喫水の半幅は、船の形が変わらない限り同じなので、前後の位置ごとの表にして引く
+//（泡の粒子・引き波の履歴ごとに毎回、断面の探索をしていて、早送りでは 1 フレームの 1 割近くを使っていた）
+const _HW_TAB_N = 2048, _HW_TAB_LO = -1.15, _HW_TAB_HI = 1.15;
+const _hwTab = { shape: null, halfLen: 0, v: null };
 function _hullHalfWidthAtNorm(alongNorm) {
     const hp = window.hullProfile;
     // v166: 実測形状(hp.shape)があればそちらを使う。船首尾の先細りが実際の
     // メッシュ断面そのものになるので、下のタイポイント外挿（実測できなかった
     // 時代の近似）は不要になる。shapeが無い場合だけ従来経路へ落ちる。
     if (hp.shape && hp.shape.ready && typeof hullShapeHalfWidthAtNorm === 'function') {
-        return hullShapeHalfWidthAtNorm(hp.shape, alongNorm, hp.halfLen);
+        const T = _hwTab;
+        if (T.shape !== hp.shape || T.halfLen !== hp.halfLen || T.wl !== hp.shape.designWaterlineY) {
+            T.shape = hp.shape; T.halfLen = hp.halfLen; T.wl = hp.shape.designWaterlineY;
+            T.v = new Float32Array(_HW_TAB_N + 1);
+            for (let i = 0; i <= _HW_TAB_N; i++) T.v[i] = hullShapeHalfWidthAtNorm(hp.shape, _HW_TAB_LO + (_HW_TAB_HI - _HW_TAB_LO) * i / _HW_TAB_N, hp.halfLen);
+        }
+        const f = (alongNorm - _HW_TAB_LO) / (_HW_TAB_HI - _HW_TAB_LO) * _HW_TAB_N;
+        if (!(f > 0)) return T.v[0];
+        if (f >= _HW_TAB_N) return T.v[_HW_TAB_N];
+        const i = f | 0, tt = f - i;
+        return T.v[i] + (T.v[i + 1] - T.v[i]) * tt;
     }
     if (!hp.ready || hp.slices.length === 0) return hp.halfBeam || 1.5;
     const slices = hp.slices;
@@ -1995,10 +2009,13 @@ function _hullHalfWidthAtNorm(alongNorm) {
 //  テーブルが未生成（モデル未ロード、スキャン直後の1フレーム目など）の場合は
 //  従来どおり静的な設計喫水値へフォールバックする。
 // ───────────────────────────────────────
+// （結果の入れ物は使い回す：呼び出し側はすぐ読むだけ。区間は二分探索で）
+const _wetHwRes = { hw: 0, wet: 1 };
 function _hullWetHalfWidthAtNorm(alongNorm, side) {
     const staticHw = _hullHalfWidthAtNorm(alongNorm);
+    const R = _wetHwRes;
     const d = window._hullWaterlineDyn;
-    if (!d || !d.ready || d.n < 2) return { hw: staticHw, wet: 1 };
+    if (!d || !d.ready || d.n < 2) { R.hw = staticHw; R.wet = 1; return R; }
 
     const aArr = d.alongNorm;
     const hwArr  = (side >= 0) ? d.hwStbd  : d.hwPort;
@@ -2008,19 +2025,16 @@ function _hullWetHalfWidthAtNorm(alongNorm, side) {
     // alongNormは昇順（船尾→船首）。範囲外は両端でクランプするが、
     // 先端より外側は _hullHalfWidthAtNorm と同じく「幅0へ収束する」扱いに
     // したいので、静的な値との小さい方を採る。
-    if (alongNorm <= aArr[0])      return { hw: Math.min(staticHw, hwArr[0]),     wet: wetArr[0] };
-    if (alongNorm >= aArr[N - 1])  return { hw: Math.min(staticHw, hwArr[N - 1]), wet: wetArr[N - 1] };
-    for (let i = 0; i < N - 1; i++) {
-        if (alongNorm >= aArr[i] && alongNorm <= aArr[i + 1]) {
-            const span = aArr[i + 1] - aArr[i];
-            const tt = span > 1e-9 ? (alongNorm - aArr[i]) / span : 0;
-            return {
-                hw:  hwArr[i]  + (hwArr[i + 1]  - hwArr[i])  * tt,
-                wet: wetArr[i] + (wetArr[i + 1] - wetArr[i]) * tt,
-            };
-        }
-    }
-    return { hw: staticHw, wet: 1 };
+    if (alongNorm <= aArr[0])      { R.hw = Math.min(staticHw, hwArr[0]); R.wet = wetArr[0]; return R; }
+    if (alongNorm >= aArr[N - 1])  { R.hw = Math.min(staticHw, hwArr[N - 1]); R.wet = wetArr[N - 1]; return R; }
+    if (!(alongNorm === alongNorm)) { R.hw = staticHw; R.wet = 1; return R; }
+    let lo = 0, hi = N - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (aArr[mid] <= alongNorm) lo = mid; else hi = mid; }
+    const span = aArr[hi] - aArr[lo];
+    const tt = span > 1e-9 ? (alongNorm - aArr[lo]) / span : 0;
+    R.hw  = hwArr[lo]  + (hwArr[hi]  - hwArr[lo])  * tt;
+    R.wet = wetArr[lo] + (wetArr[hi] - wetArr[lo]) * tt;
+    return R;
 }
 window._hullWetHalfWidthAtNorm = _hullWetHalfWidthAtNorm;
 
@@ -2067,21 +2081,32 @@ function _hullFlareAngleAtNorm(alongNorm) {
 //  しまう可能性がある。呼び出し側で「水面付近にあるエフェクトにだけ適用する」
 //  といった高さ方向のガードを別途行うこと。
 // ─────────────────────────────────────────
+// （結果の入れ物は使い回す：呼び出し側はすぐ読むだけ。泡の粒子ごとに毎フレーム呼ばれ、
+//   そのたびに入れ物と船の向き・原点を作り直していた。向き・原点は船が動いたときだけ求め直す）
+const _pohRes = { x: 0, z: 0, pushed: false };
+const _pohF = { h: NaN, cx: NaN, cz: NaN, ws: NaN, sinT: 0, cosT: 1, cx0: 0, cz0: 0 };
 function pushOutsideHull(px, pz, marginWorld) {
+    const R = _pohRes;
+    R.x = px; R.z = pz; R.pushed = false;
     const hp = window.hullProfile;
-    if (!hp || !hp.ready || !hp.slices.length) return { x: px, z: pz, pushed: false };
+    if (!hp || !hp.ready || !hp.slices.length) return R;
     const WS = (physics && physics.scale) ? physics.scale : 1;
     const halfLenW = hp.halfLen * WS;
-    if (halfLenW < 1e-6) return { x: px, z: pz, pushed: false };
-    const headingRad = (physics.heading * Math.PI) / 180;
-    const totalRad   = _wakeAxisRad(headingRad);
-    const sinT = Math.sin(totalRad), cosT = Math.cos(totalRad);
-    const _origin = _hullOriginWorld(physics.cgWorldX, physics.cgWorldZ, totalRad, WS);
-    const cx0 = _origin.x, cz0 = _origin.z;
+    if (halfLenW < 1e-6) return R;
+    const F = _pohF;
+    const ox = physics.cgOffset.x || 0, oz = physics.cgOffset.z || 0;
+    if (F.h !== physics.heading || F.cx !== physics.cgWorldX || F.cz !== physics.cgWorldZ || F.ws !== WS || F.ox !== ox || F.oz !== oz) {
+        F.h = physics.heading; F.cx = physics.cgWorldX; F.cz = physics.cgWorldZ; F.ws = WS; F.ox = ox; F.oz = oz;
+        const totalRad = _wakeAxisRad((physics.heading * Math.PI) / 180);
+        F.sinT = Math.sin(totalRad); F.cosT = Math.cos(totalRad);
+        const o = _hullOriginWorld(physics.cgWorldX, physics.cgWorldZ, totalRad, WS);
+        F.cx0 = o.x; F.cz0 = o.z;
+    }
+    const sinT = F.sinT, cosT = F.cosT, cx0 = F.cx0, cz0 = F.cz0;
     const dx = px - cx0, dz = pz - cz0;
     const along = sinT * dx + cosT * dz;
     const perp  = cosT * dx - sinT * dz;
-    if (Math.abs(along) > halfLenW * 1.02) return { x: px, z: pz, pushed: false };
+    if (Math.abs(along) > halfLenW * 1.02) return R;
     const alongNorm = THREE.MathUtils.clamp(along / halfLenW, -1, 1);
     // v165: 押し出しの基準も「今この瞬間の実喫水線」に揃える。設計喫水の
     // 静的な半幅で押し出していたため、船が傾いて片舷が浮き上がっている
@@ -2092,10 +2117,11 @@ function pushOutsideHull(px, pz, marginWorld) {
         ? _hullWetHalfWidthAtNorm(alongNorm, sideSign).hw
         : _hullHalfWidthAtNorm(alongNorm)) * WS;
     const limit = hwLocal + (marginWorld || 0);
-    if (Math.abs(perp) >= limit) return { x: px, z: pz, pushed: false };
-    const newX = cx0 + sinT * along + cosT * sideSign * limit;
-    const newZ = cz0 + cosT * along - sinT * sideSign * limit;
-    return { x: newX, z: newZ, pushed: true };
+    if (Math.abs(perp) >= limit) return R;
+    R.x = cx0 + sinT * along + cosT * sideSign * limit;
+    R.z = cz0 + cosT * along - sinT * sideSign * limit;
+    R.pushed = true;
+    return R;
 }
 window.pushOutsideHull = pushOutsideHull;
 
