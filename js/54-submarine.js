@@ -265,7 +265,18 @@ function _subApplyZoom() {
     if (!sub.view || sub.baseFov == null) return;
     camera.fov = Math.max(4, sub.baseFov / sub.zoom); camera.updateProjectionMatrix();
 }
-window.subScopeView = subScopeView; window.subZoom = subZoom;
+// 潜望鏡を船首の向き（水平）へ戻す。くるっと回して（0.6 秒ほどで）
+function subScopeBow() {
+    if (typeof viewpointYaw === 'undefined') return;
+    const y0 = Math.atan2(Math.sin(viewpointYaw), Math.cos(viewpointYaw)), p0 = viewpointPitch, t0 = performance.now(), T = 600;
+    const step = (now) => {
+        const u = Math.min(1, (now - t0) / T), k = u * u * (3 - 2 * u);
+        viewpointYaw = y0 * (1 - k); viewpointPitch = p0 * (1 - k);
+        if (u < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+}
+window.subScopeView = subScopeView; window.subZoom = subZoom; window.subScopeBow = subScopeBow;
 // 20-viewpoint-camera.js の見張り台と同じ仕組みで、潜望鏡の頭をカメラにする
 (function () {
     const orig = window.getActiveViewpointMarker;
@@ -280,7 +291,8 @@ function _subOverlay() {
     let el = document.getElementById('sub-scope');
     if (!el) {
         el = document.createElement('div'); el.id = 'sub-scope';
-        el.innerHTML = '<div class="ss-ring"></div><div class="ss-h"></div><div class="ss-v"></div><div class="ss-info"></div>';
+        el.innerHTML = '<div class="ss-ring"></div><div class="ss-h"></div><div class="ss-v"></div><div class="ss-info"></div>'
+            + '<button class="ss-bow" onclick="subScopeBow()" title="潜望鏡を船首の向きへ戻す">⬆ 船首へ</button>';
         document.body.appendChild(el);
     }
     el.classList.toggle('on', !!sub.view);
@@ -588,6 +600,7 @@ function renderSubPanel() {
             <button onclick="subScopeToggle()" ${sub.scopeUp ? 'class="on"' : ''}>${sub.scopeUp ? '下げる' : '上げる'}</button>
             <button onclick="subScopeView(${!sub.view})" ${sub.view ? 'class="on"' : ''} ${sub.scopeUp ? '' : 'disabled'}>${sub.view ? '覗くのをやめる' : '👁 覗く'}</button>
             ${[1.5, 6].map(z => `<button onclick="subZoom(${z})" ${sub.zoom === z ? 'class="on"' : ''}>×${z}</button>`).join('')}
+            <button onclick="subScopeBow()" ${sub.view ? '' : 'disabled'} title="潜望鏡を船首の向きへ戻す">⬆ 船首へ</button>
         </div>
         <div class="sb-sonar"><canvas id="sub-sonar" width="180" height="180"></canvas>
             <div class="sb-scol"><button onclick="subPing()">📡 ピン（アクティブ）</button>
