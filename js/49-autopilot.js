@@ -1027,9 +1027,9 @@ Object.assign(window, { autopilotStart, autopilotStop, autopilotSetCruise });
 function _apHelm(cmd, dt) {
     cmd = Math.max(-35, Math.min(35, cmd));
     if (typeof bridgeWheelActive === 'function' && bridgeWheelActive() && typeof _br !== 'undefined') {
-        const lock = WHEEL_LOCK_DEG[bridgeUI.wheel] || 360;
+        const lock = bridgeWheelLockOf(bridgeUI.wheel);
         const want = cmd / 35 * lock;
-        const rate = (HELM_KEY_RATE_WHEEL[bridgeUI.wheel] || HELM_KEY_RATE) / 35 * lock * 1.5 * dt;
+        const rate = bridgeWheelKeyRate(bridgeUI.wheel) / 35 * lock * 1.5 * dt;
         const d = want - _br.wheelDeg;
         _br.wheelDeg += Math.abs(d) <= rate ? d : Math.sign(d) * rate;
         _br.wheelTarget = null;

@@ -61,6 +61,20 @@ const WHEEL_LOCK_DEG = { classic: 35 * 360, handle: 270, azipod: 70 };
 const HELM_RATE = 20;          // 舵が舵輪の指示へ追いつく速さ[度/秒]（舵取機）
 const HELM_KEY_RATE = 60;      // A/Dキーで舵輪を回す速さ（舵角換算[度/秒]）
 const HELM_KEY_RATE_WHEEL = { classic: 6 };   // 古典的な舵輪は1秒に6周（＝舵6°）まで
+// 古典的な舵輪の回す量：real＝本物どおり（1周で舵1°）、quick＝以前の軽い舵輪（1周半で舵いっぱい。ハンドル型と同じくらいの効き）
+const BRIDGE_WHEEL_TURNS = {
+    real:  '本物どおり（1周で舵1°・いっぱいまで35周）',
+    quick: '軽く（1周半で舵いっぱい・ハンドル型と同じくらい）',
+};
+window.BRIDGE_WHEEL_TURNS = BRIDGE_WHEEL_TURNS;
+const WHEEL_QUICK_LOCK_DEG = 540;
+function _wheelQuick(kind) { return kind === 'classic' && bridgeUI.wheelTurns === 'quick'; }
+// 舵輪の種類ごとの、片側いっぱいまでの角度・A/Dキーで回す速さ（舵角換算[度/秒]）・中央へ戻す速さ[度/秒]
+function bridgeWheelLockOf(kind) { return _wheelQuick(kind) ? WHEEL_QUICK_LOCK_DEG : (WHEEL_LOCK_DEG[kind] || 360); }
+function bridgeWheelKeyRate(kind) { return _wheelQuick(kind) ? HELM_KEY_RATE : (HELM_KEY_RATE_WHEEL[kind] || HELM_KEY_RATE); }
+function _wheelCenterRate(kind) { return _wheelQuick(kind) ? WHEEL_QUICK_LOCK_DEG * 2 : (WHEEL_CENTER_RATE[kind] || 540); }
+window.bridgeWheelLockOf = bridgeWheelLockOf;
+window.bridgeWheelKeyRate = bridgeWheelKeyRate;
 const TG_ANSWER_DELAY = 1.3;   // 機関室が応答するまで[秒]
 
 // テレグラフのベルの音（auto：デザインに合わせる。オリンピック級・クイーン・メリー風は
@@ -76,7 +90,8 @@ window.BRIDGE_BELLS = BRIDGE_BELLS;
 const bridgeUI = {
     telegraph: 'olympic', wheel: 'classic', wheelText: 'R.M.S. OLYMPIC', waitAnswer: true, bell: 'auto',
     tgTheme: 'auto', tgLit: true,     // 盤面の色（auto/white/black）・暗くなったら盤面を光らせる
-    wheelBell: true,                  // 古典的な舵輪：1周ごとにベルを鳴らす
+    wheelBell: true,                  // 古典的な舵輪：1周ごとにベルを鳴らす（1周で舵1°のとき）
+    wheelTurns: 'real',               // 古典的な舵輪の回す量（BRIDGE_WHEEL_TURNS）
 };
 window.bridgeUI = bridgeUI;
 const _br = {
@@ -1192,7 +1207,7 @@ window.bridgeAzimuthLever = bridgeAzimuthLever;
 // 舵輪を端から端まで回せる角度（片側）
 function _wheelLock() {
     if (bridgeUI.wheel === 'azipod' && typeof azipodActive === 'function' && azipodActive()) return 180;
-    return WHEEL_LOCK_DEG[bridgeUI.wheel] || 360;
+    return bridgeWheelLockOf(bridgeUI.wheel);
 }
 function bridgeHelmRate() { return HELM_RATE; }
 window.bridgeHelmRate = bridgeHelmRate;
@@ -1233,13 +1248,13 @@ function updateBridge(t) {
     // 舵輪：A/Dキーで回す
     const lock = _wheelLock();
     if (bridgeWheelActive()) {
-        const kr = HELM_KEY_RATE_WHEEL[bridgeUI.wheel] || HELM_KEY_RATE;
+        const kr = bridgeWheelKeyRate(bridgeUI.wheel);
         if (keys.a || keys.d || _br.wheelDrag) _br.wheelTarget = null;     // 手で回したら中央戻しはやめる
         if (keys.a) { _br.wheelDeg = Math.max(-lock, _br.wheelDeg - kr / 35 * lock * dt); _br.dirtyW = true; }
         if (keys.d) { _br.wheelDeg = Math.min(lock, _br.wheelDeg + kr / 35 * lock * dt); _br.dirtyW = true; }
         if (_br.wheelTarget !== null && _br.wheelTarget !== undefined) {
             const d = _br.wheelTarget - _br.wheelDeg;
-            const step = (WHEEL_CENTER_RATE[bridgeUI.wheel] || 540) * dt;
+            const step = _wheelCenterRate(bridgeUI.wheel) * dt;
             if (Math.abs(d) <= step) { _br.wheelDeg = _br.wheelTarget; _br.wheelTarget = null; }
             else _br.wheelDeg += Math.sign(d) * step;
             _br.dirtyW = true;
@@ -1251,8 +1266,8 @@ function updateBridge(t) {
             const az = maneuverPodAzNow();
             if (az !== null && Math.abs(az - (_br.lastPodAz ?? 1e9)) > 0.3) { _br.lastPodAz = az; _br.dirtyW = true; }
         }
-        // 古典的な舵輪：1周ごとにベル（テレグラフと同じ音）
-        if (bridgeUI.wheel === 'classic' && bridgeUI.wheelBell !== false && !_br.autoHelm) {   // 自動航行が回すときは鳴らさない
+        // 古典的な舵輪（1周で舵1°）：1周ごとにベル（テレグラフと同じ音）
+        if (bridgeUI.wheel === 'classic' && !_wheelQuick('classic') && bridgeUI.wheelBell !== false && !_br.autoHelm) {   // 自動航行が回すときは鳴らさない
             const turn = Math.trunc(_br.wheelDeg / 360);
             if (_br.lastTurn === undefined) _br.lastTurn = turn;
             if (turn !== _br.lastTurn) {
@@ -1281,12 +1296,13 @@ function updateBridge(t) {
 window.updateBridge = updateBridge;
 
 // ── 保存・読み込み ──
-function getBridgeConfig() { return { telegraph: bridgeUI.telegraph, wheel: bridgeUI.wheel, wheelText: bridgeUI.wheelText, waitAnswer: bridgeUI.waitAnswer, bell: bridgeUI.bell, tgTheme: bridgeUI.tgTheme, tgLit: bridgeUI.tgLit, wheelBell: bridgeUI.wheelBell }; }
+function getBridgeConfig() { return { telegraph: bridgeUI.telegraph, wheel: bridgeUI.wheel, wheelText: bridgeUI.wheelText, waitAnswer: bridgeUI.waitAnswer, bell: bridgeUI.bell, tgTheme: bridgeUI.tgTheme, tgLit: bridgeUI.tgLit, wheelBell: bridgeUI.wheelBell, wheelTurns: bridgeUI.wheelTurns }; }
 function applyBridgeConfig(c) {
-    const d = { telegraph: 'olympic', wheel: 'classic', wheelText: 'R.M.S. OLYMPIC', waitAnswer: true, bell: 'auto', tgTheme: 'auto', tgLit: true, wheelBell: true };
+    const d = { telegraph: 'olympic', wheel: 'classic', wheelText: 'R.M.S. OLYMPIC', waitAnswer: true, bell: 'auto', tgTheme: 'auto', tgLit: true, wheelBell: true, wheelTurns: 'real' };
     Object.assign(bridgeUI, d, c || {});
     if (!BRIDGE_TELEGRAPHS[bridgeUI.telegraph]) bridgeUI.telegraph = 'olympic';
     if (!BRIDGE_WHEELS[bridgeUI.wheel]) bridgeUI.wheel = 'classic';
+    if (!BRIDGE_WHEEL_TURNS[bridgeUI.wheelTurns]) bridgeUI.wheelTurns = 'real';
     _br.wheelDeg = 0;
     applyBridgeLayout();
     renderBridgePanel();
@@ -1297,7 +1313,15 @@ window.applyBridgeConfig = applyBridgeConfig;
 function setBridgeOption(key, v) {
     if (key === 'waitAnswer' || key === 'tgLit' || key === 'wheelBell') bridgeUI[key] = !!v;
     else bridgeUI[key] = v;
-    if (key === 'wheel') _br.wheelDeg = Math.max(-(WHEEL_LOCK_DEG[v] || 360), Math.min(WHEEL_LOCK_DEG[v] || 360, physics.helmOrder / 35 * (WHEEL_LOCK_DEG[v] || 360)));
+    if (key === 'wheelTurns' && !BRIDGE_WHEEL_TURNS[bridgeUI.wheelTurns]) bridgeUI.wheelTurns = 'real';
+    // 舵輪を替えても舵の指示はそのまま（新しい舵輪の回し具合に直す）
+    if (key === 'wheel' || key === 'wheelTurns') {
+        const lock = bridgeWheelLockOf(bridgeUI.wheel);
+        _br.wheelDeg = Math.max(-lock, Math.min(lock, physics.helmOrder / 35 * lock));
+        _br.wheelTarget = null;
+        _br.lastTurn = undefined;
+        _br.dirtyW = true;
+    }
     applyBridgeLayout();
 }
 window.setBridgeOption = setBridgeOption;
@@ -1312,6 +1336,8 @@ function renderBridgePanel() {
     if (tg) tg.innerHTML = Object.entries(BRIDGE_TELEGRAPHS).map(([k, l]) => `<option value="${k}"${k === bridgeUI.telegraph ? ' selected' : ''}>${l}</option>`).join('');
     const wh = document.getElementById('bridge-wheel');
     if (wh) wh.innerHTML = Object.entries(BRIDGE_WHEELS).map(([k, l]) => `<option value="${k}"${k === bridgeUI.wheel ? ' selected' : ''}>${l}</option>`).join('');
+    const wt = document.getElementById('bridge-wheel-turns');
+    if (wt) wt.innerHTML = Object.entries(BRIDGE_WHEEL_TURNS).map(([k, l]) => `<option value="${k}"${k === (bridgeUI.wheelTurns || 'real') ? ' selected' : ''}>${l}</option>`).join('');
     const tx = document.getElementById('bridge-wheel-text'); if (tx) tx.value = bridgeUI.wheelText;
     const wa = document.getElementById('bridge-wait-answer'); if (wa) wa.checked = bridgeUI.waitAnswer;
     const wb = document.getElementById('bridge-wheel-bell'); if (wb) wb.checked = bridgeUI.wheelBell !== false;

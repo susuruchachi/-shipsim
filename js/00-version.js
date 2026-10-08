@@ -165,7 +165,8 @@
 //               座礁から抜けたら、水路の真ん中の深い所を通るように引き直す（抜けた所の測り直しも）。船底が海底に乗る。
 //               排煙はマスト・煙突で左右に分かれる。帰りかけのタグを呼び戻す。甲板が水をかぶると喫水線が縮む。
 //               潜水艦のソナーに他の船が映る（ピンの反響・機関の音）。魚雷の航跡を濃く。
-var APP_VERSION = '0.03.013.036';
+// 0.03.013.037 古典的な舵輪の回す量を選べる（本物どおり「1周で舵1°」のほかに、以前の軽い「1周半で舵いっぱい」＝ハンドル型と同じくらいの効き）。
+var APP_VERSION = '0.03.013.037';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
