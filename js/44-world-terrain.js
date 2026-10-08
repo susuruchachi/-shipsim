@@ -1200,6 +1200,8 @@ function _trSeabedLift(off) {
     physics.groundLift = lift;
     physics.y += lift; shipGroup.position.y += lift;
     if (physics.vy < 0) physics.vy = 0;
+    // 底に乗っている間は、縦揺れ・横揺れも底との摩擦で止まっていく（浸水で傾こうとしても、底に押さえられる）
+    physics.vPitch *= 0.8; physics.vRoll *= 0.8;
     shipGroup.updateMatrixWorld();
 }
 function _trCheckGrounding(t, dt) {

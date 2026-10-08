@@ -121,13 +121,15 @@ function trafficTorpedoHit(h) {
 }
 window.trafficTorpedoHit = trafficTorpedoHit;
 // 砲弾が当たった（55-ship-types.js から）：舷側なら穴（口径で大きさ）、上部構造なら火災。大口径の弾は甲板を貫いて下で炸裂することも
-function trafficShellHit(h, cal) {
-    const S = h.S, k = (cal || 200) / 1000, area = Math.max(0.4, 60 * k * k);
-    if (h.yk < h.deck && Math.abs(h.s) > _tfShapeHW(S, h.a) * 0.6) trafficDamage(S, h.a, h.s, h.yk, area, 'shell');
+//（uw：海面を叩いて水の中を進んできた弾＝水中弾。喫水線の下の舷側に穴があく）
+function trafficShellHit(h, cal, uw) {
+    const S = h.S, k = (cal || 200) / 1000, area = Math.max(0.4, 60 * k * k) * (uw ? 1.3 : 1);
+    if (uw && h.yk < h.deck) trafficDamage(S, h.a, h.s, Math.max(0.3, h.yk), area, 'shell');
+    else if (h.yk < h.deck && Math.abs(h.s) > _tfShapeHW(S, h.a) * 0.6) trafficDamage(S, h.a, h.s, h.yk, area, 'shell');
     else if (cal >= 280 && Math.random() < 0.45) trafficDamage(S, h.a, h.s >= 0 ? 1 : -1, Math.max(0.5, S.d * 0.4), area * 0.5, 'shell');
     else { const M = _tfdInit(S); if (S.st !== 'damaged') { S.st0 = S.st; S.st = 'damaged'; S.steps = null; } }
-    _tfdFire(S, h.a, h.s, Math.min(h.yk, h.top), 180 + cal);
-    if (typeof _tfMsg === 'function') _tfMsg(`${S.name} に砲弾が命中！`);
+    if (!uw) _tfdFire(S, h.a, h.s, Math.min(h.yk, h.top), 180 + cal);
+    if (typeof _tfMsg === 'function') _tfMsg(uw ? `${S.name} に水中弾が命中！` : `${S.name} に砲弾が命中！`);
     return S;
 }
 window.trafficShellHit = trafficShellHit;

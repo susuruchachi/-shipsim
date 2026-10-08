@@ -457,7 +457,8 @@ function animate() {
             physics.vy += accY * subDt;
             physics.vy = THREE.MathUtils.clamp(physics.vy, -vyMax, vyMax);
             physics.y += physics.vy * subDt;
-            physics.y = THREE.MathUtils.clamp(physics.y, -80, 80);
+            // （上下の限界は設けない：沈むときは海底まで。数の上の安全のため、いちばん深い海より深くはしない）
+            physics.y = THREE.MathUtils.clamp(physics.y, -11000, 11000);
 
             // ── ピッチ：本物の浮力モーメント M = ρ・g・Σ(ΔV・腕の長さ) ───────────
             //   重力は重心位置に作用するため、自重そのものはピッチモーメントに
@@ -507,7 +508,8 @@ function animate() {
             physics.vPitch += THREE.MathUtils.clamp(accPitch, -maxAcc, maxAcc) * subDt;
             physics.vPitch  = THREE.MathUtils.clamp(physics.vPitch, -maxAngVel, maxAngVel);
             physics.pitch  += physics.vPitch * subDt;
-            physics.pitch   = THREE.MathUtils.clamp(physics.pitch, -0.78, 0.78);
+            // （縦の傾きは、船首・船尾から沈むときに真っ直ぐ立つところ（90°）まで。それより先へは回らない）
+            if (Math.abs(physics.pitch) > 1.55) { physics.pitch = Math.sign(physics.pitch) * 1.55; if (physics.vPitch * physics.pitch > 0) physics.vPitch = 0; }
 
             // ════════════════════════════════════════════════════════════
             //  ロール（横揺れ）── 今回は対象外。従来の振り子モデルを維持。
@@ -530,13 +532,20 @@ function animate() {
             const turnRateRad  = physics.turnRate * Math.PI / 180;
             const turnRollBias = THREE.MathUtils.clamp(physics.speed * turnRateRad * 0.0018, -0.35, 0.35);
             // 浸水で片舷に水がかたよると、その舷へ傾いたままになる（63-flooding.js）
-            const targetRoll  = -waveRoll + turnRollBias + ((typeof flood !== 'undefined' && flood.rollBias) || 0);
+            // （海底に乗って船底が支えられている間は、傾ける水があっても、舷の丸みが底に着く所までしか傾かない）
+            let floodRoll = (typeof flood !== 'undefined' && flood.rollBias) || 0;
+            if (floodRoll && (physics.groundLift || 0) > 0.02) {
+                const hb = Math.max(2, (flood.B || 20) / 2), lim = Math.atan((physics.groundLift + 0.5) / hb);
+                floodRoll = THREE.MathUtils.clamp(floodRoll, -lim, lim);
+            }
+            const targetRoll  = -waveRoll + turnRollBias + floodRoll;
 
             const accRoll  = ((targetRoll  - physics.roll)  * KRoll  - physics.vRoll  * CRoll)  / IRoll;
             physics.vRoll  += THREE.MathUtils.clamp(accRoll, -maxAcc, maxAcc) * subDt;
             physics.vRoll   = THREE.MathUtils.clamp(physics.vRoll, -maxAngVel, maxAngVel);
             physics.roll   += physics.vRoll * subDt;
-            physics.roll    = THREE.MathUtils.clamp(physics.roll, -0.78, 0.78);
+            // （横の傾きの限界も設けない：転覆するときは、ひっくり返るところまで）
+            if (Math.abs(physics.roll) > Math.PI) physics.roll -= Math.sign(physics.roll) * 2 * Math.PI;
         }
     }
     // 潜水艦：潜航・浮上の上下を計算し、深さの分だけ下げる（深いほど波の上下も届かない）

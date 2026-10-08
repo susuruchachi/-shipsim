@@ -168,7 +168,7 @@ window.damageCollision = damageCollision;
 //  hits：船底の当たった点（a・s：船の中の前後・横[m]（左舷が＋）、c：めり込み[m]）、v：当たったときの速さ[m/s]
 function damageGround(hits, v) {
     if (!hits || !hits.length || !(v > 1.0)) return;
-    const now = performance.now() / 1000;
+    const now = damage.gt || 0;                      // 物理の時間（早送りでも、8 秒に一度まで）
     if (now - damage.lastGround < 8) return;
     let best = null;
     for (const p of hits) if (!p.dense && (!best || (p.c || 0) > (best.c || 0))) best = p;
@@ -203,6 +203,7 @@ window.damageGround = damageGround;
 
 // ── 毎フレーム：穴の絵を船に付けて動かす・水面近くの穴のまわりの泡 ──
 function updateDamage(t, dt) {
+    damage.gt = (damage.gt || 0) + Math.max(0, dt || 0);
     if (!damage.decals.length && !(typeof flood !== 'undefined' && flood.holes.length)) return;
     const root = typeof wtRoot === 'function' ? wtRoot() : null;
     if (root && damage.group) { damage.group.matrix.copy(root.matrixWorld); damage.group.matrixWorld.copy(root.matrixWorld); damage.group.matrixWorldNeedsUpdate = true; }

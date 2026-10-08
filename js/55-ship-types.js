@@ -134,7 +134,15 @@ function _nvImpact(S, what) {
     const wave = typeof getWaveHeight === 'function' ? getWaveHeight(S.x, S.z, 0) : 0;
     if (typeof puffEmit === 'function') {
         const k = S.plume;
-        if (what === 'water') {
+        if (what === 'uw') {
+            // 水の中で当たった：舷側の水面が白く盛り上がる
+            for (let i = 0; i < 24 * k; i++) {
+                const a = Math.random() * Math.PI * 2, s = Math.random();
+                puffEmit({ x: S.x + Math.cos(a) * s * 4 * k, y: wave + 0.3, z: S.z + Math.sin(a) * s * 4 * k,
+                    vx: Math.cos(a) * (1 + s * 3) * k, vy: (6 + Math.random() * 10) * Math.sqrt(k), vz: Math.sin(a) * (1 + s * 3) * k,
+                    r: 0.9, g: 0.94, b: 0.96, a: 0.75, s0: 2.5 * k, s1: 10 * k, life: 2.5 + Math.random() * 2, rise: 0, drag: 0.2, grav: 1 });
+            }
+        } else if (what === 'water') {
             for (let i = 0; i < 40 * k; i++) {
                 const a = Math.random() * Math.PI * 2, s = Math.random();
                 puffEmit({ x: S.x + Math.cos(a) * s * 3 * k, y: wave + 0.3, z: S.z + Math.sin(a) * s * 3 * k,
@@ -155,6 +163,8 @@ function _nvImpact(S, what) {
         audioBurst(A.buses.env, { when: Math.min(6, d / 343), dur: 1.5 + S.plume, attack: 0.01, gain: 0.9 * near * Math.min(1.5, S.plume), type: 'lowpass', freq: 120, q: 0.7, kind: 'brown' });
     }
 }
+// 水中弾：水の抵抗（dv/dt ＝ −c·v²。260m/s で入って 80m ほどで 30m/s に落ちる）と、進める道のりの上限[m]
+const NV_UW_DRAG = 0.027, NV_UW_RUN = 150;
 function _nvUpdateShells(dt) {
     const inWorld = window.world && world.mode === 'world' && typeof worldSeabedAt === 'function';
     for (let i = naval.shells.length - 1; i >= 0; i--) {
@@ -163,8 +173,27 @@ function _nvUpdateShells(dt) {
         const h = dt / 0.6;
         S.t += h;
         const px = S.x, py = S.y, pz = S.z;
+        if (S.uw) {
+            // 水中弾：水に入ったあとは、浅い角度でまっすぐ潜って進み、水の抵抗ですぐ遅くなる（dv/dt ＝ −c·v²）。
+            // 喫水線の下の舷側に当たれば、そこに穴（65-ship-hits.js）
+            const U = S.uw, s = Math.log(1 + NV_UW_DRAG * U.v * h) / NV_UW_DRAG;
+            U.v = U.v / (1 + NV_UW_DRAG * U.v * h);
+            S.x += U.dx * s; S.z += U.dz * s; S.y += U.dy * s; U.run += s;
+            S.mesh.position.set(S.x, S.y, S.z);
+            let hitS = null;
+            if (typeof trafficHitSeg === 'function') hitS = trafficHitSeg(px, py, pz, S.x, S.y, S.z, 0.3);
+            if (hitS && typeof trafficShellHit === 'function') {
+                trafficShellHit(hitS, S.cal, true); _nvMsg(`${hitS.S.name} に水中弾が命中！（喫水線の下）`);
+                _nvImpact(S, 'uw');
+            }
+            const wv = typeof getWaveHeight === 'function' ? getWaveHeight(S.x, S.z, 0) : 0;
+            if (hitS || U.v < 30 || U.run > NV_UW_RUN || wv - S.y > 14 || (inWorld && worldSeabedAt(S.x, S.z) > S.y)) { scene.remove(S.mesh); naval.shells.splice(i, 1); }
+            continue;
+        }
+        // （放物線は、刻みの大きさによらずぴったり。以前は速さを先に変えてから進めていたので、刻みの分だけ下を通り、
+        //   早送りでは的の手前で海面を叩いていた）
         S.x += S.vx * h + S.sideX * S.spread * h / 30; S.z += S.vz * h + S.sideZ * S.spread * h / 30;
-        S.vy -= 9.81 * h; S.y += S.vy * h;
+        S.y += S.vy * h - 0.5 * 9.81 * h * h; S.vy -= 9.81 * h;
         S.mesh.position.set(S.x, S.y, S.z);
         let hit = null;
         const wave = typeof getWaveHeight === 'function' ? getWaveHeight(S.x, S.z, 0) : 0;
@@ -174,7 +203,18 @@ function _nvUpdateShells(dt) {
             if (th && typeof trafficShellHit === 'function') { trafficShellHit(th, S.cal); hit = 'ship'; _nvMsg(`${th.S.name} に命中！`); }
         }
         if (!hit && inWorld && worldSeabedAt(S.x, S.z) > S.y) hit = 'land';
-        else if (!hit && S.y < wave) hit = 'water';
+        else if (!hit && S.y < wave) {
+            // 海面を叩いた：水柱を上げ、そのまま水の中を進む（水中弾）
+            const u = Math.max(1e-6, (py - wave) / Math.max(1e-6, py - S.y));
+            S.x = px + (S.x - px) * u; S.z = pz + (S.z - pz) * u; S.y = wave;
+            const vh = Math.hypot(S.vx, S.vz), v = Math.hypot(vh, S.vy);
+            const ang = Math.max(3, Math.min(20, Math.atan2(-S.vy, vh) * 180 / Math.PI * 0.6)) * Math.PI / 180;
+            _nvImpact(S, 'water');
+            S.mesh.visible = false;
+            S.uw = { v: Math.min(260, v * 0.4), dx: S.vx / vh * Math.cos(ang), dz: S.vz / vh * Math.cos(ang), dy: -Math.sin(ang), run: 0 };
+            // 刻みの残りの分も水の中を（次のフレームから）
+            continue;
+        }
         if (!hit && S.t > 1) for (const tg of (window.tugs || [])) if (Math.hypot(tg.pos.x - S.x, tg.pos.z - S.z) < 15 && S.y < 12) { hit = 'tug'; _nvMsg(`タグ${tg.id}の近くに着弾！（演習弾）`); break; }
         if (hit || S.t > 200) { _nvImpact(S, hit === 'water' ? 'water' : 'land'); scene.remove(S.mesh); naval.shells.splice(i, 1); }
     }

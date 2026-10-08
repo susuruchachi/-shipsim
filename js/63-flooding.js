@@ -301,6 +301,7 @@ function updateFlooding(t, dt) {
         }
     }
     _flTotals(e, sc);
+    flood.noEqT = flood.noEq && !flood.sunk ? (flood.noEqT || 0) + dt : 0;
     _flSinkCheck(e, t);
     _flVisual(true);
     if (flood.msgT > 0) flood.msgT -= dt;
@@ -322,7 +323,9 @@ function _flTotals(e, sc) {
         const fill = c.vol / c.vmax;
         if (fill < 0.985 && st.ix > 0) {
             const len = Math.max(1e-6, c.a1 - c.a0), b = st.aw / len * sc;
-            fs.push({ i: st.ix * sc4, cap: c.vol * 0.3 * b * Math.min(1, 4 * (1 - fill)) });
+            // （二重底は、中心線の桁と左右の側桁で幅の方向に 3 つほどに仕切られているので、水が寄る分は 1/9・寄れる量は 1/3）
+            const kd = c.kind === 'db' ? 1 / 3 : 1;
+            fs.push({ i: st.ix * sc4 * kd * kd, cap: c.vol * 0.3 * b * kd * Math.min(1, 4 * (1 - fill)) });
         }
     }
     flood.massKg = m;
@@ -344,17 +347,27 @@ function _flTotals(e, sc) {
     const Mh = m * FL_G * (cx - cgP) * sc;
     let ifs = 0; for (const f of fs) ifs += f.i;
     flood.GMe = GM - FL_RHO * ifs / disp;
-    const phi = _flHeel(Mh, disp, GM, flood.BM, fs);
+    // 甲板の縁が水に入る角度（船の真ん中の、甲板の高さと水面の差から）。そこから先は復原力が落ちていく
+    const wl0 = Number.isFinite(window._physicsWaveY) ? window._physicsWaveY : 0;
+    const fb = Math.max(0.3, _flWY(e, 0, D.yDeck, (D.aS + D.aB) / 2) - wl0);
+    flood.phiDeck = Math.atan(fb / Math.max(1, flood.B / 2));
+    const phi = _flHeel(Mh, disp, GM, flood.BM, fs, flood.phiDeck);
     flood.heel = phi;
+    flood.noEq = Math.abs(phi) >= 0.749;              // 43° まで傾いても起こせない（転覆する：_flSinkCheck）
     // 17-main-loop.js のロール：＋は左舷が上がる向き。左舷へ傾ける（左舷が下がる）のは −
     flood.rollBias = -phi;
+    // 転覆した：横倒しを越えて、裏返るところまで回る（傾きの限界は設けていない：17-main-loop.js）
+    if (flood.capsized) flood.rollBias = flood.capsized * 2.6;
 }
 // 横傾斜のつり合い：船を起こすモーメント Δ·g·GZ(φ)（GZ ＝ sinφ·(GM ＋ BM·tan²φ／2)：舷側が立った船）と、
 // 傾けるモーメント（水の重心の偏り ＋ 自由水面の水が傾いた側へ寄る分。寄れる量には上限）が等しくなる角度 φ（左舷へ＋）。
 // まっすぐで復原力が足りなければ、傾いた方へ（ロール角）。0.75rad まで起こせなければ転覆
-function _flHeel(Mh, disp, GM, BM, fs) {
+//（甲板の縁が水に入る角度 phD から先は、舷側が立った船の式は使えない：起こす力は、そこから 0.6rad 先で無くなるまで落ちていく）
+function _flHeel(Mh, disp, GM, BM, fs, phD) {
     const HM = (ph) => { const t = Math.abs(Math.tan(ph)), sg = ph < 0 ? -1 : 1; let v = Mh * Math.cos(ph); for (const f of fs) v += sg * FL_RHO * FL_G * Math.min(f.i * t, f.cap); return v; };
-    const RM = (ph) => { const t = Math.tan(ph); return disp * FL_G * Math.sin(ph) * (GM + Math.max(0, BM) * t * t / 2); };
+    const ws = (ph) => { const t = Math.tan(ph); return disp * FL_G * Math.sin(ph) * (GM + Math.max(0, BM) * t * t / 2); };
+    const pd = Number.isFinite(phD) ? Math.max(0.05, phD) : 9;
+    const RM = (ph) => Math.abs(ph) <= pd ? ws(ph) : ws(Math.sign(ph) * pd) * Math.max(0, 1 - (Math.abs(ph) - pd) / 0.6);
     const s = Math.abs(Mh) > disp * FL_G * 1e-5 ? Math.sign(Mh) : (physics.roll > 0 ? -1 : 1);
     for (let k = 1; k <= 75; k++) {
         const ph = s * k * 0.01;
@@ -374,6 +387,14 @@ function _flSinkCheck(e, t) {
         _flMsg('浸水が予備浮力を超えました。船は沈みます。');
     }
     if (flood.sunk) return;
+    // 傾いた側へ寄った水を起こせない（つり合う角度が無い）まま 20 秒：転覆
+    if (flood.noEqT > 20) {
+        flood.sunk = true; flood.capsized = Math.sign(physics.roll) || Math.sign(flood.rollBias) || 1;
+        _flMsg('傾きを起こせず、船は転覆しました。');
+        if (typeof setTelegraphOrder === 'function') try { setTelegraphOrder(0); } catch (err) { /* */ }
+        physics.targetSpeed = 0;
+        return;
+    }
     // 主甲板（前・中・後ろ）がすべて水の下に 3m 以上
     let under = 0;
     for (const f of [0.15, 0.5, 0.85]) {
@@ -382,6 +403,7 @@ function _flSinkCheck(e, t) {
     }
     if (under === 3 || (Math.abs(physics.roll) > 0.74 && flood.massKg > flood.reserveKg * 0.5)) {
         flood.sunk = true;
+        if (Math.abs(physics.roll) > 0.74) flood.capsized = Math.sign(physics.roll);
         _flMsg(Math.abs(physics.roll) > 0.74 ? '船は転覆して沈みました。' : '船は沈没しました。');
         if (typeof setTelegraphOrder === 'function') try { setTelegraphOrder(0); } catch (err) { /* */ }
         physics.targetSpeed = 0;
@@ -439,7 +461,7 @@ function floodRepair() {
     flood.holes = [];
     for (const c of flood.comps) c.vol = 0;
     flood.massKg = 0; flood.torqueP = 0; flood.rollBias = 0; flood.heel = 0; flood.deckCap = false; window._wtDeckCap = false;
-    flood.sinking = false; flood.sunk = false; flood.rev++;
+    flood.sinking = false; flood.sunk = false; flood.capsized = 0; flood.rev++;
     if (typeof damageClearDecals === 'function') damageClearDecals();
     // 沈んでいたら水面へ戻す
     physics.vy = 0; physics.vPitch = 0; physics.vRoll = 0; physics.pitch = 0; physics.roll = 0;
