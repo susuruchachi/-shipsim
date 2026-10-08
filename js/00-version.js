@@ -199,7 +199,8 @@
 // 0.03.015.007 重なる面が透ける・ちらつくのを直した：海面と遠くの海の奥行きを、船・地形と同じ画素ごとの対数深度に
 //               （頂点だけで決めていたので、大きな三角形の中でずれていた）。画素ごとに奥行きを書く材質には polygonOffset が
 //               効かないので、港の細かい地形・岸壁の縁・船体の穴の絵は、奥行きそのものを少し手前にずらす（depthBiasMaterial）。
-var APP_VERSION = '0.03.015.007';
+// 0.03.015.008 甲板が水に入った所では、喫水線の泡の帯・泡をすぐ消す（沈んだ船首の上に白い筋が伸びていた）。輪郭もすぐ縮める。
+var APP_VERSION = '0.03.015.008';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

@@ -848,9 +848,10 @@ function createWater() {
             let wet = hullShapeWetness(shape, localWaterY);
             // 水面が甲板（船体本体の上）より上：その断面は水をかぶっている。喫水線（泡帯・水面の穴）を真ん中へ縮める
             //（船底が水から出たときに消えるのと同じように。甲板の上に水が見える）
+            //（泡帯・泡は、甲板が水に入ったらすぐ消す。以前は船体の高さの 8% 沈むまで細く残り、沈んだ船首の上に白い筋が伸びていた）
             if (Number.isFinite(hp.deckY) && hp.hullHeight > 0 && localWaterY > hp.deckY) {
-                const k = Math.max(0, 1 - (localWaterY - hp.deckY) / (hp.hullHeight * 0.08));
-                hwLocal *= k; wet *= k;
+                const k = Math.max(0, 1 - (localWaterY - hp.deckY) / (hp.hullHeight * 0.02));
+                hwLocal *= k; wet = 0;
             }
             return { alongLocal, hwLocal, wet };
         };
