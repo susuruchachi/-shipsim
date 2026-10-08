@@ -1180,8 +1180,7 @@ function _trGroundAttitude(hits, dt) {
 //（描いている船の高さ physics.y から測る。縦・横の傾きは _trGroundAttitude。持ち上げると浮力が減るので、
 //  次のフレームでまた沈もうとして、海底に乗ったまま止まる。岸壁・陸（水面より上）は横から当たる所なので持ち上げない）
 // 沈没した船（63-flooding.js）：船の姿勢（縦に立つ・裏返る）のまま、船底と甲板の点を世界の座標にして、
-// いちばん深く海底に入った分だけ持ち上げる（喫水の 9 割までという上限は無し）。底に着いたら、縦の傾きは
-// 底に横たわるまでゆっくり戻す（17-main-loop.js：physics.bedRest）
+// 当たった点を支点に支える（_trContactSolve）
 function _trSunkPoints() {
     const D = typeof wtDims === 'function' ? wtDims() : null; if (!D) return [];
     const key = [D.aS, D.aB, D.yBot, D.yDeck, physics.scale].join(',');
@@ -1196,53 +1195,80 @@ function _trSunkPoints() {
     _trSunkPoints.c = { key, pts };
     return pts;
 }
-function _trSunkLift() {
-    shipGroup.updateMatrixWorld();
+// 船体の点（世界の座標）を、沈没した船は船底と甲板の点（船の姿勢のまま：縦に立つ・裏返る）で
+function _trSunkWorldPts() {
     const root = typeof wtRoot === 'function' ? wtRoot() : null;
-    const e = (root || shipGroup).matrixWorld.elements;
-    let lift = 0;
-    for (const q of _trSunkPoints()) {
-        const wx = e[0] * q[0] + e[4] * q[1] + e[8] * q[2] + e[12], wy = e[1] * q[0] + e[5] * q[1] + e[9] * q[2] + e[13], wz = e[2] * q[0] + e[6] * q[1] + e[10] * q[2] + e[14];
-        const b = worldSeabedAt(wx, wz);
-        if (b - wy > lift) lift = b - wy;
+    const e = (root || shipGroup).matrixWorld.elements, out = [];
+    for (const q of _trSunkPoints()) out.push({
+        x: e[0] * q[0] + e[4] * q[1] + e[8] * q[2] + e[12], y: e[1] * q[0] + e[5] * q[1] + e[9] * q[2] + e[13], z: e[2] * q[0] + e[6] * q[1] + e[10] * q[2] + e[14] });
+    return out;
+}
+// 海底に当たった点を、その点で支える：当たった点に上向きの力（撃力）をかけたときの、上下・縦の傾き・横の傾きの
+// 動き方の割合（船の重さと、縦・横の回りにくさ）で分けて押し戻す。船首だけが当たれば、船首が持ち上がるより先に
+// 船首を支点に船尾が沈む向きに回る（以前は、当たった分だけ船ごと真上へ持ち上げていたので、浸水して船首から
+// 沈んだ船が、船首で底に立ったまま重心ごと持ち上がって、縦に立っていた）
+function _trContactSolve(pts, maxLift) {
+    const hp = window.hullProfile, sc = physics.scale || 1;
+    const L = Math.max(10, ((hp && hp.ready) ? hp.halfLen * 2 : 12) * sc);
+    const B = Math.max(3, (typeof flood !== 'undefined' && flood.B) || ((hp && hp.ready && hp.halfBeam) ? hp.halfBeam * 2 * sc : L / 8));
+    const iM = 1, iP = 1 / Math.pow(0.25 * L, 2), iR = 1 / Math.pow(0.35 * B, 2);
+    const cx = physics.cgWorldX || 0, cz = physics.cgWorldZ || 0, r = (physics.heading || 0) * Math.PI / 180;
+    const fx = Math.sin(r), fz = Math.cos(r), sx = Math.cos(r), sz = -Math.sin(r);
+    const C = [];
+    for (const p of pts) {
+        const b = worldSeabedAt(p.x, p.z);
+        if (b > -0.3) continue;                                       // 岸壁・陸（水面より上）は横から当たる所
+        const pen = b - p.y;
+        if (pen > 0.01) C.push({ pen, a: (p.x - cx) * fx + (p.z - cz) * fz, s: (p.x - cx) * sx + (p.z - cz) * sz });
     }
-    return lift;
+    if (!C.length) return 0;
+    let dy = 0, dP = 0, dR = 0, maxPen = 0;
+    for (const c of C) maxPen = Math.max(maxPen, c.pen);
+    // 何回か：いちばん深く入っている点を押し戻す（押し戻した分の動きで、ほかの点の入り方も変わる）
+    for (let it = 0; it < 8; it++) {
+        let best = null, bp = 0.005;
+        for (const c of C) { const pr = c.pen - (dy - c.a * dP + c.s * dR); if (pr > bp) { bp = pr; best = c; } }
+        if (!best) break;
+        const K = iM + best.a * best.a * iP + best.s * best.s * iR, J = bp / K;
+        dy += J * iM; dP -= best.a * J * iP; dR += best.s * J * iR;
+    }
+    // 1 フレームに動かす量の上限（残りは次のフレームで）
+    dy = Math.min(dy, maxLift);
+    dP = THREE.MathUtils.clamp(dP, -0.03, 0.03); dR = THREE.MathUtils.clamp(dR, -0.03, 0.03);
+    physics.y += dy; shipGroup.position.y += dy;
+    physics.pitch += dP; physics.roll += dR;
+    // 当たった点が底へ向かって動く速さを止める（同じ割合で、上下・縦・横の回る速さに分けて）
+    for (const c of C) {
+        const v = physics.vy - c.a * physics.vPitch + c.s * physics.vRoll;
+        if (v >= 0) continue;
+        const K = iM + c.a * c.a * iP + c.s * c.s * iR, J = -v / K;
+        physics.vy += J * iM; physics.vPitch -= c.a * J * iP; physics.vRoll += c.s * J * iR;
+    }
+    // 底との摩擦
+    physics.vPitch *= 0.9; physics.vRoll *= 0.9;
+    shipGroup.updateMatrixWorld();
+    return maxPen;
 }
 function _trSeabedLift(off) {
-    physics.groundLift = 0; physics.bedRest = false;
+    physics.groundLift = 0;
     if (typeof shipGroup === 'undefined' || !shipGroup || (window.sub && sub.applied > 0.5)) return;
+    shipGroup.updateMatrixWorld();
     const sunk = typeof flood !== 'undefined' && (flood.sunk || flood.sinking);
     if (sunk) {
-        const lift = _trSunkLift();
-        if (!(lift > 0.01)) return;
-        physics.groundLift = lift; physics.bedRest = !!flood.sunk;
-        physics.y += lift; shipGroup.position.y += lift;
-        if (physics.vy < 0) physics.vy = 0;
-        physics.vPitch *= 0.5; physics.vRoll *= 0.8; physics.speed *= 0.9;
-        shipGroup.updateMatrixWorld();
+        const pen = _trContactSolve(_trSunkWorldPts(), 5);
+        if (pen > 0.01) { physics.groundLift = pen; physics.speed *= 0.9; }
         return;
     }
     const x = physics.cgWorldX || 0, z = physics.cgWorldZ || 0, r = (physics.heading || 0) * Math.PI / 180;
     const fx = Math.sin(r), fz = Math.cos(r), sx = Math.cos(r), sz = -Math.sin(r);
     const ox = x + fx * off.a + sx * off.s, oz = z + fz * off.a + sz * off.s;
-    shipGroup.updateMatrixWorld();
     const M = shipGroup.matrixWorld.elements, scl = physics.scale || 1;
-    let lift = 0;
+    const pts = [];
     for (const p of _trHullPoints()) {
-        const px = ox + fx * p.a + sx * p.s, pz = oz + fz * p.a + sz * p.s;
-        const b = worldSeabedAt(px, pz);
-        if (b > -0.3) continue;
-        const keel = physics.y + M[1] * (p.s / scl) + M[9] * (p.a / scl) - p.d;
-        if (b - keel > lift) lift = b - keel;
+        pts.push({ x: ox + fx * p.a + sx * p.s, z: oz + fz * p.a + sz * p.s, y: physics.y + M[1] * (p.s / scl) + M[9] * (p.a / scl) - p.d });
     }
-    lift = Math.min(lift, worldShipDraft() * 0.9);
-    if (!(lift > 0.01)) return;
-    physics.groundLift = lift;
-    physics.y += lift; shipGroup.position.y += lift;
-    if (physics.vy < 0) physics.vy = 0;
-    // 底に乗っている間は、縦揺れ・横揺れも底との摩擦で止まっていく（浸水で傾こうとしても、底に押さえられる）
-    physics.vPitch *= 0.8; physics.vRoll *= 0.8;
-    shipGroup.updateMatrixWorld();
+    const pen = _trContactSolve(pts, worldShipDraft() * 0.9);
+    if (pen > 0.01) physics.groundLift = pen;
 }
 function _trCheckGrounding(t, dt) {
     const hp = window.hullProfile;
@@ -1264,7 +1290,6 @@ function _trCheckGrounding(t, dt) {
     // 外洋のまん中（近くに陸も港も無い）では調べない
     // （沈んでいく船は、海底に着くまで見る）
     if (typeof flood !== 'undefined' && (flood.sunk || flood.sinking) && terrain.depth < -physics.y + ((hp && hp.ready) ? hp.halfLen * 2 : 12) * (physics.scale || 1) + 40) _trSeabedLift(off);
-    else physics.bedRest = false;
     if (!terrain.near && !terrain.ports.size && terrain.depth > worldShipDraft() + 80) { terrain.grounded = false; terrain.good = { x, z, h, score: 0, hard: 0 }; _trGroundAttitude([], dt); return; }
     const hits = [];
     const score = _trHullScore(x, z, h, off, hits), hard = _trHullScore.hard;

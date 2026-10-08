@@ -191,7 +191,9 @@
 // 0.03.015.003 スクリューは水に浸かっている分しか効かない（波・浸水で船尾が浮くと空回り。ポッドも）。
 //               沈んだ船（自分の船も、他の船も）は海底に着いたらそこで止まる：先に着いた端を支点に残りが沈み、底に横たわる。
 //               測距儀・潜望鏡を覗いたまま視点のボタンで切り替えると、重ね表示と倍率が残っていたのを直した。
-var APP_VERSION = '0.03.015.003';
+// 0.03.015.004 船が海底に当たったとき、当たった点を支点に支える（上下・縦・横の傾きに、船の重さと回りにくさの割合で
+//               分けて押し戻す）。浸水して船首から沈んだ船が、船首で底に立ったまま重心ごと持ち上がって縦に立っていたのを直した。
+var APP_VERSION = '0.03.015.004';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

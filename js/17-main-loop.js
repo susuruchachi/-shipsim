@@ -508,9 +508,7 @@ function animate() {
             //  同じ速さで傾けてしまえるため、ここも縮小する)
             const maxAcc   = THREE.MathUtils.clamp(15.0 * massFactor, 2.0, 15.0);
             const maxAngVel = THREE.MathUtils.clamp(4.0 * massFactor, 0.5, 4.0);
-            // 沈没して海底に着いた船（44-world-terrain.js）：縦に立っていても、底に横たわるまでゆっくり倒れる
-            if (physics.bedRest) { physics.vPitch = -physics.pitch / 12; }
-            else physics.vPitch += THREE.MathUtils.clamp(accPitch, -maxAcc, maxAcc) * subDt;
+            physics.vPitch += THREE.MathUtils.clamp(accPitch, -maxAcc, maxAcc) * subDt;
             physics.vPitch  = THREE.MathUtils.clamp(physics.vPitch, -maxAngVel, maxAngVel);
             physics.pitch  += physics.vPitch * subDt;
             // （縦の傾きは、船首・船尾から沈むときに真っ直ぐ立つところ（90°）まで。それより先へは回らない）
