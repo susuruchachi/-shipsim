@@ -469,6 +469,11 @@ function _sgSettingsHTML(force) {
 
 // 毎フレーム（17-main-loop.js：updateSubmarine のあと）
 function updateSights(t, dt) {
+    // 視点のボタン（通常・固定・自由・ほかの見張り台）で直接切り替えたとき：測距儀・潜望鏡の重ね表示と倍率を戻す
+    //（updateSightAim は見張り台の視点の間しか呼ばれないので、ここで毎フレーム見る）
+    const vk = _sgViewKey();
+    if (sight.rf && (vk !== 'rangefinder' || cameraMode !== 'viewpoint')) sightRFView(false);
+    if (typeof sub !== 'undefined' && sub.view && (vk !== 'periscope' || cameraMode !== 'viewpoint') && typeof subScopeView === 'function') subScopeView(false);
     _sgMarkers();
     _sgOverlayTick();
     if (!sight._fsT || performance.now() - sight._fsT > 500) { sight._fsT = performance.now(); _sgFireStack(); }

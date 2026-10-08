@@ -68,6 +68,62 @@ function getPropSpinRate() {
 }
 
 // 推力の目標速度：今の回転数で押し出せる速度
+// ── スクリューが水に浸かっている割合（0〜1）──
+//  スクリューの円盤の中心の深さと半径から、水面より下にある分だけ推力が出る（波で船尾が持ち上がれば空回りする）。
+//  スクリューが見つからない船は、舵の位置（physics.rudderOffset）に半径 2m のスクリューがあるとして見る。
+//  位置（船の座標）と半径は 1 秒ごとに調べ直し、深さは毎回（前のフレームの船の姿勢で）測る
+const _propIm = { t: -1e9, pts: [], v: 1 };
+function _propImPoints() {
+    const pts = [];
+    if (typeof shipGroup === 'undefined' || !shipGroup) return pts;
+    shipGroup.updateMatrixWorld();
+    const inv = new THREE.Matrix4().copy(shipGroup.matrixWorld).invert();
+    const S = typeof _engScrews === 'function' ? _engScrews() : [];
+    for (const s of S) {
+        if (s.part && typeof analyzeScrewDisc === 'function') {
+            const d = analyzeScrewDisc(s.part); if (!d) continue;
+            const par = s.part.object.parent || shipGroup;
+            const w = d.center.clone().applyMatrix4(par.matrixWorld);
+            const rW = d.radius * (par.matrixWorld.getMaxScaleOnAxis() || 1);
+            pts.push({ p: w.applyMatrix4(inv), r: Math.max(0.3, rW) });
+        } else if (s.mesh) {
+            // 半径：羽根の大きさ（船の座標での左右・上下の広がり。軸は船首尾の向き）
+            const box = new THREE.Box3(), bb = new THREE.Box3(), m = new THREE.Matrix4();
+            s.mesh.traverse(o => {
+                if (!o.isMesh || !o.geometry) return;
+                if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+                bb.copy(o.geometry.boundingBox).applyMatrix4(m.multiplyMatrices(inv, o.matrixWorld)); box.union(bb);
+            });
+            if (box.isEmpty()) continue;
+            const c = new THREE.Vector3(), sz = new THREE.Vector3(); box.getCenter(c); box.getSize(sz);
+            const k = shipGroup.matrixWorld.getMaxScaleOnAxis() || 1;
+            pts.push({ p: c, r: Math.max(0.3, Math.max(sz.x, sz.y) / 2 * k) });
+        }
+    }
+    if (!pts.length && physics.rudderOffset) {
+        // スクリューの無い船：舵の前後位置の、船底から喫水の 4 割の高さ（喫水線より下）に
+        const D = typeof wtDims === 'function' ? wtDims() : null, wl = physics.waterlineOffsetY || 0;
+        const y = D && Number.isFinite(D.yBot) && D.yBot < wl ? D.yBot + (wl - D.yBot) * 0.4 : Math.min(physics.rudderOffset.y, wl - 0.3);
+        pts.push({ p: new THREE.Vector3(0, y, physics.rudderOffset.z), r: Math.max(0.3, Math.min(3, 0.15 * (physics.scale || 1))) });
+    }
+    return pts;
+}
+function propImmersion(t) {
+    if (typeof shipGroup === 'undefined' || !shipGroup || typeof getWaveHeight !== 'function') return 1;
+    const now = performance.now();
+    if (now - _propIm.t > 1000) { _propIm.t = now; _propIm.pts = _propImPoints(); }
+    if (!_propIm.pts.length) return (_propIm.v = 1);
+    const e = shipGroup.matrixWorld.elements;
+    let sum = 0;
+    for (const q of _propIm.pts) {
+        const x = q.p.x, y = q.p.y, z = q.p.z;
+        const wx = e[0] * x + e[4] * y + e[8] * z + e[12], wy = e[1] * x + e[5] * y + e[9] * z + e[13], wz = e[2] * x + e[6] * y + e[10] * z + e[14];
+        const depth = getWaveHeight(wx, wz, t, true) - wy;               // 中心の深さ[m]（＋：水の中）
+        sum += Math.max(0, Math.min(1, (depth + q.r) / (2 * q.r)));       // 円盤の水に入っている割合（おおよそ）
+    }
+    return (_propIm.v = sum / _propIm.pts.length);
+}
+window.propImmersion = propImmersion;
 function getPropThrustTargetSpeed() {
     return (physics.propRpm || 0) * Math.max(0.1, physics.maxSpeed || 1);
 }

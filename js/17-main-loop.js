@@ -162,8 +162,11 @@ function animate() {
         // （32-engine-propeller.js）。推力もこの回転数で決まるので、後進を
         // かけると先にスクリューが逆転し、その力で船が止まってから後ろへ進む。
         if (typeof updatePropRpm === 'function') updatePropRpm(subDt, isDesignMode);
-        const propTargetSpeed = (typeof getPropThrustTargetSpeed === 'function')
-            ? getPropThrustTargetSpeed() : physics.targetSpeed;
+        // スクリューは水の中にある分しか効かない（32-engine-propeller.js：波で船尾が浮く・浸水で船首が沈み船尾が上がるなど）。
+        // 水から出たスクリューは推力が出ないので、機関を止めたときと同じように水の抵抗で遅くなる
+        physics.propImmersion = (typeof propImmersion === 'function' && !isDesignMode) ? propImmersion(t) : 1;
+        const propTargetSpeed = ((typeof getPropThrustTargetSpeed === 'function')
+            ? getPropThrustTargetSpeed() : physics.targetSpeed) * physics.propImmersion;
         // 推進器の加速度（船首尾軸に沿った推力）。この後の heave 計算で、
         // 船体ピッチ角だけ傾けて鉛直成分も加えるために保持しておく。
         // 機関の馬力（56-engines.js）が見積もりより大きければ加速も速い
@@ -187,7 +190,7 @@ function animate() {
             physics.turnRate += (0.0 - physics.turnRate) * 3.0 * subDt;
         } else {
             // 左右の機関の推力の差でも回る（56-engines.js：左舷前進・右舷後進でその場で右へ回る）
-            const _twist = (typeof engineTwistDeg === 'function') ? engineTwistDeg() : 0;
+            const _twist = ((typeof engineTwistDeg === 'function') ? engineTwistDeg() : 0) * (physics.propImmersion ?? 1);
             physics.turnRate += (targetTurnRateDeg * rudderEffectiveness + _twist - physics.turnRate) * 3.0 * subDt;
             physics.heading += physics.turnRate * subDt;
         }
@@ -505,7 +508,9 @@ function animate() {
             //  同じ速さで傾けてしまえるため、ここも縮小する)
             const maxAcc   = THREE.MathUtils.clamp(15.0 * massFactor, 2.0, 15.0);
             const maxAngVel = THREE.MathUtils.clamp(4.0 * massFactor, 0.5, 4.0);
-            physics.vPitch += THREE.MathUtils.clamp(accPitch, -maxAcc, maxAcc) * subDt;
+            // 沈没して海底に着いた船（44-world-terrain.js）：縦に立っていても、底に横たわるまでゆっくり倒れる
+            if (physics.bedRest) { physics.vPitch = -physics.pitch / 12; }
+            else physics.vPitch += THREE.MathUtils.clamp(accPitch, -maxAcc, maxAcc) * subDt;
             physics.vPitch  = THREE.MathUtils.clamp(physics.vPitch, -maxAngVel, maxAngVel);
             physics.pitch  += physics.vPitch * subDt;
             // （縦の傾きは、船首・船尾から沈むときに真っ直ぐ立つところ（90°）まで。それより先へは回らない）

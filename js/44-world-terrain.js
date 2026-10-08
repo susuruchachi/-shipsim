@@ -1179,9 +1179,49 @@ function _trGroundAttitude(hits, dt) {
 // 船底を海底の上に乗せる：船体の点（船底の真ん中・舷の丸み）が海底より下に入っていれば、その分だけ船を持ち上げる
 //（描いている船の高さ physics.y から測る。縦・横の傾きは _trGroundAttitude。持ち上げると浮力が減るので、
 //  次のフレームでまた沈もうとして、海底に乗ったまま止まる。岸壁・陸（水面より上）は横から当たる所なので持ち上げない）
+// 沈没した船（63-flooding.js）：船の姿勢（縦に立つ・裏返る）のまま、船底と甲板の点を世界の座標にして、
+// いちばん深く海底に入った分だけ持ち上げる（喫水の 9 割までという上限は無し）。底に着いたら、縦の傾きは
+// 底に横たわるまでゆっくり戻す（17-main-loop.js：physics.bedRest）
+function _trSunkPoints() {
+    const D = typeof wtDims === 'function' ? wtDims() : null; if (!D) return [];
+    const key = [D.aS, D.aB, D.yBot, D.yDeck, physics.scale].join(',');
+    if (_trSunkPoints.c && _trSunkPoints.c.key === key) return _trSunkPoints.c.pts;
+    const pts = [];
+    for (let i = 0; i <= 8; i++) {
+        const a = D.aS + (D.aB - D.aS) * i / 8;
+        const hwB = typeof wtHW === 'function' ? wtHW(D.yBot + (D.yDeck - D.yBot) * 0.15, a) : 0;
+        const hwD = typeof wtHW === 'function' ? wtHW(D.yDeck, a) : 0;
+        pts.push([0, D.yBot, a], [hwB, D.yBot + (D.yDeck - D.yBot) * 0.15, a], [-hwB, D.yBot + (D.yDeck - D.yBot) * 0.15, a], [hwD, D.yDeck, a], [-hwD, D.yDeck, a]);
+    }
+    _trSunkPoints.c = { key, pts };
+    return pts;
+}
+function _trSunkLift() {
+    shipGroup.updateMatrixWorld();
+    const root = typeof wtRoot === 'function' ? wtRoot() : null;
+    const e = (root || shipGroup).matrixWorld.elements;
+    let lift = 0;
+    for (const q of _trSunkPoints()) {
+        const wx = e[0] * q[0] + e[4] * q[1] + e[8] * q[2] + e[12], wy = e[1] * q[0] + e[5] * q[1] + e[9] * q[2] + e[13], wz = e[2] * q[0] + e[6] * q[1] + e[10] * q[2] + e[14];
+        const b = worldSeabedAt(wx, wz);
+        if (b - wy > lift) lift = b - wy;
+    }
+    return lift;
+}
 function _trSeabedLift(off) {
-    physics.groundLift = 0;
+    physics.groundLift = 0; physics.bedRest = false;
     if (typeof shipGroup === 'undefined' || !shipGroup || (window.sub && sub.applied > 0.5)) return;
+    const sunk = typeof flood !== 'undefined' && (flood.sunk || flood.sinking);
+    if (sunk) {
+        const lift = _trSunkLift();
+        if (!(lift > 0.01)) return;
+        physics.groundLift = lift; physics.bedRest = !!flood.sunk;
+        physics.y += lift; shipGroup.position.y += lift;
+        if (physics.vy < 0) physics.vy = 0;
+        physics.vPitch *= 0.5; physics.vRoll *= 0.8; physics.speed *= 0.9;
+        shipGroup.updateMatrixWorld();
+        return;
+    }
     const x = physics.cgWorldX || 0, z = physics.cgWorldZ || 0, r = (physics.heading || 0) * Math.PI / 180;
     const fx = Math.sin(r), fz = Math.cos(r), sx = Math.cos(r), sz = -Math.sin(r);
     const ox = x + fx * off.a + sx * off.s, oz = z + fz * off.a + sz * off.s;
@@ -1222,6 +1262,9 @@ function _trCheckGrounding(t, dt) {
         terrain._sternWarn = worldSeabedAt(x - fx * HL * 0.9, z - fz * HL * 0.9) > -sternD - 3;
     }
     // 外洋のまん中（近くに陸も港も無い）では調べない
+    // （沈んでいく船は、海底に着くまで見る）
+    if (typeof flood !== 'undefined' && (flood.sunk || flood.sinking) && terrain.depth < -physics.y + ((hp && hp.ready) ? hp.halfLen * 2 : 12) * (physics.scale || 1) + 40) _trSeabedLift(off);
+    else physics.bedRest = false;
     if (!terrain.near && !terrain.ports.size && terrain.depth > worldShipDraft() + 80) { terrain.grounded = false; terrain.good = { x, z, h, score: 0, hard: 0 }; _trGroundAttitude([], dt); return; }
     const hits = [];
     const score = _trHullScore(x, z, h, off, hits), hard = _trHullScore.hard;

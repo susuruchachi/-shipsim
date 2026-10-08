@@ -135,6 +135,29 @@ function trafficShellHit(h, cal, uw) {
 window.trafficShellHit = trafficShellHit;
 
 // ── 毎フレーム：浸水・傾き・沈む・火災の煙 ──
+// 沈んでいく船が海底に着いた：先に着いた端（船首か船尾）は底に乗せたまま、残りが沈んで、両端が着いたらそこで止まる
+//（浅い所では、沈没船がそのまま海底に残る）
+function _tfdBed(S) {
+    const M = S.dmg;
+    if (typeof worldSeabedAt !== 'function' || typeof _tfHullOf !== 'function') return;
+    const H = _tfHullOf(S); if (!H) return;
+    const hl = S.L / 2;
+    const bedAt = (a) => -worldSeabedAt(H.x + H.fx * a, H.z + H.fz * a);                 // その点の水深[m]
+    // その点の船のいちばん低い所の深さ[m]（横に傾けば、船底でなく舷側が低くなる）
+    const low = M.d * Math.abs(Math.cos(M.heel)) + (M.B / 2) * Math.abs(Math.sin(M.heel));
+    const keelAt = (a) => low + M.sink + a * Math.tan(M.trim);
+    const dB = bedAt(hl), dS = bedAt(-hl), pB = keelAt(hl) - dB, pS = keelAt(-hl) - dS;
+    if (pB <= 0 && pS <= 0) return;
+    if (pB > 0 && pS > 0) {
+        // 両端が着いた：底の傾きのまま横たわる
+        M.trim = Math.atan((dB - dS) / S.L);
+        M.bedD = (dB + dS) / 2;
+        M.sink = Math.max(0, M.bedD - low);
+        M.bed = true; S.v = 0;
+        if (typeof _tfMsg === 'function') _tfMsg(`${S.name} が海底に着きました（水深 ${Math.round((dB + dS) / 2)}m）`);
+    } else if (pB > 0) M.trim = Math.atan((dB - low - M.sink) / hl);                        // 船首が着いた：船首を支点に船尾が沈む
+    else M.trim = Math.atan((low + M.sink - dS) / hl);                                      // 船尾が着いた
+}
 function _tfdStep(S, dt) {
     const M = S.dmg;
     // 漂う（機関を止めて、ゆっくり止まる）
@@ -145,11 +168,16 @@ function _tfdStep(S, dt) {
     if (M.sinkT >= 0) {
         // 沈んでいく：だんだん速く。重い方へ傾き、横にも
         M.sinkT += dt;
-        M.sink += dt * (0.04 + 0.012 * M.sinkT);
-        const tt = Math.sign(M.trimDir || M.trim || 1) * Math.min(0.75, 0.12 + M.sinkT * 0.004);
-        M.trim += (tt - M.trim) * Math.min(1, dt / 25);
+        if (!M.bed) {
+            M.sink += dt * (0.04 + 0.012 * M.sinkT);
+            const tt = Math.sign(M.trimDir || M.trim || 1) * Math.min(0.75, 0.12 + M.sinkT * 0.004);
+            M.trim += (tt - M.trim) * Math.min(1, dt / 25);
+            _tfdBed(S);
+        }
         const ht = Math.sign(M.side || 1) * (M.capsize ? 1.5 : 0.35);
         M.heel += (ht - M.heel) * Math.min(1, dt / (M.capsize ? 40 : 60));
+        // 海底に着いたあとも横に倒れていく：倒れた分、舷側を底に乗せたまま
+        if (M.bed) M.sink = Math.max(0, M.bedD - (M.d * Math.abs(Math.cos(M.heel)) + (M.B / 2) * Math.abs(Math.sin(M.heel))));
         // 油と浮いてくる物
         if (S.dPl < 6000 && typeof puffEmit === 'function' && S.mesh && Math.random() < dt * 2) {
             const p = S.mesh.position, r = Math.random() * S.L * 0.4, an = Math.random() * Math.PI * 2;

@@ -214,7 +214,7 @@ function shipExtraForces(C) {
         for (const E of engineList()) {
             const P = _mnvPod(E), T = E.rpm * Math.abs(E.rpm);
             if (!T) continue;
-            const f = T * _mnvPodCapN(E), a = P.az * _mnvRad, pos = _mnvEnginePos(E);
+            const f = T * _mnvPodCapN(E) * (physics.propImmersion ?? 1), a = P.az * _mnvRad, pos = _mnvEnginePos(E);   // 水から出たポッドは効かない
             const fs = f * Math.sin(a) * sideK, ff = f * Math.cos(a);
             Fs += fs;
             Mz += fs * pos.z * sc - ff * pos.x * sc;     // 左舷のポッドが前へ押す → 船首は右舷へ（Mz −）
