@@ -1788,6 +1788,13 @@ function updateAutopilot(t, dt) {
             // 速さ：タグが効く速さまで
             const cap = v > 4.5 ? 0 : v < 3.5 ? 1 : (autopilot.lastOrder === 0 ? 0 : 1);
             order = Math.min(order, cap);
+            // 向きを大きく変える所（出港した直後に川の中で回すなど）：ほとんど止まった速さで、タグに回してもらう
+            //（舵だけで回ると、大きな船は回り切る前に向かいの岸に当たる）
+            const eH = Math.abs(((_apHeadingForTrue(course) - physics.heading + 540) % 360) - 180);
+            if (ready && eH > 30) {
+                const turnCap = v > 1.5 ? -1 : v > 0.8 ? 0 : v < 0.3 ? 1 : (autopilot.lastOrder > 0 ? 1 : 0);
+                order = Math.min(order, turnCap);
+            }
             if (!ready && (narrowNow || narrowAhead < dStop * 1.2 + 300)) {
                 order = Math.min(order, 0);
                 if (v > 0.5 && (narrowNow || narrowAhead < dStop * 0.8)) order = -1;
@@ -1804,6 +1811,11 @@ function updateAutopilot(t, dt) {
     if (adv && Number.isFinite(adv.order)) order = Math.min(order, adv.order);
     if (adv && adv.dc && !wp.final) course = ((course + adv.dc) % 360 + 360) % 360;      // （右へ＋・追い越しは左へ−）
     if ((adv ? adv.why : '') !== (autopilot.trafficWhy || '')) { autopilot.trafficWhy = adv ? adv.why : ''; renderAutopilotPanel(); }
+    // 後ろへの行き足が残っていたら（タグなしの出港で後進して下がった直後など）、前進微速で止める。
+    // 以前は、付き添いのタグを待つ間などに機関を止めたまま後ろへ流れ続け、船尾から浅い所へ下がっていた
+    const sv = physics.speed || 0;
+    if (sv < -0.3 || (autopilot.sternBrake && sv < -0.05)) { autopilot.sternBrake = true; order = Math.max(order, 1); }
+    else autopilot.sternBrake = false;
     _apOrder(order);
     // 舵：針路のずれ（物理の向き）と回る速さで
     const want = _apHeadingForTrue(course);
@@ -1811,7 +1823,9 @@ function updateAutopilot(t, dt) {
     if (escorting) tugEscortAssist(-(autopilot.xt || 0), e, dt);        // xt ＋：線の左（左舷側）にいる → 右舷（−x）へ
     const big = Math.abs(e) > 25;
     const cmd = -(e * 1.2) + (physics.turnRate || 0) * 6;
-    _apHelm(Math.max(big ? -35 : -20, Math.min(big ? 35 : 20, cmd)), dt);
+    // 後ろへ動いている間は、前進のつもりの舵は逆に効くので、中央に
+    if ((physics.speed || 0) < -0.2) _apHelm(0, dt);
+    else _apHelm(Math.max(big ? -35 : -20, Math.min(big ? 35 : 20, cmd)), dt);
 }
 window.updateAutopilot = updateAutopilot;
 

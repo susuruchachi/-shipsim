@@ -194,7 +194,9 @@
 // 0.03.015.004 船が海底に当たったとき、当たった点を支点に支える（上下・縦・横の傾きに、船の重さと回りにくさの割合で
 //               分けて押し戻す）。浸水して船首から沈んだ船が、船首で底に立ったまま重心ごと持ち上がって縦に立っていたのを直した。
 // 0.03.015.005 係船金物を置いていない船でも、タグが索を取って引けるように（舷の甲板に取る）。タグでの離岸が「岸壁から離す」で止まっていた。
-var APP_VERSION = '0.03.015.005';
+// 0.03.015.006 タグなしの出港（オーシャン・ドックなど）で座礁していたのを直した：後ろへの行き足が残っていれば前進微速で止め、
+//               その間は舵を中央に。付き添いのタグがいて向きを大きく変えるときは、ほとんど止まった速さでタグに回してもらう。
+var APP_VERSION = '0.03.015.006';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
