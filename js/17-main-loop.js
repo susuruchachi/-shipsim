@@ -695,6 +695,7 @@ function animate() {
     if (typeof updateWatertight === 'function') updateWatertight();    // 水密隔壁の表示（62-watertight.js）
     if (typeof updateFlooding === 'function') updateFlooding(t, isDesignMode ? 0 : physicsDt);   // 浸水（63-flooding.js）
     if (typeof updateDamage === 'function') updateDamage(t, isDesignMode ? 0 : physicsDt);       // 穴の見た目・泡（64-damage.js）
+    if (typeof updateShipHits === 'function') updateShipHits(t, isDesignMode ? 0 : physicsDt);   // 他の船の浸水・沈没（65-ship-hits.js）
     if (typeof updateMarkerScales === 'function') updateMarkerScales();
     // 自動露出（30-auto-exposure.js）：目の慣れのように露出を少しずつ合わせる
     if (typeof applyAutoExposure === 'function') applyAutoExposure(t);

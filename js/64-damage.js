@@ -113,14 +113,26 @@ window.damageHole = damageHole;
 // ── 衝突（59-traffic.js の _tfContact から）──
 //  c：触れた所（世界の x・z）、SA・SB：他の船（SA が null なら自分の船と SB）、vn：近づく速さ[m/s]、mA・mB：重さ[kg]（動かない船は Infinity）
 function damageCollision(c, SA, SB, vn, mA, mB) {
-    if (SA || !(vn > 0.25)) return;              // （他の船どうしは 65 の traffic 側で）
+    if (!(vn > 0.25)) return;
     const mE = !Number.isFinite(mA) ? mB : !Number.isFinite(mB) ? mA : mA * mB / (mA + mB);
     if (!(mE > 0)) return;
     const E = 0.5 * mE * vn * vn / 1e6;            // 衝突のエネルギー[MJ]
-    const key = SB ? SB.id : 'x';
+    const key = (SA ? SA.id : 'P') + '-' + (SB ? SB.id : 'x');
     const now = (typeof traffic !== 'undefined' && traffic.t) || performance.now() / 1000;
     if (now - (damage.lastHit[key] ?? -1e9) < 10) return;
     damage.lastHit[key] = now;
+    // 他の船の側の穴（65-ship-hits.js）：当てられた舷側に
+    if (E >= 8 && typeof trafficDamage === 'function' && typeof _tfHullOf === 'function') {
+        for (const X of [SA, SB]) {
+            if (!X || X.st === 'gone') continue;
+            const H = _tfHullOf(X); if (!H) continue;
+            const dx = c.px - H.x, dz = c.pz - H.z, a = dx * H.fx + dz * H.fz, s = dx * H.sx + dz * H.sz;
+            const bowX = a > X.L * 0.42;
+            const ar = Math.min(25, 0.08 * Math.pow(E - 8, 0.75)) * (bowX ? 0.4 : 1);
+            trafficDamage(X, a, s, bowX ? X.d + 1 : Math.max(0.5, X.d * 0.6), ar, 'collision');
+        }
+    }
+    if (SA) return;                                  // （他の船どうし：自分の船は無事）
     const D = typeof wtDims === 'function' ? wtDims() : null;
     if (!D) return;
     const sc = physics.scale || 1, T = (D.yWL - D.yBot) * sc;

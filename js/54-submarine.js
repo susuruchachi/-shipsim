@@ -506,6 +506,7 @@ function _subUpdateTorps(dt) {
         const T = sub.torps[i];
         T.v = Math.min(T.vMax, T.v + 6 * dt);
         const r = T.h * Math.PI / 180, step = T.v * dt;
+        const px = T.x, py = T.y, pz = T.z;
         T.x += Math.sin(r) * step; T.z += Math.cos(r) * step; T.dist += step;
         const wave = typeof getWaveHeight === 'function' ? getWaveHeight(T.x, T.z, 0) : 0;
         const want = wave - T.run;
@@ -525,7 +526,12 @@ function _subUpdateTorps(dt) {
             }
         }
         let hit = null;
-        if (inWorld && worldSeabedAt(T.x, T.z) > T.y - 0.3) hit = '魚雷が岸（海底）に当たって爆発しました';
+        // 他の船に当たった（65-ship-hits.js：船底より深く走っていれば下をくぐる）
+        if (T.dist > 60 && typeof trafficHitSeg === 'function') {
+            const th = trafficHitSeg(px, py, pz, T.x, T.y, T.z, 1.5);
+            if (th && typeof trafficTorpedoHit === 'function') { trafficTorpedoHit(th); hit = `魚雷が ${th.S.name} に命中しました！`; }
+        }
+        if (!hit && inWorld && worldSeabedAt(T.x, T.z) > T.y - 0.3) hit = '魚雷が岸（海底）に当たって爆発しました';
         if (!hit && T.dist > 80) for (const tg of (window.tugs || [])) {
             if (Math.hypot(tg.pos.x - T.x, tg.pos.z - T.z) < TUG_LEN * 0.6) { hit = `魚雷がタグ${tg.id}に命中！（演習用の弾頭なので沈みません）`; tg.vel && tg.vel.set((Math.random() - 0.5) * 2, 0, (Math.random() - 0.5) * 2); break; }
         }

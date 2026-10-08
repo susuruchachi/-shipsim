@@ -1306,6 +1306,8 @@ function _tfStep(S, d, far) {
         case 'go': case 'anchoring':
             _tfMove(S, d, far);
             return;
+        case 'damaged':           // 被弾して漂っている・沈んでいく（65-ship-hits.js）
+            return;
     }
 }
 // 道すじの上を進む。near（25km 以内）のときは、ルール（_tfRules）で決めた減速 rv・横へのずれ offT に従う
@@ -1622,7 +1624,7 @@ function _tfPri(S) {
     return 2;
 }
 function _tfRules() {
-    const near = traffic.ships.filter(S => S.dPl < TF_NEAR && (S.st === 'go' || S.st === 'anchoring' || S.st === 'anchored' || S.st === 'berthing' || S.st === 'unberth' || S.st === 'holding'));
+    const near = traffic.ships.filter(S => S.dPl < TF_NEAR && (S.st === 'go' || S.st === 'anchoring' || S.st === 'anchored' || S.st === 'berthing' || S.st === 'unberth' || S.st === 'holding' || S.st === 'damaged'));
     const me = _tfPlayerAsShip();
     const all = me ? near.concat([me]) : near;
     // 前をふさぐ船を探すときは、埠頭に付いている船も
@@ -2095,8 +2097,10 @@ function _tfVisual(S, t, vis, night) {
     const oh = H(loc.x, loc.z);
     const pitch = Math.atan2(H(loc.x + fx * hl, loc.z + fz * hl) - H(loc.x - fx * hl, loc.z - fz * hl), 2 * hl);
     const roll = Math.atan2(H(loc.x + fz * hb, loc.z - fx * hb) - H(loc.x - fz * hb, loc.z + fx * hb), 2 * hb);
-    g.position.set(loc.x, oh * 0.8, loc.z);
-    g.rotation.set(-pitch * 0.7, yaw, roll * 0.6, 'YXZ');
+    // 浸水して沈んだ分・傾いた分（65-ship-hits.js）
+    const dp = S.dmg && typeof trafficDamagePose === 'function' ? trafficDamagePose(S) : null;
+    g.position.set(loc.x, oh * 0.8 - (dp ? dp.sink : 0), loc.z);
+    g.rotation.set(-pitch * 0.7 + (dp ? dp.trim : 0), yaw, roll * 0.6 - (dp ? dp.heel : 0), 'YXZ');
     g.visible = S.dPl < vis * 1.4 + S.L;
     // 影は近く（TF_SHADOW_NEAR）の船だけ落とす（影の地図に描く数を減らす）
     const sh = S.dPl < TF_SHADOW_NEAR;

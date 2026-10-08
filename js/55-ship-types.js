@@ -69,16 +69,24 @@ function navalFire() {
     const fr = (physics.heading || 0) * Math.PI / 180;
     const half = ((hp && hp.ready) ? hp.halfLen : 6) * sc;
     const range = Math.max(0.5, Math.min(G.range, naval.rangeKm)) * 1000;
-    // 弾道：狙った距離に落ちる仰角（空気の抵抗は無し。見やすいよう、飛ぶ時間は実際の 0.6 倍の速さで）
-    const g = 9.81, v = G.v, s2 = Math.min(1, range * g / (v * v)), el = 0.5 * Math.asin(s2);
+    // 弾道：狙った点（船の真ん中から、狙った向き・距離）へ、砲塔ごとに向けて撃つ。狙った所で水面の少し上
+    //（船の舷側の高さ）に来る仰角。砲は水面より高いので、その分を入れる
+    //（空気の抵抗は無し。見やすいよう、飛ぶ時間は実際の 0.6 倍の速さで）
+    const g = 9.81, v = G.v;
+    const wl0 = Number.isFinite(window._physicsWaveY) ? window._physicsWaveY : 0;
+    const aimX = physics.cgWorldX + Math.sin(r) * range, aimZ = physics.cgWorldZ + Math.cos(r) * range;
     const salvo = Math.max(1, Math.round(G.n));
     for (let i = 0; i < salvo; i++) {
         // 砲塔の位置：艦の前後に分けて置く
         const along = (i - (salvo - 1) / 2) * half * 0.5 + half * 0.15;
         const x = physics.cgWorldX + Math.sin(fr) * along, z = physics.cgWorldZ + Math.cos(fr) * along;
         const y = physics.y + top * 0.7;
-        const spread = (Math.random() - 0.5) * 0.004 * range;   // ばらつき
-        const vx = Math.sin(r) * Math.cos(el) * v, vz = Math.cos(r) * Math.cos(el) * v, vy = Math.sin(el) * v;
+        const ri = Math.atan2(aimX - x, aimZ - z), R = Math.max(50, Math.hypot(aimX - x, aimZ - z));
+        const dyT = (wl0 + 3) - y;                                                // 的の高さ − 砲の高さ
+        const disc = v * v * v * v - g * (g * R * R + 2 * dyT * v * v);
+        const el = disc >= 0 ? Math.atan((v * v - Math.sqrt(disc)) / (g * R)) : Math.PI / 4;
+        const spread = (Math.random() - 0.5) * 0.004 * R;   // ばらつき
+        const vx = Math.sin(ri) * Math.cos(el) * v, vz = Math.cos(ri) * Math.cos(el) * v, vy = Math.sin(el) * v;
         const mesh = new THREE.Mesh(_nvShellGeo(), _nvShellMat());
         mesh.position.set(x, y, z);
         scene.add(mesh);
@@ -139,13 +147,19 @@ function _nvUpdateShells(dt) {
         // 見やすいように、飛ぶ時間を縮める（同じ弧を 0.6 倍の時間で）
         const h = dt / 0.6;
         S.t += h;
+        const px = S.x, py = S.y, pz = S.z;
         S.x += S.vx * h + S.sideX * S.spread * h / 30; S.z += S.vz * h + S.sideZ * S.spread * h / 30;
         S.vy -= 9.81 * h; S.y += S.vy * h;
         S.mesh.position.set(S.x, S.y, S.z);
         let hit = null;
         const wave = typeof getWaveHeight === 'function' ? getWaveHeight(S.x, S.z, 0) : 0;
-        if (inWorld && worldSeabedAt(S.x, S.z) > S.y) hit = 'land';
-        else if (S.y < wave) hit = 'water';
+        // 他の船に当たった（65-ship-hits.js）
+        if (S.t > 0.5 && typeof trafficHitSeg === 'function') {
+            const th = trafficHitSeg(px, py, pz, S.x, S.y, S.z, 0.5);
+            if (th && typeof trafficShellHit === 'function') { trafficShellHit(th, S.cal); hit = 'ship'; _nvMsg(`${th.S.name} に命中！`); }
+        }
+        if (!hit && inWorld && worldSeabedAt(S.x, S.z) > S.y) hit = 'land';
+        else if (!hit && S.y < wave) hit = 'water';
         if (!hit && S.t > 1) for (const tg of (window.tugs || [])) if (Math.hypot(tg.pos.x - S.x, tg.pos.z - S.z) < 15 && S.y < 12) { hit = 'tug'; _nvMsg(`タグ${tg.id}の近くに着弾！（演習弾）`); break; }
         if (hit || S.t > 200) { _nvImpact(S, hit === 'water' ? 'water' : 'land'); scene.remove(S.mesh); naval.shells.splice(i, 1); }
     }
