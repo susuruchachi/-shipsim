@@ -185,7 +185,8 @@ function _trMaterialFine() {
     _trMatFine.onBeforeCompile = _trMaterial().onBeforeCompile;
     _trMatFine.customProgramCacheKey = () => 'worldTerrain';
     _trMatFine.userData = {}; noShipLightProbe(_trMatFine);
-    _trMatFine.polygonOffset = true; _trMatFine.polygonOffsetFactor = -2; _trMatFine.polygonOffsetUnits = -4;
+    // （画素ごとに奥行きを書く材質には polygonOffset が効かないので、奥行きそのものを 0.05% 手前に：02 の depthBiasMaterial）
+    depthBiasMaterial(_trMatFine, -0.0005);
     return _trMatFine;
 }
 // 高さ・傾き → 色
@@ -425,7 +426,7 @@ function _trQuayWalls(lines, H, n, step, cx, cz, detail) {
         const m = _trMaterialFine().clone();
         m.onBeforeCompile = _trMaterial().onBeforeCompile; m.customProgramCacheKey = () => 'worldTerrain';
         m.userData = {}; noShipLightProbe(m);
-        m.polygonOffset = true; m.polygonOffsetFactor = -4; m.polygonOffsetUnits = -8;
+        depthBiasMaterial(m, -0.001);
         _trQuayWalls.mat = m;
     }
     const mesh = new THREE.Mesh(geo, _trQuayWalls.mat);
@@ -825,26 +826,44 @@ function _trFarWaterMesh() {
         },
         // 深度は地形・船・近くの水面と同じ対数深度（04-scene-and-water-init.js の水面と同じ式）にそろえる。
         // 通常の深度のままだと、遠くでは地形の海底（対数深度）のほうが手前と判定されて、水面を突き抜けて見える
+        //（v0.03.015.007：三角形が 2km にもなるので、頂点だけで奥行きを決めると三角形の中で大きくずれる。
+        //  画素ごとに書ける所（標準の材質と同じ条件）では画素ごとに）
         vertexShader: `
             #ifdef USE_LOGDEPTHBUF
-                uniform float logDepthBufFC;
+                #ifdef USE_LOGDEPTHBUF_EXT
+                    varying float vFragDepthW;
+                #else
+                    uniform float logDepthBufFC;
+                #endif
             #endif
             varying vec3 vW;
             void main() {
                 vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz;
                 gl_Position = projectionMatrix * viewMatrix * w;
                 #ifdef USE_LOGDEPTHBUF
+                    #ifdef USE_LOGDEPTHBUF_EXT
+                        vFragDepthW = 1.0 + gl_Position.w;
+                    #else
                     if (projectionMatrix[2][3] == -1.0) {
                         gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
                         gl_Position.z *= gl_Position.w;
                     }
+                    #endif
                 #endif
             }`,
         fragmentShader: `
             uniform vec3 deepColor, shallowColor, sunDir, sunColor, waterFogColor, skyReflColor;
             uniform float waterFogDensity, uBloomDark;
             varying vec3 vW;
+            #if defined( USE_LOGDEPTHBUF ) && defined( USE_LOGDEPTHBUF_EXT )
+                uniform float logDepthBufFC;
+                varying float vFragDepthW;
+            #endif
             void main() {
+                // 近くの水面より 0.1% 奥（重なる所で近くの水面が勝つように）
+                #if defined( USE_LOGDEPTHBUF ) && defined( USE_LOGDEPTHBUF_EXT )
+                    gl_FragDepthEXT = log2(vFragDepthW * 1.001) * logDepthBufFC * 0.5;
+                #endif
                 if (uBloomDark > 0.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
                 vec3 viewDir = normalize(cameraPosition - vW);
                 vec3 n = vec3(0.0, 1.0, 0.0);

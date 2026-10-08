@@ -1035,10 +1035,17 @@ function createWater() {
             // 拡張自体が「extension is not supported」となり、gl_FragDepthEXTが未定義
             // identifierとしてシェーダーのコンパイル/リンクごと失敗 → 海面が丸ごと
             // 消える不具合の直接の原因だった）。
-            // Three.js側のUSE_LOGDEPTHBUF_EXTは無視し、常にEXT不使用の経路
-            // （gl_Position.zを直接エンコードするだけの、拡張が要らない安全な方式）を使う。
+            // v0.03.015.007: 頂点だけで奥行きを決める方式は、三角形の中を直線で補間するので、
+            // 大きな三角形ほど本当の奥行きからずれる。船・地形（標準の材質）は画素ごとに奥行きを
+            // 書くので、水際で船体や地形が透けたり隠れたりしていた。three.js が USE_LOGDEPTHBUF_EXT を
+            // 付けるとき（WebGL2 なら gl_FragDepth が必ず使える。標準の材質も同じ条件で使っている）は、
+            // 標準の材質と同じく画素ごとに書く。#extension は書かない（three.js に任せる）。
             #ifdef USE_LOGDEPTHBUF
-                uniform float logDepthBufFC;
+                #ifdef USE_LOGDEPTHBUF_EXT
+                    varying float vFragDepthW;
+                #else
+                    uniform float logDepthBufFC;
+                #endif
             #endif
             bool isPerspectiveMatrix(mat4 m) { return m[2][3] == -1.0; }
 
@@ -1453,10 +1460,14 @@ function createWater() {
                 // vScreenPosには通常の投影値を保持させたいのでここ（main末尾）で適用する。
                 // v153-fix3: EXT_frag_depthに依存しない経路のみを使う（上記コメント参照）。
                 #ifdef USE_LOGDEPTHBUF
+                    #ifdef USE_LOGDEPTHBUF_EXT
+                        vFragDepthW = 1.0 + gl_Position.w;
+                    #else
                     if (isPerspectiveMatrix(projectionMatrix)) {
                         gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
                         gl_Position.z *= gl_Position.w;
                     }
+                    #endif
                 #endif
             }
         `,
@@ -1519,6 +1530,9 @@ function createWater() {
             // v153-fix3: EXT_frag_depthに依存しない経路のみを使う。
             #ifdef USE_LOGDEPTHBUF
                 uniform float logDepthBufFC;
+                #ifdef USE_LOGDEPTHBUF_EXT
+                    varying float vFragDepthW;
+                #endif
             #endif
 
             // 点pがウォーターラインポリゴン内かを射線交差法で判定（現状未使用、将来用に保持）
@@ -1652,6 +1666,11 @@ function createWater() {
             }
 
             void main() {
+                // 画素ごとの対数深度（標準の材質と同じ式）。水面は 0.02% 奥へ（船体の水面下と際どいときに船体が勝つように。
+                // 画素ごとに奥行きを書くと polygonOffset は効かないので、その代わり）
+                #if defined( USE_LOGDEPTHBUF ) && defined( USE_LOGDEPTHBUF_EXT )
+                    gl_FragDepthEXT = log2(vFragDepthW * 1.0002) * logDepthBufFC * 0.5;
+                #endif
                 // ブルーム抽出パス：波の形のまま黒く塗るだけ（重い計算は飛ばす）
                 if (uBloomDark > 0.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
                 // v153-fix3: 対数深度は頂点シェーダー側でgl_Position.zに直接エンコード

@@ -196,7 +196,10 @@
 // 0.03.015.005 係船金物を置いていない船でも、タグが索を取って引けるように（舷の甲板に取る）。タグでの離岸が「岸壁から離す」で止まっていた。
 // 0.03.015.006 タグなしの出港（オーシャン・ドックなど）で座礁していたのを直した：後ろへの行き足が残っていれば前進微速で止め、
 //               その間は舵を中央に。付き添いのタグがいて向きを大きく変えるときは、ほとんど止まった速さでタグに回してもらう。
-var APP_VERSION = '0.03.015.006';
+// 0.03.015.007 重なる面が透ける・ちらつくのを直した：海面と遠くの海の奥行きを、船・地形と同じ画素ごとの対数深度に
+//               （頂点だけで決めていたので、大きな三角形の中でずれていた）。画素ごとに奥行きを書く材質には polygonOffset が
+//               効かないので、港の細かい地形・岸壁の縁・船体の穴の絵は、奥行きそのものを少し手前にずらす（depthBiasMaterial）。
+var APP_VERSION = '0.03.015.007';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

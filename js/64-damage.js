@@ -78,7 +78,8 @@ function damageDecalAt(a, p, y, area, kind) {
     const sc = physics.scale || 1;
     const q = _dmOnHull(a, p, y);
     const tk = kind === 'dent' ? 'dent' : kind === 'scorch' ? 'scorch' : 'hole';
-    const mat = new THREE.MeshStandardMaterial({ map: _dmTexture(tk), transparent: true, depthWrite: false, roughness: 0.9, metalness: 0.1, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+    const mat = new THREE.MeshStandardMaterial({ map: _dmTexture(tk), transparent: true, depthWrite: false, roughness: 0.9, metalness: 0.1 });
+    if (typeof depthBiasMaterial === 'function') depthBiasMaterial(mat, -0.0008);      // 船体の面より手前に（ちらつかないように）
     // 穴の絵は、穴そのものより少し大きく（焦げ・めくれた縁の分）
     const size = Math.max(1.2, Math.sqrt(Math.max(0.05, area)) * (tk === 'hole' ? 2.2 : 1.6)) / sc;
     const geo = new THREE.PlaneGeometry(size * 1.25, size);

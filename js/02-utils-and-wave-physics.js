@@ -172,6 +172,28 @@ function _currentPinOffsetScaled() {
 
 
 
+// ── 奥行きを少しずらす（重なる面のちらつき・透け対策）──
+//  対数深度バッファ（04-scene-and-water-init.js）で、画素ごとに奥行きを書く材質（WebGL2 の標準の材質）には
+//  polygonOffset が効かない。代わりに、画素の奥行きを「カメラからの距離 × (1 + rel)」の所にする
+//  （rel が負なら手前、正なら奥。−0.0005 なら 100m 先で 5cm 手前）。
+//  画素ごとに書けない環境では polygonOffset のほうが効くので、両方を付けておく
+function depthBiasMaterial(mat, rel) {
+    if (!mat || !rel) return mat;
+    const k = (1 + rel).toFixed(6);
+    const prev = mat.onBeforeCompile, prevKey = mat.customProgramCacheKey;
+    mat.onBeforeCompile = function (sh, r) {
+        if (typeof prev === 'function') prev.call(this, sh, r);
+        sh.fragmentShader = sh.fragmentShader.replace('#include <logdepthbuf_fragment>',
+            '#include <logdepthbuf_fragment>\n#if defined( USE_LOGDEPTHBUF ) && defined( USE_LOGDEPTHBUF_EXT )\n\tgl_FragDepthEXT = vIsPerspective == 0.0 ? gl_FragCoord.z : log2( vFragDepth * ' + k + ' ) * logDepthBufFC * 0.5;\n#endif');
+    };
+    mat.customProgramCacheKey = function () { return (typeof prevKey === 'function' ? prevKey.call(this) : '') + '|depthBias' + k; };
+    mat.polygonOffset = true;
+    mat.polygonOffsetFactor = rel < 0 ? -2 : 2; mat.polygonOffsetUnits = rel < 0 ? -4 : 4;
+    mat.needsUpdate = true;
+    return mat;
+}
+window.depthBiasMaterial = depthBiasMaterial;
+
 function sanitizePhysics() {
     const values = [
         physics.y, physics.vy, physics.speed, physics.targetSpeed,
