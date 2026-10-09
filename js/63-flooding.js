@@ -213,6 +213,7 @@ function _flAssign(h) {
 //  a・p・y：模型の座標（船体の座標）、area[m²]、kind：'torpedo'|'shell'|'collision'|'ground'|'test'、
 //  inner：二重底の内底板まで破れたか
 function floodAddHole(a, p, y, area, kind, inner) {
+    if (typeof damageInvincible === 'function' && damageInvincible(kind)) return;   // 無敵モード（64-damage.js）：座礁・衝突の穴はあかない
     if (flood.dirty || _flKey() !== flood.key) _flBuild();
     const h = { a, p, y, A: Math.max(0.01, area), kind: kind || 'test', inner: !!inner, t: (typeof performance !== 'undefined' ? performance.now() : 0), plug: 0 };
     _flAssign(h);

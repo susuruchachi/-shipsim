@@ -2333,8 +2333,8 @@ function _tfBuildMesh(S) {
     lamp(0xfff4e0, 0, mh, mastH > 0 ? foreZ : L * 0.3, [0, 0, 1], 112.5, 'mast');
     if (L > 50 && aftZ !== null) lamp(0xfff4e0, 0, mh * 0.9 + 4, aftZ, [0, 0, 1], 112.5, 'mast');
     const sideZ = look === 'liner' || look === 'steamer' ? L * 0.2 : look === 'container' || look === 'tanker' || look === 'bulk' ? -L * 0.36 : L * 0.25;
-    lamp(0xff2a1a, hb * 1.02, fb + 6, sideZ, [0.83, 0, 0.56], 56.75, 'side');
-    lamp(0x1aff6a, -hb * 1.02, fb + 6, sideZ, [-0.83, 0, 0.56], 56.75, 'side');
+    lamp(0xff2a1a, hb * 1.02, fb + 6, sideZ, [0.831, 0, 0.556], 56.25, 'side');
+    lamp(0x1aff6a, -hb * 1.02, fb + 6, sideZ, [-0.831, 0, 0.556], 56.25, 'side');
     lamp(0xfff4e0, 0, fb + 1.5, -hl, [0, 0, -1], 67.5, 'stern');
     lamp(0xfff4e0, 0, fb + 6, hl * 0.95, [0, 0, 1], 180, 'anchor');
     lamp(0xfff4e0, 0, fb + 4, -hl * 0.95, [0, 0, -1], 180, 'anchor');
@@ -2410,8 +2410,12 @@ function _tfVisual(S, t, vis, night) {
         q.sp.getWorldPosition(_tfV);
         _tfD3.set(q.dir[0], q.dir[1], q.dir[2]).applyQuaternion(g.quaternion);
         const tx = camP.x - _tfV.x, tz = camP.z - _tfV.z, dd = Math.hypot(tx, tz) || 1;
-        const cosA = (tx * _tfD3.x + tz * _tfD3.z) / dd, lim = Math.cos(q.half * _tfR);
-        const v = q.half >= 180 ? 1 : THREE.MathUtils.smoothstep(cosA, lim - 0.05, lim + 0.05);
+        // 法規の範囲（マスト灯 225°・舷灯 112.5°・船尾灯 135°）の中からだけ見える。範囲の外 2° で消える
+        let v = 1;
+        if (q.half < 180) {
+            const cosA = Math.max(-1, Math.min(1, (tx * _tfD3.x + tz * _tfD3.z) / (dd * (Math.hypot(_tfD3.x, _tfD3.z) || 1))));
+            v = Math.max(0, Math.min(1, 1 - (Math.acos(cosA) / _tfR - q.half) / 2));
+        }
         q.sp.material.opacity = on * v * Math.max(0, Math.min(1, 1.6 - dd / (vis * 1.2)));
         q.sp.scale.setScalar((0.01 + 0.012 * Math.min(1, dd / 1500)) * (q.k || 1));
     }
@@ -3333,7 +3337,7 @@ async function _tfLoadProto(v) {
         const fl = (v.cfg.funnels && v.cfg.funnels.list) || [], sym = v.cfg.funnels && v.cfg.funnels.symmetry;
         // 煙の出る所は煙突の口（12-bloom-and-deck-lighting-fx.js と同じ：y ＋ ry）
         for (const f of fl) { const y = (+f.y || 0) + (+f.ry || 1.2); funnels.push(new THREE.Vector3(+f.x || 0, y, +f.z || 0)); if (sym && Math.abs(+f.x) > 0.05) funnels.push(new THREE.Vector3(-f.x, y, +f.z || 0)); }
-        const nl = v.cfg.navlights || {}, n = (k, d) => Number.isFinite(+nl[k]) ? +nl[k] : d;
+        const nl = v.cfg.navlights || {}, n = (k, d) => nl[k] !== '' && nl[k] != null && Number.isFinite(+nl[k]) ? +nl[k] : d;
         const len = box.max.z - box.min.z, top = box.max.y;
         const lamps = {
             side: [n('sideX', (box.max.x - box.min.x) / 2), n('sideY', top * 0.6), n('sideZ', box.min.z + len * 0.6)],
@@ -3387,14 +3391,16 @@ function _tfBuildSavedMesh(S, P) {
         sp.position.set(p[0], p[1], p[2]); sp.renderOrder = 6; sp.userData.noBloom = true; wrap.add(sp);
         Lt.push({ sp, dir, half, key, k: 1 / P.S });
     };
+    // 灯は、その船の設定で置いた所（自分の船の航行灯と同じ位置）に出す
     const A = P.lamps;
     lamp(0xfff4e0, A.fore, [0, 0, 1], 112.5, 'mast');
     if (S.L > 50) lamp(0xfff4e0, A.aft, [0, 0, 1], 112.5, 'mast');
-    lamp(0xff2a1a, [Math.abs(A.side[0]), A.side[1], A.side[2]], [0.83, 0, 0.56], 56.75, 'side');
-    lamp(0x1aff6a, [-Math.abs(A.side[0]), A.side[1], A.side[2]], [-0.83, 0, 0.56], 56.75, 'side');
+    lamp(0xff2a1a, [Math.abs(A.side[0]), A.side[1], A.side[2]], [0.831, 0, 0.556], 56.25, 'side');
+    lamp(0x1aff6a, [-Math.abs(A.side[0]), A.side[1], A.side[2]], [-0.831, 0, 0.556], 56.25, 'side');
     lamp(0xfff4e0, A.stern, [0, 0, -1], 67.5, 'stern');
-    lamp(0xfff4e0, [0, A.fore[1] * 0.7 + P.wl * 0.3, P.cz + P.len * 0.45], [0, 0, 1], 180, 'anchor');
-    lamp(0xfff4e0, [0, A.stern[1], P.cz - P.len * 0.45], [0, 0, -1], 180, 'anchor');
+    // 停泊灯（全周の白）：前は前のマスト灯の所、後ろは船尾灯の所（前より低い）
+    lamp(0xfff4e0, A.fore, [0, 0, 1], 180, 'anchor');
+    lamp(0xfff4e0, A.stern, [0, 0, -1], 180, 'anchor');
     g.userData.lights = Lt;
     g.userData.funnels = P.funnels.map(f => f.clone());
     g.userData.funnelParent = wrap;

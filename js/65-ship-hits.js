@@ -52,6 +52,7 @@ function _tfdComp(M, a) {
 // 穴をあける：a（船の中の前後[m]、船首が＋）・side（＋左舷 −右舷）・yk（船底からの高さ[m]）・area[m²]
 function trafficDamage(S, a, side, yk, area, kind) {
     if (!S || S.st === 'gone' || S.st === 'off') return;
+    if (typeof damageInvincible === 'function' && damageInvincible(kind || 'collision')) return;   // 無敵モード（64-damage.js）
     const M = _tfdInit(S);
     const c = _tfdComp(M, a);
     M.holes.push({ c, a, y: Math.max(0, yk), A: Math.max(0.05, area), side: side < 0 ? -1 : 1, kind });

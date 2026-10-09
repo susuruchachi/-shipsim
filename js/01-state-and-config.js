@@ -281,19 +281,23 @@ let nextMeteorTime = 30.0 + Math.random() * 60.0;
 let auroraActive = 0.0;
 let nextAuroraDay = 25.0 + Math.random() * 10.0;
 
-// 時間進行速度: 0=等速(1:1), 1=×12, 2=×96(default), 3=×576, 4=×3456
-const TIME_SPEED_STEPS = [1, 12, 96, 576, 3456];
-let timeSpeedIndex = 2; // default ×96
-let timeFrozen = false;
+// 時間速度：時刻・船の動き・他の船・浸水など、すべてがこの倍率で進む（以前の「物理早送り倍率」もこれにまとめた）
+// 0=等速(1:1), 1=×2, 2=×5, 3=×10, 4=×20, 5=×50, 6=×100
+const TIME_SPEED_STEPS = [1, 2, 5, 10, 20, 50, 100];
+let timeSpeedIndex = 0; // default ×1（等速）
+let timeFrozen = false; // 時刻だけ止める（船などは時間速度のまま動く）
+function timeSpeedLabelText() {
+    const m = TIME_SPEED_STEPS[timeSpeedIndex] || 1;
+    return (m === 1 ? '×1 等速' : '×' + m) + (timeFrozen ? '（時刻固定）' : '');
+}
 
 // 航行灯の光源適応距離
 window.navLightDistance = 60;
 
 // ============================================================
 //  物理シミュレーション速度倍率
-//  1.0 = リアルタイム（等倍）  最大 20.0
+//  時間速度（TIME_SPEED_STEPS[timeSpeedIndex]）と同じ値。毎フレーム 17-main-loop.js で合わせる。
 //  加速度・慣性・旋回・波揺れ等、物理全体が一律に早送りされる。
-//  時刻進行(TIME_SPEED_STEPS)とは独立。
 // ============================================================
 let physicsSpeed = 1.0;
 

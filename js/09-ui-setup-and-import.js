@@ -176,7 +176,6 @@ function setupUIControls() {
     // （初期化時にdisabled状態を上書きされないようにするため）。
     if (typeof initWeatherUI === 'function') initWeatherUI();
     setupParamControl('turnrad-slider', 'turnrad-num', 'turnrad-dec', 'turnrad-inc', (v) => { physics.turningRadiusFactor = v; });
-    setupParamControl('physspeed-slider', 'physspeed-num', 'physspeed-dec', 'physspeed-inc', (v) => { physicsSpeed = v; });
 
     setupParamControl('maxspeed-slider', 'maxspeed-num', 'maxspeed-dec', 'maxspeed-inc', (v) => { physics.maxSpeed = v; });
     setupParamControl('scale-slider', 'scale-num', 'scale-dec', 'scale-inc', (v) => {
@@ -264,23 +263,19 @@ function setupUIControls() {
     bindSettingsSlider('rudy-slider', 'rudy-num', (v) => { physics.rudderOffset.y = v; if (rudderMarker) rudderMarker.position.y = v; if(rudder3DMesh) rudder3DMesh.position.y = v;});
     bindSettingsSlider('rudz-slider', 'rudz-num', (v) => { physics.rudderOffset.z = v; if (rudderMarker) rudderMarker.position.z = v; if(rudder3DMesh) rudder3DMesh.position.z = v;});
 
-    // 時間速度スライダー (0=等速 1=×12 2=×96 3=×576 4=×3456)
+    // 時間速度スライダー (0=等速 1=×2 2=×5 3=×10 4=×20 5=×50 6=×100)：時刻も船の動きも同じ倍率
     const timeSpeedSlider = $('time-speed-slider');
     const timeSpeedLabel = $('time-speed-label');
     function updateTimeSpeedLabel() {
-        if (!timeSpeedLabel) return;
-        if (timeFrozen) { timeSpeedLabel.textContent = '⏸ 固定'; return; }
-        const m = TIME_SPEED_STEPS[timeSpeedIndex];
-        timeSpeedLabel.textContent = m === 1 ? '×1 等速' : '×' + m;
+        if (timeSpeedLabel) timeSpeedLabel.textContent = timeSpeedLabelText();
     }
     if (timeSpeedSlider) {
+        timeSpeedSlider.max = TIME_SPEED_STEPS.length - 1;
         timeSpeedSlider.value = timeSpeedIndex;
         timeSpeedSlider.addEventListener('input', (e) => {
-            timeSpeedIndex = parseInt(e.target.value);
-            timeFrozen = false;
+            timeSpeedIndex = Math.max(0, Math.min(TIME_SPEED_STEPS.length - 1, parseInt(e.target.value) || 0));
+            physicsSpeed = TIME_SPEED_STEPS[timeSpeedIndex];
             updateTimeSpeedLabel();
-            const freezeBtn = $('time-freeze-btn');
-            if (freezeBtn) freezeBtn.style.background = 'rgba(255,255,255,0.2)';
         });
         const stopP = (e) => e.stopPropagation();
         timeSpeedSlider.addEventListener('touchstart', stopP);
@@ -291,6 +286,7 @@ function setupUIControls() {
         freezeBtn.addEventListener('click', () => {
             timeFrozen = !timeFrozen;
             freezeBtn.style.background = timeFrozen ? 'rgba(255,200,0,0.5)' : 'rgba(255,255,255,0.2)';
+            freezeBtn.textContent = timeFrozen ? '▶ 時刻を進める' : '⏸ 時刻を固定';
             updateTimeSpeedLabel();
         });
         freezeBtn.addEventListener('touchstart', (e) => e.stopPropagation());

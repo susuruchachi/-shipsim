@@ -60,6 +60,11 @@
 </div>
 
 <div id="ui-container">
+    <!-- 無敵モード（64-damage.js）：座礁・衝突で船体が傷つかない（自分の船・他の船とも） -->
+    <div class="interactive-ui" style="margin-bottom:10px;">
+        <button type="button" id="invincible-btn" onclick="invincibleToggle()" aria-pressed="false" style="width:100%;padding:8px;background:rgba(255,255,255,0.15);color:#ffffff;border:1px solid #ffcc33;border-radius:4px;font-weight:bold;cursor:pointer;">🛡 無敵モード：OFF</button>
+        <div style="font-size:10px;color:#9fb8c8;margin-top:4px;line-height:1.4;">座礁・衝突で船体が傷つきません（自分の船・他の船とも）。魚雷・砲弾は当たります</div>
+    </div>
     <!-- アプリとしてインストール（31-pwa-install.js。インストールできるときだけ表示） -->
     <div id="pwa-install-box" style="display:none;margin-bottom:10px;">
         <button id="pwa-install-btn" type="button" style="width:100%;padding:8px;background:#00ffcc;color:#0a1932;border:none;border-radius:4px;font-weight:bold;cursor:pointer;">📲 アプリとしてインストール</button>
@@ -88,11 +93,12 @@
     <div class="interactive-ui" style="margin-bottom:8px;">
         <div class="param-row" style="margin-bottom:4px;">
             <label style="color:#ffcc44; font-weight:bold; font-size:11px;">Time Speed (時間速度):</label>
-            <span id="time-speed-label" style="color:#ffcc44; font-size:11px; min-width:40px; text-align:right;">×96</span>
+            <span id="time-speed-label" style="color:#ffcc44; font-size:11px; min-width:40px; text-align:right;">×1 等速</span>
         </div>
-        <input type="range" id="time-speed-slider" min="0" max="4" step="1" value="2" class="param-slider" style="accent-color:#ffcc44;">
+        <input type="range" id="time-speed-slider" min="0" max="6" step="1" value="0" class="param-slider" style="accent-color:#ffcc44;">
+        <div style="font-size:10px; color:#888; margin-top:3px;">時刻も、船の動き（加速・旋回・揺れ）・他の船・浸水も、すべてこの速さで進みます</div>
         <div style="display:flex; gap:4px; margin-top:4px;">
-            <button type="button" id="time-freeze-btn" class="adjust-btn" style="width:100%; font-size:10px; padding:3px 0;">⏸ 固定</button>
+            <button type="button" id="time-freeze-btn" class="adjust-btn" style="width:100%; font-size:10px; padding:3px 0;">⏸ 時刻を固定</button>
         </div>
     </div>
 
@@ -267,19 +273,6 @@
             </div>
         </div>
         <input type="range" id="turnrad-slider" min="1.0" max="30.0" step="0.5" value="5.0" class="param-slider" style="accent-color: #00ffcc;">
-    </div>
-
-    <div class="interactive-ui">
-        <div class="param-row">
-            <label style="color:#ff9933; font-weight:bold;">⏩ Sim Speed (物理早送り倍率):</label>
-            <div class="param-inputs">
-                <button type="button" class="adjust-btn" id="physspeed-dec">-</button>
-                <input type="number" id="physspeed-num" min="1.0" max="20.0" step="0.5" value="1.0" class="param-num-input" style="color:#ff9933;">
-                <button type="button" class="adjust-btn" id="physspeed-inc">+</button>
-            </div>
-        </div>
-        <input type="range" id="physspeed-slider" min="1.0" max="20.0" step="0.5" value="1.0" class="param-slider" style="accent-color: #ff9933;">
-        <div style="font-size:10px; color:#888; margin-top:3px;">加速・慣性・旋回の時間軸を早める（質量感はそのまま）</div>
     </div>
 
     <div class="section-title">3D MODEL IMPORT</div>

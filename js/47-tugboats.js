@@ -107,7 +107,7 @@ function _tugBuild() {
         bulb.position.set(x, y, z); g.add(bulb);
         const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: _tugGlowTex(), color: c, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, sizeAttenuation: false, toneMapped: false }));
         sp.position.set(x, y, z); sp.scale.setScalar(0.018); sp.renderOrder = 6; sp.userData.noBloom = true; g.add(sp);
-        L.push({ bulb, sp, dir, half, key });
+        L.push({ bulb, sp, dir, half, key, c });
     };
     lamp(0xfff4e0, 0, 11.5, 3.6, [0, 0, 1], 112.5, 'mast');
     lamp(0xfff4e0, 0, 10.4, 3.6, [0, 0, 1], 112.5, 'tow1');
@@ -116,7 +116,7 @@ function _tugBuild() {
     lamp(0xfff4e0, 0, 3.2, -hl + 0.8, [0, 0, -1], 67.5, 'stern');
     lamp(0xffc030, 0, 4.0, -hl + 0.8, [0, 0, -1], 67.5, 'tow2');
     g.userData.lights = L;
-    for (const q of L) if (q.key === 'side') { const fw = new THREE.Vector3(0, 0, 1), sd = new THREE.Vector3(...q.dir).normalize(); q.dir = sd.clone().multiplyScalar(Math.sin(THREE.MathUtils.degToRad(56.25))).add(fw.multiplyScalar(Math.cos(THREE.MathUtils.degToRad(56.25)))).normalize().toArray(); q.half = 56.25 + 0.5; }
+    for (const q of L) if (q.key === 'side') { const fw = new THREE.Vector3(0, 0, 1), sd = new THREE.Vector3(...q.dir).normalize(); q.dir = sd.clone().multiplyScalar(Math.sin(THREE.MathUtils.degToRad(56.25))).add(fw.multiplyScalar(Math.cos(THREE.MathUtils.degToRad(56.25)))).normalize().toArray(); q.half = 56.25; }
     g.userData.funnels = [new THREE.Vector3(1.7, 7.9, -1.8), new THREE.Vector3(-1.7, 7.9, -1.8)];
     return g;
 }
@@ -146,10 +146,11 @@ function _tugLights(tg) {
         q.bulb.getWorldPosition(_tugV);
         _tugD.set(q.dir[0], q.dir[1], q.dir[2]).applyQuaternion(tg.g.quaternion);
         const toCam = camera.position.clone().sub(_tugV); toCam.y = 0;
-        const d = toCam.length() || 1, cosA = (toCam.x * _tugD.x + toCam.z * _tugD.z) / d;
-        const lim = Math.cos(THREE.MathUtils.degToRad(q.half));
-        const vis = THREE.MathUtils.smoothstep(cosA, lim - 0.05, lim + 0.05);
+        const d = toCam.length() || 1, cosA = Math.max(-1, Math.min(1, (toCam.x * _tugD.x + toCam.z * _tugD.z) / (d * (Math.hypot(_tugD.x, _tugD.z) || 1))));
+        // 法規の範囲の中だけ（範囲の外 2° で消える）。範囲の外からは灯具の玉も点いていないように暗く
+        const vis = Math.max(0, Math.min(1, 1 - (THREE.MathUtils.radToDeg(Math.acos(cosA)) - q.half) / 2));
         q.sp.material.opacity = on * vis;
+        q.bulb.material.color.copy(q.c).multiplyScalar(0.08 + 0.92 * vis);
         q.sp.scale.setScalar(0.012 + 0.012 * Math.min(1, d / 600));
     }
 }

@@ -10,9 +10,32 @@
 //  穴の見た目：当たった所の外板に、ぎざぎざにめくれた黒い穴（焦げ・さびの縁）を貼る（船に付いて動く）。
 //  穴から水が入っている間、水面の近くの穴のまわりは白く泡立つ。
 
-const damage = { decals: [], group: null, tex: {}, lastGround: -1e9, lastHit: {}, t: 0 };
+const damage = { decals: [], group: null, tex: {}, lastGround: -1e9, lastHit: {}, t: 0, invincible: false };
 window.damage = damage;
 const DM_RHO = 1025;
+
+// ── 無敵モード：座礁・衝突で船体が傷つかない（自分の船も、他の船も）。ぶつかって跳ね返る・乗り上げるのはそのまま ──
+//  （魚雷・砲弾は当たる。左のメニューのいちばん上のボタン。端末に覚えておく）
+try { damage.invincible = localStorage.getItem('susuru_invincible') === '1'; } catch (e) { /* ignore */ }
+function damageInvincible(kind) { return damage.invincible && (!kind || kind === 'collision' || kind === 'ground' || kind === 'dent'); }
+function invincibleSyncUI() {
+    const b = document.getElementById('invincible-btn');
+    if (!b) return;
+    b.textContent = damage.invincible ? '🛡 無敵モード：ON' : '🛡 無敵モード：OFF';
+    b.style.background = damage.invincible ? '#ffcc33' : 'rgba(255,255,255,0.15)';
+    b.style.color = damage.invincible ? '#0a1932' : '#ffffff';
+    b.setAttribute('aria-pressed', damage.invincible ? 'true' : 'false');
+}
+function invincibleToggle(on) {
+    damage.invincible = on === undefined ? !damage.invincible : !!on;
+    try { localStorage.setItem('susuru_invincible', damage.invincible ? '1' : '0'); } catch (e) { /* ignore */ }
+    invincibleSyncUI();
+    _dmMsg(damage.invincible ? '無敵モード：座礁・衝突で船体が傷つきません（自分の船・他の船とも）' : '無敵モード：切りました（座礁・衝突で穴があきます）');
+}
+window.invincibleToggle = invincibleToggle;
+window.invincibleSyncUI = invincibleSyncUI;
+window.damageInvincible = damageInvincible;
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', invincibleSyncUI); else invincibleSyncUI();
 
 function _dmMsg(s) {
     if (typeof flood !== 'undefined') { flood.msg = s; flood.msgT = 10; }
@@ -105,6 +128,7 @@ window.damageClearDecals = damageClearDecals;
 // ── 穴をあける（ここから浸水：63-flooding.js）──
 //  a・p・y：船体の座標。area[m²]。inner：二重底の内底板まで破れたか
 function damageHole(a, p, y, area, kind, inner) {
+    if (damageInvincible(kind)) return;
     const q = _dmOnHull(a, p, y);
     if (typeof floodAddHole === 'function') floodAddHole(q.a, q.p, q.y, area, kind, inner);
     damageDecalAt(q.a, q.p, q.y, area, kind);
@@ -114,7 +138,7 @@ window.damageHole = damageHole;
 // ── 衝突（59-traffic.js の _tfContact から）──
 //  c：触れた所（世界の x・z）、SA・SB：他の船（SA が null なら自分の船と SB）、vn：近づく速さ[m/s]、mA・mB：重さ[kg]（動かない船は Infinity）
 function damageCollision(c, SA, SB, vn, mA, mB) {
-    if (!(vn > 0.25)) return;
+    if (!(vn > 0.25) || damageInvincible('collision')) return;
     const mE = !Number.isFinite(mA) ? mB : !Number.isFinite(mB) ? mA : mA * mB / (mA + mB);
     if (!(mE > 0)) return;
     const E = 0.5 * mE * vn * vn / 1e6;            // 衝突のエネルギー[MJ]
@@ -168,7 +192,7 @@ window.damageCollision = damageCollision;
 // ── 座礁（44-world-terrain.js から）──
 //  hits：船底の当たった点（a・s：船の中の前後・横[m]（左舷が＋）、c：めり込み[m]）、v：当たったときの速さ[m/s]
 function damageGround(hits, v) {
-    if (!hits || !hits.length || !(v > 1.0)) return;
+    if (!hits || !hits.length || !(v > 1.0) || damageInvincible('ground')) return;
     const now = damage.gt || 0;                      // 物理の時間（早送りでも、8 秒に一度まで）
     if (now - damage.lastGround < 8) return;
     let best = null;

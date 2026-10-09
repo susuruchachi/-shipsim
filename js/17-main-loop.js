@@ -16,15 +16,16 @@ function animate() {
     const dt = Math.min(clock.getDelta(), _dtCap);
     if (dt <= 0) return;
     const t = clock.getElapsedTime();
-    // 物理早送り倍率を適用したdt（見た目・時刻はdtのまま、船の動き・加速・揺れだけ早送り）
-    const physicsDt = dt * (typeof physicsSpeed !== 'undefined' ? physicsSpeed : 1.0);
+    // 時間速度（時刻と物理を同じ倍率で：以前の物理早送り倍率は時間速度にまとめた）
+    physicsSpeed = TIME_SPEED_STEPS[timeSpeedIndex] || 1;
+    // 時間速度を適用したdt（船の動き・加速・揺れ・他の船など。見た目の動き（波の模様など）は dt のまま）
+    const physicsDt = dt * physicsSpeed;
 
-    // 時間速度倍率を適用（固定時は進めない、等速(1:1)はsec/secで実時間1日=24h）
+    // 時刻も同じ倍率で進める（固定時は進めない。等速(×1)は実時間1日=24h）
     if (!timeFrozen) {
         // dayDuration=15*60秒でゲーム内1日 → 等速(×1)は実時間86400秒(24h)で1日
         const baseSpeed = physics.dayDuration / 86400; // 通常速度の比率
-        const mult = TIME_SPEED_STEPS[timeSpeedIndex] || 96;
-        physics.gameTime += dt * baseSpeed * mult;
+        physics.gameTime += physicsDt * baseSpeed;
     }
     physics.dayProgress = (physics.gameTime / physics.dayDuration) % 1;
     // 月齢は日付と時刻から（16-daynight-and-telegraph.js の暦）。時間が進めば月齢も進む
@@ -82,11 +83,11 @@ function animate() {
         $('time-slider').value = currentHour;
         $('time-num').value = currentHour.toFixed(1);
     }
-    // time-speed-label を timeFrozen 状態で常時更新
+    // time-speed-label を常時更新
     const tsl = $('time-speed-label');
-    if (tsl && !timeFrozen) {
-        const m = TIME_SPEED_STEPS[timeSpeedIndex];
-        tsl.textContent = m === 1 ? '×1 等速' : '×' + m;
+    if (tsl && typeof timeSpeedLabelText === 'function') {
+        const s = timeSpeedLabelText();
+        if (tsl.textContent !== s) tsl.textContent = s;
     }
 
     const isDesignMode = $('settings-panel').classList.contains('open');
@@ -116,7 +117,7 @@ function animate() {
 
     // ============================================================
     // 物理サブステップ
-    // physicsSpeed(早送り倍率)を上げて1フレームあたりのphysicsDtが大きくなると、
+    // physicsSpeed(時間速度)を上げて1フレームあたりのphysicsDtが大きくなると、
     // 横揺れ/縦揺れ/上下動のばね-ダンパー系や旋回追従の積分が数値的に発散し、
     // 「船が空を飛ぶ」「船の回転軸が暴れ出す」といった破綻を起こしていた。
     // これは「stiffなばね系を粗い時間刻みでオイラー積分する」典型的な数値不安定化。

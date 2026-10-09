@@ -58,7 +58,6 @@ function collectShipConfig() {
             chopStrength: getVal('chop-num'),
             windDir: getVal('winddir-num'),
             windSpeed: getVal('windspd-num'),
-            physicsSpeed: typeof physicsSpeed !== 'undefined' ? physicsSpeed : 1.0,
         },
         model: {
             offx: getVal('offx-num'), offy: getVal('offy-num'), offz: getVal('offz-num'),
@@ -254,11 +253,7 @@ function applyShipConfig(cfg) {
     physics.chopStrength  = chopV;
     setVal('winddir-num', p.windDir); setVal('winddir-slider', p.windDir);
     setVal('windspd-num', p.windSpeed); setVal('windspd-slider', p.windSpeed);
-    if (p.physicsSpeed != null) {
-        physicsSpeed = p.physicsSpeed;
-        setVal('physspeed-num', p.physicsSpeed);
-        setVal('physspeed-slider', p.physicsSpeed);
-    }
+    // （以前の船の設定にある physicsSpeed＝物理早送り倍率は使わない。時間速度にまとめた）
 
     const m = cfg.model || {};
     setVal('offx-num', m.offx); setVal('slider-offx', m.offx);
