@@ -656,6 +656,15 @@ function _haAxialTug(use, eA, vA, massKg) {
     // 目標へ向かう速さ（近いほどゆっくり）に合わせて、前へ引くか後ろへ引くか（行き過ぎそうなら逆へ引いて止める）
     const vAd0 = Math.abs(eA) < 5 ? 0 : Math.sign(eA) * Math.min(0.6, 0.012 * Math.abs(eA));
     const fwd = vAd0 - vA > 0, st = tugStations();
+    // 引く所（船首・船尾の先）が陸・浅い所にかかるとき（両舷とも回り込めないときも）は、前後には引かせず機関だけで寄せる
+    //（桟橋の間の奥へ入るとき、船首の先へ回ろうとしたタグが浅い所に乗り上げて帰ってしまい、横へ寄せるタグが足りなくなっていた）
+    {
+        const D = _haDims(), h = physics.heading * _haRad, sg = fwd ? 1 : -1;
+        const fx = Math.sin(h) * sg, fz = Math.cos(h) * sg, sx = Math.cos(h), sz = -Math.sin(h);
+        const bad = (a, s) => _tugStaticBlocked(physics.cgWorldX + fx * a + sx * s, physics.cgWorldZ + fz * a + sz * s);
+        const r0 = D.HL + 8 + TUG_LEN / 2;
+        if (bad(r0, 0) || bad(r0 + 20, 0) || (bad(D.HL + 5, D.hw + 15) && bad(D.HL + 5, -D.hw - 15))) { harborAuto.axId = null; return null; }
+    }
     let best = use.find(t => t.id === harborAuto.axId && t.dir === (fwd ? 'fwd' : 'aft')) || null;
     if (!best) {
         let bz = -Infinity;
@@ -795,7 +804,7 @@ function updateHarborAuto(t, dt) {
     if ((typeof keys !== 'undefined' && (keys.a || keys.d)) || (typeof _br !== 'undefined' && _br.wheelDrag)) { harborAutoStop('手で舵を取ったので、自動の離着岸を止めました'); return; }
     const P = harborAuto.plan;
     harborAuto.phaseT += dt;
-    const next = (ph, msg) => { harborAuto.phase = ph; harborAuto.phaseT = 0; _haMsg(msg); };
+    const next = (ph, msg) => { harborAuto.phase = ph; harborAuto.phaseT = 0; harborAuto.sideGo = false; _haMsg(msg); };
     const TL = _haTugs();
     if (!TL.length) { harborAutoStop('タグがいなくなったので止めました'); return; }
     // 離岸の最初（岸壁から離す）は沖側の舷のタグだけで押し引きするので、そのタグがそろったかで決める
@@ -835,9 +844,25 @@ function updateHarborAuto(t, dt) {
             harborAuto.remain = Math.abs(e.eA);
             if (Math.abs(e.eA) < 12 && Math.abs(e.eS) < 5 && Math.abs(e.eY) < 2 && Math.abs(physics.speed || 0) < 0.3) next('side', `${P.port.name}：タグで岸壁へ寄せています`);
         } else if (harborAuto.phase === 'side') {
-            const e = _haControl(P.berth, dt, { vA: 0.3, vS: 0.35, r: 0.003, openOnly: true, aTol: 10 });
-            harborAuto.remain = Math.abs(e.eS);
-            if (Math.abs(e.eS) < 0.8 && Math.abs(e.eA) < 15 && Math.abs(e.eY) < 1.5 && Math.abs(e.vS) < 0.06 && Math.abs(physics.speed || 0) < 0.15) {
+            // 沖側の舷のタグが、船首寄りと船尾寄りの両方で持ち場に着く（付き直しの途中でない）までは（3 分まで）、横へは寄せずにその場で待つ。
+            // （前の段で前後に引いていたタグが付き直している間に、真ん中の 1 隻だけで押し始めると向きを保てず、
+            //   桟橋の間（84番埠頭）では 18° 回って船尾が奥の浅い所に当たっていた）
+            const st = tugStations(), hlS = ((window.hullProfile && hullProfile.ready) ? hullProfile.halfLen : 6) * 0.2;
+            const zOf = (q) => { const s2 = st.find(x => x.key === q.station); return s2 ? s2.z : 0; };
+            const OS = TL.filter(q => _haSide(q) !== -P.open), OW = OS.filter(q => q.state === 'on');
+            const lack = (f) => OS.some(q => f(zOf(q))) && !OW.some(q => f(zOf(q)));
+            //（一度寄せ始めたら、タグが押す⇄引くで付き直す間も待たない。待つ間も前後（機関）は岸壁の前の位置へ合わせ続ける）
+            const hold = !harborAuto.sideGo && harborAuto.phaseT < 180 && (lack(z => z > hlS) || lack(z => z < -hlS));
+            if (!hold) harborAuto.sideGo = true;
+            let tgt = P.berth;
+            if (hold) {
+                const hr = physics.heading * _haRad, fx = Math.sin(hr), fz = Math.cos(hr);
+                const eA0 = (P.berth.x - physics.cgWorldX) * fx + (P.berth.z - physics.cgWorldZ) * fz;
+                tgt = { x: physics.cgWorldX + fx * eA0, z: physics.cgWorldZ + fz * eA0, h: P.berth.h };
+            }
+            const e = _haControl(tgt, dt, { vA: 0.3, vS: 0.35, r: 0.003, openOnly: true, aTol: 10 });
+            harborAuto.remain = hold ? harborAuto.remain : Math.abs(e.eS);
+            if (!hold && Math.abs(e.eS) < 0.8 && Math.abs(e.eA) < 15 && Math.abs(e.eY) < 1.5 && Math.abs(e.vS) < 0.06 && Math.abs(physics.speed || 0) < 0.15) {
                 _tugShip.vSway = 0; _tugShip.yawRate = 0; physics.speed = 0; physics.turnRate = 0;
                 _apOrder(0);
                 _haMakeLines(P);

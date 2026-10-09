@@ -734,7 +734,13 @@ async function autopilotStart(port) {
                     _apMsg(`もやい綱を放し、舵と機関で岸壁から離れています（${back ? '後進で下がってから' : '船首を沖へ振ってから前進で'}、${port.name} へ）`);
                     return;
                 }
-                autopilot.selfDepart = { port, moved: 0, need, dx: ux, dz: uz, v: 0, hOut: plan.hOut };
+                // ドック・桟橋の間：回す所へ斜めにまっすぐ行くと、奥の角や隣の桟橋に掛かるので、まず横へ真ん中の線まで出て、
+                // 線に沿ってまっすぐ外へ（回す所が線から外れていれば、入口の外の線の上から）回す所へ
+                const legs = plan.dock && plan.mid && T ? [plan.mid, plan.align, T].filter(Boolean) : null;
+                if (legs) {
+                    const L0 = legs.shift(), n0 = Math.max(0.01, Math.hypot(L0.x - physics.cgWorldX, L0.z - physics.cgWorldZ));
+                    autopilot.selfDepart = { port, moved: 0, need: n0, dx: (L0.x - physics.cgWorldX) / n0, dz: (L0.z - physics.cgWorldZ) / n0, v: 0, hOut: plan.hOut, legs };
+                } else autopilot.selfDepart = { port, moved: 0, need, dx: ux, dz: uz, v: 0, hOut: plan.hOut };
                 _apMsg(`もやい綱を放し、サイドスラスターで岸壁から離れています（${port.name} へ）`);
                 return;
             }
@@ -1598,6 +1604,10 @@ function updateAutopilot(t, dt) {
     }
     if (autopilot.selfDepart) {
         const S = autopilot.selfDepart, d = Math.min(2, Math.max(0, dt || 0));      // （dt は物理の時間。早送りの倍率は掛かっている）
+        if (S.need - S.moved <= 0.01 && S.legs && S.legs.length) {
+            const L = S.legs.shift(), n = Math.max(0.01, Math.hypot(L.x - physics.cgWorldX, L.z - physics.cgWorldZ));
+            Object.assign(S, { moved: 0, need: n, dx: (L.x - physics.cgWorldX) / n, dz: (L.z - physics.cgWorldZ) / n });
+        }
         const left = S.need - S.moved;
         if (left > 0.01) {
             S.v = Math.min(S.moved < 25 ? 0.6 : 1.6, S.v + 0.08 * d, Math.max(0.15, left * 0.08));
