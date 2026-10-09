@@ -558,11 +558,14 @@ function _tfLanePump() {
         else traffic.lanes.set(q.a.key + '|' + q.b.key, { fail: true });
         if (slot) slot.state = pts ? 'ok' : 'fail';
     };
-    // 深い船（喫水 11m）で通れる道を探し、無ければ浅い船（6m）の道
-    worldPlanRoute({ lat: q.a.lat, lon: q.a.lon }, { lat: q.b.lat, lon: q.b.lon }, { draft: 11, hw: 25 })
-        .then(pts => done(pts, 11))
-        .catch(() => worldPlanRoute({ lat: q.a.lat, lon: q.a.lon }, { lat: q.b.lat, lon: q.b.lon }, { draft: 6, hw: 15 })
-            .then(pts => done(pts, 6)).catch(() => done(null)));
+    // いちばん深い船（喫水 12m：コンテナ船・タンカー）でも通れる道（喫水 13m）を探し、無ければ 11m、6m の道。
+    //（以前は 11m の道からで、喫水が 10m より深い船（大きな客船・タンカーなど）は「この船には浅い」となって、どこへも出られず
+    //  埠頭に止まったままだった。航路の道は、喫水＋1m の余裕で使う：_tfPlanVoyage）
+    const A = { lat: q.a.lat, lon: q.a.lon }, B = { lat: q.b.lat, lon: q.b.lon };
+    worldPlanRoute(A, B, { draft: 13, hw: 25 })
+        .then(pts => done(pts, 13))
+        .catch(() => worldPlanRoute(A, B, { draft: 11, hw: 25 }).then(pts => done(pts, 11))
+            .catch(() => worldPlanRoute(A, B, { draft: 6, hw: 15 }).then(pts => done(pts, 6)).catch(() => done(null))));
 }
 
 // ════════════════════════════════════════════════════════════════

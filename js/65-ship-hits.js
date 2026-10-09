@@ -230,9 +230,73 @@ function _tfdStep(S, dt) {
     M.heel += (heelT - M.heel) * Math.min(1, dt / 30);
     if (frac > 0.98) {
         M.sinkT = 0;
+        // （手当てをして航海を続けていた船も、沈みはじめたら機関を止める）
+        if (S.st !== 'damaged') { S.st0 = S.st; S.st = 'damaged'; S.steps = null; }
         M.capsize = Math.abs(M.heel) > 0.25 || Math.random() < 0.25;
         if (typeof _tfMsg === 'function') _tfMsg(`${S.name} が沈みはじめました`);
     }
+}
+// ── 応急の手当て（ダメージ・コントロール）──
+//  乗組員が穴をふさぎ（防水マット・角材。小さい穴から。4m² より大きい穴はふさげない）、ポンプで汲み出す。
+//  沈む心配が無く、浸水が止まり（穴がふさがった・水の量が落ち着いた）、火も消えたら、また機関をかけて航海を続ける。
+//  水が残っている間は、その分遅く。すっかり汲み出したら元どおり。
+//  （以前は、軽くぶつかって小さな穴があいただけでも、機関を止めたまま、いつまでも漂っていた）
+const TFD_PLUG_RATE = 0.004;   // 1 秒にふさげる穴の面積[m²]（1 分で 0.24m²）
+const TFD_PLUG_MAX = 4;        // これより大きい穴はふさげない[m²]
+const TFD_PUMP = 0.25;         // 汲み出す量[m³/秒]
+function _tfdControl(S, dt) {
+    const M = S.dmg;
+    if (!M || M.sinkT >= 0 || !(dt > 0) || typeof traffic === 'undefined') return;
+    const since = traffic.t - (S.hitT ?? -1e9);
+    if (since < 20) { M.stableT = 0; return; }                  // 当たった直後は、まだ手当てを始めない
+    let cap = TFD_PLUG_RATE * dt;
+    for (const h of M.holes.filter(h => h.A > 0 && h.A <= TFD_PLUG_MAX).sort((a, b) => a.A - b.A)) { const q = Math.min(h.A, cap); h.A -= q; cap -= q; if (cap <= 0) break; }
+    M.holes = M.holes.filter(h => h.A > 1e-3);
+    let pc = TFD_PUMP * dt;
+    for (const c of M.comps.slice().sort((a, b) => b.v - a.v)) { const q = Math.min(c.v, pc); c.v -= q; pc -= q; if (pc <= 0) break; }
+    // 水の量が落ち着いたか（ふさげない穴があっても、区画が満ちて入らなくなれば）
+    const m = M.mass, dm = Math.abs(m - (M.mPrev ?? m)) / dt;
+    M.mPrev = m;
+    M.stableT = dm < 60 ? (M.stableT || 0) + dt : 0;
+    const frac = m / Math.max(1, M.reserve);
+    if (S.st === 'damaged' && frac < 0.55 && !M.fires.length && since > 60 && (!M.holes.length || M.stableT > 120)) _tfdResume(S, frac);
+    // 穴が無く、水もほとんど汲み出した：元どおり
+    if (S.st !== 'damaged' && !M.holes.length && m < 2000 && !M.fires.length) {
+        if (S.vSea0) S.vSea = S.vSea0;
+        S.dmg = null;
+    } else if (S.st !== 'damaged' && S.vSea0) S.vSea = S.vSea0 * Math.max(0.4, 1 - frac);
+}
+// 漂って外れた所から、もとの道すじへ戻る：道すじの上のいちばん近い所（S.s）と、そこからの横のずれ（S.off：右が＋）。
+// 1.5km より離れていれば戻らない（道すじを引き直す）
+function _tfdRejoin(S) {
+    const P = S.path; if (!P || !P.pts || P.pts.length < 2 || !P.cum || typeof _tfEN !== 'function') return false;
+    let best = null;
+    for (let k = 0; k < P.pts.length - 1; k++) {
+        const a = P.pts[k], sg = _tfEN(a, P.pts[k + 1]), rl = _tfEN(a, S), l2 = sg.e * sg.e + sg.n * sg.n;
+        if (!(l2 > 0)) continue;
+        const u = Math.max(0, Math.min(1, (rl.e * sg.e + rl.n * sg.n) / l2)), dx = rl.e - sg.e * u, dy = rl.n - sg.n * u, d = Math.hypot(dx, dy);
+        if (!best || d < best.d) { const L = Math.sqrt(l2); best = { d, k, s: P.cum[k] + u * L, off: (dx * sg.n - dy * sg.e) / L }; }
+    }
+    if (!best || best.d > 1500) return false;
+    S.s = Math.max(0, Math.min(P.total - 1, best.s)); S.k = best.k; S.off = best.off; S.offT = 0; S.pushV = 0;
+    return true;
+}
+function _tfdResume(S, frac) {
+    const st0 = S.st0;
+    S.blockBy = null; S.steps = null;
+    if (S.follow) S.st = 'follow';
+    else if (st0 === 'berth' && S.port) { S.st = 'berth'; S.t = Math.max(S.t || 0, 60); }
+    else if (st0 === 'anchored') { S.st = 'anchored'; S.t = Math.max(S.t || 0, 30); }
+    else if ((st0 === 'go' || st0 === 'anchoring') && S.path && _tfdRejoin(S)) S.st = st0;
+    else {
+        // 漂って道すじから外れたので、今の所から道すじを引き直す（行き先はそのまま）
+        if (S.mPort && typeof _tfSlotFree === 'function') { _tfSlotFree(S.mPort, S.id); S.mPort = null; }
+        if (st0 === 'unberth' || st0 === 'berthing') S.port = null;
+        S.st = 'placed'; S.t = 0; S.path = null; S.replanPt = null; S.anch = null;
+    }
+    if (!S.vSea0) S.vSea0 = S.vSea;
+    S.vSea = S.vSea0 * Math.max(0.4, 1 - (frac || 0));
+    if (typeof _tfMsg === 'function') _tfMsg(`${S.name}：浸水を食い止めたので、機関をかけて航海を続けます`);
 }
 function _tfdSmoke(S, dt) {
     const M = S.dmg;
@@ -256,7 +320,8 @@ function updateShipHits(t, dt) {
     for (let i = shipHits.list.length - 1; i >= 0; i--) {
         const S = shipHits.list[i];
         if (!S.dmg || S.st === 'gone' || S.st === 'off' || (typeof traffic !== 'undefined' && !traffic.ships.includes(S))) { shipHits.list.splice(i, 1); continue; }
-        if (dt > 0) _tfdStep(S, dt);
+        if (dt > 0) { _tfdStep(S, dt); _tfdControl(S, dt); }
+        if (!S.dmg) { shipHits.list.splice(i, 1); continue; }
         _tfdSmoke(S, Math.min(0.2, dt));
     }
 }

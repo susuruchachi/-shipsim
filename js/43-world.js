@@ -1357,7 +1357,7 @@ function _worldKindChanged() {
         if (typeof renderTugPanel === 'function') renderTugPanel();
     }
     if (window._tugCrumbs) _tugCrumbs.length = 0;
-    _wm.base = null; _wm.detail = null; _wm.detailKey = ''; _wm.sel = null; _wm.selPt = null;
+    _wm.base = null; _wm.detail = null; _wm.detailKey = ''; _wm.sel = null; _wm.selPt = null; _wm.selLh = null;
     if (typeof renderAutopilotPanel === 'function') renderAutopilotPanel();
 }
 // 世界を選ぶ：'gen'（作った世界）／'real'（現実世界。key：REAL_WORLDS）。前にいた所があればそこから、無ければ最初の港から
@@ -1938,10 +1938,11 @@ function _wmPickList(p, cv) {
         const s = _wmToScreen(q.lat, q.lon, cv), d = Math.hypot(s.x - p.x, s.y - p.y);
         if (d < 22) out.push({ k: 'p' + q.ports[0].id, port: q, d });
     }
+    if (!_wm.draft && _wm.zoom >= 6 && typeof lighthousePickAt === 'function') for (const h of lighthousePickAt(p, (L) => _wmToScreen(L.lat, L.lon, cv), 14)) out.push({ k: 'l' + h.L.id, lh: h.L, d: h.d });
     return out.sort((a, b) => a.d - b.d);
 }
 // 今選んでいる印の鍵（重なった印を順に選ぶときの、今どれか）
-function _wmSelKey() { return _wm.selShip != null ? 's' + _wm.selShip : _wm.sel ? 'p' + _wm.sel.ports[0].id : null; }
+function _wmSelKey() { return _wm.selShip != null ? 's' + _wm.selShip : _wm.selLh ? 'l' + _wm.selLh.id : _wm.sel ? 'p' + _wm.sel.ports[0].id : null; }
 function _wmTap(p) {
     const cv = document.getElementById('wp-canvas');
     // 船・港の印が重なっているときは、同じ所をもう一度押すたびに次の印へ（押した所に近い順。15 秒たったら最初から）
@@ -1952,8 +1953,11 @@ function _wmTap(p) {
     const pick = cands.find(c => c.k === order[i]) || cands[0] || null;
     _wm.tapCycle = cands.length > 1 ? { sig, order, x: p.x, y: p.y, i, n: cands.length, t: performance.now(), cur: pick.k } : null;
     // 他の船（59-traffic.js）：速力・どこからどこへ・追うボタン
-    if (pick && pick.ship) { _wm.sel = null; _wm.selPt = null; _wm.selShip = pick.ship.id; _wmShowInfo(); worldMapRedraw(true); return; }
+    if (pick && pick.ship) { _wm.sel = null; _wm.selPt = null; _wm.selLh = null; _wm.selShip = pick.ship.id; _wmShowInfo(); worldMapRedraw(true); return; }
     _wm.selShip = null;
+    // 灯台（57-lighthouses.js）：名前・灯質・高さ
+    if (pick && pick.lh) { _wm.sel = null; _wm.selPt = null; _wm.selLh = pick.lh; _wmShowInfo(); worldMapRedraw(true); return; }
+    _wm.selLh = null;
     const best = pick && pick.port ? pick.port : null;
     _wm.sel = best;
     // 港でない所：その海域を選ぶ（自動航行の行き先にできる）
@@ -1969,18 +1973,30 @@ function _wmTap(p) {
     _wmShowInfo();
     worldMapRedraw(true);
 }
+// 灯台の説明（57-lighthouses.js）
+function _wmLighthouseHTML(L) {
+    const ll = world.mode === 'world' ? worldShipLatLon() : null;
+    const dist = ll ? `今の場所から ${(worldDistance(ll.lat, ll.lon, L.lat, L.lon) / 1852).toFixed(1)} 海里` : '';
+    const style = { white: '白い塔', redband: '赤と白の帯の塔', blackband: '黒と白の帯の塔', blackband2: '黒と白の帯の塔', granite: '御影石の塔', red: '赤い塔', nab: '円筒の塔（海の中の砦）' }[L.style] || '塔';
+    return `<div class="wp-pname"><span style="color:#ff5ad0">✦</span> ${L.name}</div>
+        <div class="wp-pmeta">灯台・${L.rock ? '海の中の岩の上' : '岬の上'}・${style}（高さ ${L.h}m）<br>
+        灯質：${typeof lighthouseCharText === 'function' ? lighthouseCharText(L) : L.ch}<br>
+        ${worldFmtLatLon(L.lat, L.lon)}　${dist}</div>
+        <div class="wp-pbtns"><button onclick="_wm.selLh=null;_wmShowInfo();worldMapRedraw(true)">閉じる</button></div>`;
+}
 // 重なった印を選んだときは、パネルの上に「ここに n つ重なっています（i/n）」
 function _wmShowInfo() {
     _wmShowInfo0();
     const el = document.getElementById('wp-info'), T = _wm.tapCycle;
     if (!el || !T || el.style.display === 'none' || T.cur !== _wmSelKey()) return;
-    el.insertAdjacentHTML('afterbegin', `<div class="wp-pmeta" style="opacity:.85">🔁 ここに ${T.n} 個の印（船・港）が重なっています。同じ所をもう一度押すと次へ（${T.i + 1}/${T.n}）</div>`);
+    el.insertAdjacentHTML('afterbegin', `<div class="wp-pmeta" style="opacity:.85">🔁 ここに ${T.n} 個の印（船・港・灯台）が重なっています。同じ所をもう一度押すと次へ（${T.i + 1}/${T.n}）</div>`);
 }
 function _wmShowInfo0() {
     const el = document.getElementById('wp-info');
     if (!el) return;
     const G = _wm.sel;
     if (!G && _wm.selShip != null && typeof trafficShipInfoHTML === 'function') { el.style.display = 'block'; el.innerHTML = trafficShipInfoHTML(_wm.selShip); return; }
+    if (!G && _wm.selLh) { el.style.display = 'block'; el.innerHTML = _wmLighthouseHTML(_wm.selLh); return; }
     if (!G && _wm.draft && typeof trafficDraftHTML === 'function') { el.style.display = 'block'; el.innerHTML = trafficDraftHTML(); return; }
     if (!G && _wm.selPt) { _wmShowPointInfo(el, _wm.selPt); return; }
     if (!G) { el.style.display = 'none'; return; }
@@ -2203,6 +2219,11 @@ function worldMapRedraw(quick) {
     } else if (!_wm.portsBusy) {
         _wm.portsBusy = true;
         setTimeout(() => { worldBuildPorts(); _wm.portsBusy = false; worldMapRedraw(true); }, 30);
+    }
+    // 灯台（57-lighthouses.js）：海峡・沿岸が見えるくらいに拡大したら。名前は もっと拡大したら
+    if (typeof lighthouseDrawMap === 'function' && _wm.zoom >= 6) {
+        lighthouseDrawMap(g, (L) => { const s = _wmToScreen(L.lat, L.lon, cv); return (s.x < -20 || s.x > W + 20 || s.y < -20 || s.y > H + 20) ? null : s; },
+            { chart: _wm.chart, label: _wm.zoom >= 40 ? 'full' : _wm.zoom >= 15 ? 'name' : null, size: _wm.zoom >= 15 ? 1 : 0.8 });
     }
     // 自動航行の航路（49-autopilot.js）
     const rp = (typeof autopilotRoutePoints === 'function') ? autopilotRoutePoints() : null;

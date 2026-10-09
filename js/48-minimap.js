@@ -190,6 +190,15 @@ function _mmDraw() {
             g.restore();
         }
     }
+    // 灯台（57-lighthouses.js）：名前は半径 20km 以下のとき
+    if (typeof lighthouseDrawMap === 'function' && world.mode === 'world') {
+        lighthouseDrawMap(g, (L) => {
+            const loc = worldUnitToLocal(worldLatLonToUnit(L.lat, L.lon));
+            if (!Number.isFinite(loc.x)) return null;
+            const q = toS(loc.x, loc.z);
+            return Math.hypot(q.x, q.y) > c - 4 ? null : q;
+        }, { chart: _wm.chart, label: viewR <= 20000 ? 'name' : null, size: 0.8, rot });
+    }
     // 他の船（59-traffic.js）
     if (typeof trafficDrawMinimap === 'function' && world.mode === 'world') trafficDrawMinimap(g, toS, k, c, rot);
     // 自動航行の航路

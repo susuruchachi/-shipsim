@@ -177,3 +177,67 @@ function updateLighthouses(t) {
     }
 }
 window.updateLighthouses = updateLighthouses;
+
+// ════════════════════════════════════════════════════════════════
+//  地図（世界地図・ミニマップ）に灯台を描く
+// ════════════════════════════════════════════════════════════════
+//  海図の灯台の印（赤紫の光の炎の形＋位置の点）。海図でない地図では黄色の光。夜は灯質どおりに光る（閃光は光った瞬間だけ明るく）。
+//  名前と灯質（例：Fl(2) 15s）は、拡大したときだけ
+function lighthouseMapOn() { return !!(window.world && world.kind === 'real'); }
+// 灯質の言葉（例：閃光 2 回・15 秒ごと）
+function lighthouseCharText(L) {
+    const C = _lhParse(L.ch), kind = { Fl: '閃光', Oc: '明暗', Iso: '等明暗', Q: '急閃光' }[C.type] || '閃光';
+    return `${kind}${C.n > 1 ? ` ${C.n} 回` : ''}・${C.period} 秒ごと（${L.ch.replace(/\s+([\d.]+)$/, ' $1s')}）`;
+}
+// 今（地図を描く時）光っているか（0〜1）。昼は光らない
+function _lhMapLit(L, t, night) {
+    if (night < 0.3) return 0;
+    const C = L._C || (L._C = _lhParse(L.ch));
+    if (C.type === 'Oc' || C.type === 'Iso') return _lhSteady(C, t);
+    const ph = ((t % C.period) + C.period) % C.period;
+    for (let k = 0; k < C.n; k++) if (ph >= k * 1.2 && ph < k * 1.2 + 0.5) return 1;
+    return 0.15;
+}
+// g：描く所、toS(L) → {x, y}（画面の点。描かないなら null）、o：{ chart, label, size, rot }
+function lighthouseDrawMap(g, toS, o) {
+    if (!lighthouseMapOn()) return;
+    o = o || {};
+    const t = performance.now() / 1000, night = typeof lightingNightFactor === 'number' ? lightingNightFactor : 0;
+    const sz = o.size || 1;
+    for (const L of LIGHTHOUSES) {
+        const s = toS(L); if (!s) continue;
+        const lit = _lhMapLit(L, t, night);
+        g.save(); g.translate(s.x, s.y); if (o.rot) g.rotate(-o.rot);
+        // 光の炎（位置の点から右上へ）
+        g.save(); g.rotate(Math.PI / 5);
+        g.beginPath(); g.moveTo(0, 0); g.bezierCurveTo(-4 * sz, -6 * sz, -2.5 * sz, -12 * sz, 0, -14 * sz); g.bezierCurveTo(2.5 * sz, -12 * sz, 4 * sz, -6 * sz, 0, 0); g.closePath();
+        g.fillStyle = o.chart ? `rgba(192,32,138,${0.75 + 0.25 * lit})` : `rgba(255,${210 + 40 * lit},${60 + 160 * lit},${0.8 + 0.2 * lit})`;
+        g.strokeStyle = o.chart ? 'rgba(255,255,255,0.9)' : 'rgba(10,25,50,0.85)'; g.lineWidth = 1;
+        g.fill(); g.stroke();
+        g.restore();
+        // 夜：光っている瞬間のにじみ
+        if (lit > 0.5) {
+            const gr = g.createRadialGradient(0, 0, 0, 0, 0, 10 * sz);
+            gr.addColorStop(0, 'rgba(255,250,220,0.9)'); gr.addColorStop(1, 'rgba(255,240,200,0)');
+            g.fillStyle = gr; g.beginPath(); g.arc(0, 0, 10 * sz, 0, Math.PI * 2); g.fill();
+        }
+        // 位置の点（岩の上の灯台は黒い丸）
+        g.fillStyle = o.chart ? '#16283c' : '#ffffff'; g.strokeStyle = o.chart ? '#ffffff' : '#0a1932'; g.lineWidth = 1;
+        g.beginPath(); g.arc(0, 0, (L.rock ? 2.4 : 1.8) * sz, 0, Math.PI * 2); g.fill(); g.stroke();
+        if (o.label) {
+            const txt = o.label === 'full' ? `${L.name}　${L.ch.replace(/\s+([\d.]+)$/, ' $1s')}` : L.name;
+            g.font = `${o.label === 'full' ? 10 : 9}px sans-serif`; g.textBaseline = 'middle';
+            g.lineWidth = 3; g.strokeStyle = o.chart ? 'rgba(255,255,255,0.85)' : 'rgba(6,24,40,0.75)'; g.strokeText(txt, 7 * sz, 5 * sz);
+            g.fillStyle = o.chart ? '#8a1663' : '#ffe9a8'; g.fillText(txt, 7 * sz, 5 * sz);
+        }
+        g.restore();
+    }
+}
+// 地図の点 p（画面）の近く（r 点以内）の灯台
+function lighthousePickAt(p, toS, r) {
+    if (!lighthouseMapOn()) return [];
+    const out = [];
+    for (const L of LIGHTHOUSES) { const s = toS(L); if (!s) continue; const d = Math.hypot(s.x - p.x, s.y - p.y); if (d < (r || 14)) out.push({ L, d }); }
+    return out;
+}
+Object.assign(window, { lighthouseDrawMap, lighthousePickAt, lighthouseCharText, lighthouseMapOn });
