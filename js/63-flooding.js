@@ -462,7 +462,7 @@ function floodRepair() {
     flood.holes = [];
     for (const c of flood.comps) c.vol = 0;
     flood.massKg = 0; flood.torqueP = 0; flood.rollBias = 0; flood.heel = 0; flood.deckCap = false; window._wtDeckCap = false;
-    flood.sinking = false; flood.sunk = false; flood.capsized = 0; flood.rev++;
+    flood.sinking = false; flood.sunk = false; flood.capsized = 0; flood.bedT = 0; flood.settle = false; flood.rev++;
     if (typeof damageClearDecals === 'function') damageClearDecals();
     // 沈んでいたら水面へ戻す
     physics.vy = 0; physics.vPitch = 0; physics.vRoll = 0; physics.pitch = 0; physics.roll = 0;

@@ -77,6 +77,47 @@ function _uwEnsureOverlay() {
     return el;
 }
 
+// 点 p（ワールド）が自分の船の船体の中（船底より上・主甲板より下で、その高さの船体の輪郭の内側）か。
+// 船内の視点が喫水線より下にあっても、水中の見た目・こもった音にしない（浸水した区画の水の中は別）
+const _uwEnds = { k0: 0, k1: 0, f: 0, sternAlong: 0, bowAlong: 0 }, _uwSpan = { lo: 0, hi: 0, tt: 0 };
+function _uwHullLocal(p) {
+    const hp = window.hullProfile, shape = hp && hp.shape;
+    if (!hp || !hp.ready || !shape || !shape.ready || typeof physics === 'undefined' || typeof hullShapeEndsAtY !== 'function') return null;
+    const S = Math.max(0.25, physics.scale || 1);
+    const hRad = (physics.heading || 0) * Math.PI / 180;
+    const tR = typeof _wakeAxisRad === 'function' ? _wakeAxisRad(hRad) : hRad;
+    const o = typeof _hullOriginWorld === 'function' ? _hullOriginWorld(physics.cgWorldX, physics.cgWorldZ, tR, S) : { x: physics.cgWorldX, z: physics.cgWorldZ };
+    const sn = Math.sin(tR), cs = Math.cos(tR), dx = p.x - o.x, dz = p.z - o.z;
+    const alongW = dx * sn + dz * cs, perpW = dx * cs - dz * sn;
+    const sinP = Math.sin(physics.pitch || 0), cosP = Math.cos(physics.pitch || 0), sinR = Math.sin(physics.roll || 0);
+    const originY = (physics.y || 0) - (physics.waterlineOffsetY || 0) * S;
+    // 04-scene-and-water-init.js の updateHullWaterlinePolygon と同じ高さの式を、船体の座標の高さについて解いたもの
+    const y = (p.y - originY + alongW * sinP - perpW * sinR * cosP) / S;
+    return { a: alongW / S, p: perpW / S, y };
+}
+function _uwInsideHull(p) {
+    const L = _uwHullLocal(p); if (!L) return null;
+    const hp = window.hullProfile, shape = hp.shape;
+    if (Number.isFinite(hp.deckY) && L.y > hp.deckY) return null;
+    if (L.y < shape.levelY[shape.kFirst]) return null;
+    hullShapeEndsAtY(shape, L.y, _uwEnds);
+    if (!(L.a > _uwEnds.sternAlong && L.a < _uwEnds.bowAlong)) return null;
+    const u = (L.a - _uwEnds.sternAlong) / Math.max(1e-6, _uwEnds.bowAlong - _uwEnds.sternAlong);
+    return Math.abs(L.p) < hullShapeHwAtU(shape, _uwEnds.k0, _uwEnds.k1, _uwEnds.f, u, _uwSpan) ? L : null;
+}
+// 船の中の点 L が、浸水した区画の水の中か（63-flooding.js）
+function _uwInFloodWater(L) {
+    if (typeof flood === 'undefined' || !flood.comps || !flood.comps.length || typeof _flCompAt !== 'function' || typeof _flState !== 'function') return false;
+    const sc3 = Math.pow(physics.scale || 1, 3);
+    for (const db of [false, true]) {
+        const i = _flCompAt(L.a, L.p, L.y, db);
+        const c = i >= 0 ? flood.comps[i] : null;
+        if (c && c.vol > 0 && L.y >= c.y0 - 0.01 && L.y <= (c.y1 !== undefined ? c.y1 : Infinity) && _flState(c, sc3).y > L.y) return true;
+    }
+    return false;
+}
+window.cameraInsideHull = () => (typeof camera !== 'undefined' && camera) ? !!_uwInsideHull(camera.position) : false;
+
 // 毎フレーム呼ぶ。updateDayNightCycle() より後、描画より前。
 function updateUnderwater(t) {
     _uwSaved = null;
@@ -95,7 +136,12 @@ function updateUnderwater(t) {
     const designMode = !!(panel && panel.classList.contains('open'));
 
     // 水面をまたぐ所をぼかす。波で±数cm出入りしても点滅しない。
-    const amount = designMode ? 0 : _uwSmoothstep(-UW_SURFACE_BLEND, UW_SURFACE_BLEND, depth);
+    let amount = designMode ? 0 : _uwSmoothstep(-UW_SURFACE_BLEND, UW_SURFACE_BLEND, depth);
+    // 船の中（喫水線より下の船内）は水の中ではない。浸水した区画の水の中だけ水中の見た目・音にする
+    if (amount > 0.001) {
+        const L = _uwInsideHull(cam.position);
+        if (L && !_uwInFloodWater(L)) amount = 0;
+    }
     window.underwaterAmount = amount;
     window.underwaterDepth  = Math.max(0, depth);
 

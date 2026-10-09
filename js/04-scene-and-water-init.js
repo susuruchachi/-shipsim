@@ -498,6 +498,8 @@ function createWater() {
         // 船体から大きくはみ出し、大きい船では細すぎて見えなかった。
         // 船体サイズに比例させる（updateHullWaterlinePolygonで毎フレーム更新）。
         hullFoamWidth:   { value: 1.1 },
+        // 船の中に水面を出さない：喫水線の輪郭の内側で、縁からこの距離[m]より内側の水面を描かない（負なら描く）
+        hullHoleMargin:  { value: -1.0 },
     });
 
     // ── GPU波・引き波（Kelvin wake）計算用ユニフォーム ──
@@ -756,6 +758,7 @@ function createWater() {
         if (!hp || !hp.ready || !shape || !shape.ready || (typeof subHullUnder === 'function' && subHullUnder())) {
             waterUniforms.wlPtCount.value = 0;
             waterUniforms.hullBoundRadius.value = 0;
+            waterUniforms.hullHoleMargin.value = -1;
             if (window._hullWaterlineDyn) window._hullWaterlineDyn.ready = false;
             return;
         }
@@ -919,6 +922,8 @@ function createWater() {
         waterUniforms.hullBoundRadius.value = hp.halfLen * physScale * 1.6 + 5.0;
         // 泡帯の幅は船体サイズ追従（係数0.037は全長60m級で従来の固定値1.1mになる値）
         waterUniforms.hullFoamWidth.value = Math.min(2.4, Math.max(0.4, hp.halfLen * physScale * 0.037));
+        // 船の中の水面を消すときの、縁からの余裕（輪郭の点の間の弦は船体の内側を通るので小さくてよい）
+        waterUniforms.hullHoleMargin.value = 0.12;
 
         // 診断用（画面には出さない。コンソールで window.__wlDebug を見る）
         window.__wlDebug = {
@@ -1526,6 +1531,7 @@ function createWater() {
             uniform vec2  hullBoundCenter;
             uniform float hullBoundRadius;
             uniform float hullFoamWidth;
+            uniform float hullHoleMargin;
 
             // ── 対数深度バッファ対応（頂点シェーダー側のUSE_LOGDEPTHBUFブロックとペア）──
             // v153-fix3: EXT_frag_depthに依存しない経路のみを使う。
@@ -1572,8 +1578,10 @@ function createWater() {
             //  ・最近傍の辺の上で wlWet を線形補間して返す。CPU側が
             //    離水した点を間引く代わりにこの重みを渡すようになったので、
             //    輪郭の形は保ったまま離水区間の泡だけを消せる。
-            float distToHullEdge(vec2 p, int n, out float wetOut) {
+            // insideOut：p が輪郭の内側なら 1（偶奇の交差判定。船尾のくぼみなど凹んだ所でも正しい）
+            float distToHullEdge(vec2 p, int n, out float wetOut, out float insideOut) {
                 wetOut = 0.0;
+                insideOut = 0.0;
                 if (n < 3) return 1.0e6;
                 float minD = 1.0e6;
                 vec2  prev  = vec2(wlPtsX[0], wlPtsZ[0]);
@@ -1593,6 +1601,7 @@ function createWater() {
                         minD   = d;
                         wetOut = mix(prevW, currW, t);
                     }
+                    if ((prev.y > p.y) != (curr.y > p.y) && p.x < prev.x + (p.y - prev.y) * e.x / e.y) insideOut = 1.0 - insideOut;
                     prev  = curr;
                     prevW = currW;
                     if (closing) break;
@@ -1672,6 +1681,13 @@ function createWater() {
                 #if defined( USE_LOGDEPTHBUF ) && defined( USE_LOGDEPTHBUF_EXT )
                     gl_FragDepthEXT = log2(vFragDepthW * 1.0002) * logDepthBufFC * 0.5;
                 #endif
+                // 船の喫水線の輪郭の近くだけ、輪郭までの距離・内側かを求める（泡帯と、船の中の水面を消すのに使う）
+                float hullEdgeD = 1.0e6, hullEdgeWet = 0.0, hullInside = 0.0;
+                if (wlPtCount >= 3 && distance(vWorldPos.xz, hullBoundCenter) < hullBoundRadius)
+                    hullEdgeD = distToHullEdge(vWorldPos.xz, wlPtCount, hullEdgeWet, hullInside);
+                // 船の中（喫水線の輪郭の内側）には水面を描かない。船内や開いた甲板から海面が見えないように。
+                // 甲板が水に入った所は、輪郭が真ん中へ縮むので（updateHullWaterlinePolygon）、甲板の上には水が見える
+                if (hullHoleMargin >= 0.0 && hullInside > 0.5 && hullEdgeD > hullHoleMargin) discard;
                 // ブルーム抽出パス：波の形のまま黒く塗るだけ（重い計算は飛ばす）
                 if (uBloomDark > 0.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
                 // v153-fix3: 対数深度は頂点シェーダー側でgl_Position.zに直接エンコード
@@ -1758,12 +1774,10 @@ function createWater() {
                 // 水面メッシュ自体は粗くても、実際の船体形状（hullProfile由来）との
                 // 距離をフラグメント単位（ピクセル単位）で評価するため、輪郭はガタつかない。
                 float hullEdgeFoam = 0.0;
-                if (wlPtCount >= 3 && distance(vWorldPos.xz, hullBoundCenter) < hullBoundRadius) {
-                    float edgeWet = 0.0;
-                    float dEdge = distToHullEdge(vWorldPos.xz, wlPtCount, edgeWet);
+                if (hullEdgeD < 1.0e5) {
                     // v165: 帯の幅は船体サイズ追従(hullFoamWidth)。edgeWetで、
                     // 今まさに離水している区間の泡だけを滑らかに消す。
-                    hullEdgeFoam = (1.0 - smoothstep(0.0, hullFoamWidth, dEdge)) * edgeWet;
+                    hullEdgeFoam = (1.0 - smoothstep(0.0, hullFoamWidth, hullEdgeD)) * hullEdgeWet;
                 }
 
                 float baseFoam = vColor.r;

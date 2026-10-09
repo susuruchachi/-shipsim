@@ -478,7 +478,8 @@ function animate() {
             //   なり、そのままだとpitchをさらに増やす方向に力がかかってしまう）。
             // 復元モーメントになるよう符号を反転する。
             // 浸水した水の重さのモーメント（船首寄りの水は船首を下げる：63-flooding.js）も
-            const torqueBuoyPitch = -RHO_WATER * G_REAL * momentVolAboutCG * buoyMult
+            // （沈みきって海底で横たわっていく間は、縦のモーメントで起こし直さない：44-world-terrain.js の flood.settle）
+            const torqueBuoyPitch = (typeof flood !== 'undefined' && flood.settle) ? 0 : -RHO_WATER * G_REAL * momentVolAboutCG * buoyMult
                 + ((typeof flood !== 'undefined' && flood.torqueP) || 0); // N・m
 
             const k_gyro_pitch = len * 0.25; // 慣性半径（質量分布の代理指標）
@@ -664,8 +665,10 @@ function animate() {
     }
 
     // LODグリッドの中心を船位置に追従（1unit刻みでスナップ）
-    waterMesh.position.x = Math.round(physics.cgWorldX);
-    waterMesh.position.z = Math.round(physics.cgWorldZ);
+    //（他の船をカメラで追っている間は、その船のまわりに：59-traffic.js の window._waterCenter）
+    const _wc = window._waterCenter;
+    waterMesh.position.x = Math.round(_wc ? _wc.x : physics.cgWorldX);
+    waterMesh.position.z = Math.round(_wc ? _wc.z : physics.cgWorldZ);
 
     // 右上の数値は 1 秒に 10 回で十分（毎フレームだと、揺れで横傾斜・縦傾斜の数字が毎回変わって書き換えが続く）
     if (!(_frameNow - (updateUI._t || 0) < 100)) { updateUI._t = _frameNow; updateUI(); }

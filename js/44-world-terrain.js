@@ -167,6 +167,9 @@ const TR_DEEP = -12;
 // 網を分ける区画の数（1 辺）。画面に入らない区画は描かない
 const TR_CHUNKS = 4;
 let _trSeeDeep = false;
+// 海底の網を作る・描く深さ（正の値[m]）。ふだんは TR_SEABED まで。沈んでいく船・深く潜った潜水艦の船底（とカメラ）が
+// 深くなったら、その 100m 下まで（_trSeabedCut）。地形の材質の「これより深い所は描かない」もこれに合わせる
+const _trSeabedU = { value: TR_SEABED };
 // カメラが水の中（潜水艦の視点・波の谷の下など）にあるときだけ、深い海底まで描く
 function _trDeepRange() {
     const wy = Number.isFinite(window._physicsWaveY) ? window._physicsWaveY : 0;
@@ -184,10 +187,11 @@ function _trMaterial() {
     if (_trMat) return _trMat;
     _trMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
     _trMat.onBeforeCompile = (sh) => {
+        sh.uniforms.uTrSeabed = _trSeabedU;
         sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vTrY;')
             .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\n    vTrY = (modelMatrix * vec4(transformed, 1.0)).y;');
-        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vTrY;')
-            .replace('void main() {', 'void main() {\n    if (vTrY < ' + TR_SEABED.toFixed(1) + ') discard;');
+        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vTrY;\nuniform float uTrSeabed;')
+            .replace('void main() {', 'void main() {\n    if (vTrY < uTrSeabed) discard;');
     };
     _trMat.customProgramCacheKey = () => 'worldTerrain';
     noShipLightProbe(_trMat);
@@ -513,7 +517,7 @@ function _trBuildMesh(H, n, half, cx, cz, lowerInside, opts) {
         for (let i = 0; i < cells; i++) {
             const a = j * n + i, b = a + 1, c = a + n, d = c + 1;
             const top = Math.max(P[a * 3 + 1], P[b * 3 + 1], P[c * 3 + 1], P[d * 3 + 1]);
-            if (top < TR_SEABED) continue;
+            if (top < _trSeabedU.value) continue;
             if (nearW && !(nearW[a] || nearW[b] || nearW[c] || nearW[d])) continue;
             const L = lists[Math.min(C - 1, (j / per) | 0) * C + Math.min(C - 1, (i / per) | 0)];
             // （深さは丸みで下げる前の高さで見る。遠くは丸みで何十 m も下がっているが、陸は陸）
@@ -1122,6 +1126,7 @@ function _trInCollider(x, z) {
     return false;
 }
 function worldSeabedAt(x, z) {
+    if (!window.world || world.mode !== 'world') return oceanSeabedAt(x, z);    // 外洋のモード：平均 3000m の海底
     let h = worldHeightAtLocal(x, z, 16);
     const shapes = [];
     for (const [, P] of terrain.ports) shapes.push(P.shape);
@@ -1333,7 +1338,7 @@ function _trContactSolve(pts, maxLift) {
     shipGroup.updateMatrixWorld();
     return maxPen;
 }
-function _trSeabedLift(off) {
+function _trSeabedLift(off, dt) {
     physics.groundLift = 0;
     if (typeof shipGroup === 'undefined' || !shipGroup || (window.sub && sub.applied > 0.5)) return;
     shipGroup.updateMatrixWorld();
@@ -1341,6 +1346,16 @@ function _trSeabedLift(off) {
     if (sunk) {
         const pen = _trContactSolve(_trSunkWorldPts(), 5);
         if (pen > 0.01) { physics.groundLift = pen; physics.speed *= 0.9; }
+        // 沈みきって海底に着いた船は、中に残っていた空気が抜けて浮力の偏りが無くなり、縦に立っていても
+        // 着いた端を支点に倒れて底に横たわる（真っ直ぐ立っている間はゆっくり、傾くほど速く。17-main-loop.js は
+        // その間、浮力・浸水の縦のモーメントで起こし直さない：flood.settle）
+        if (flood.sunk && pen > 0.01) flood.bedT = (flood.bedT || 0) + (dt || 0);
+        flood.settle = flood.sunk && (flood.bedT || 0) > 5;
+        if (flood.settle) {
+            const p = physics.pitch, rate = 0.01 + 0.08 * Math.cos(Math.min(1.55, Math.abs(p)));
+            physics.pitch -= Math.sign(p) * Math.min(Math.abs(p), rate * (dt || 0));
+            physics.vPitch = 0;
+        }
         return;
     }
     const x = physics.cgWorldX || 0, z = physics.cgWorldZ || 0, r = (physics.heading || 0) * Math.PI / 180;
@@ -1373,7 +1388,7 @@ function _trCheckGrounding(t, dt) {
     }
     // 外洋のまん中（近くに陸も港も無い）では調べない
     // （沈んでいく船は、海底に着くまで見る）
-    if (typeof flood !== 'undefined' && (flood.sunk || flood.sinking) && terrain.depth < -physics.y + ((hp && hp.ready) ? hp.halfLen * 2 : 12) * (physics.scale || 1) + 40) _trSeabedLift(off);
+    if (typeof flood !== 'undefined' && (flood.sunk || flood.sinking) && terrain.depth < -physics.y + ((hp && hp.ready) ? hp.halfLen * 2 : 12) * (physics.scale || 1) + 40) _trSeabedLift(off, dt);
     if (!terrain.near && !terrain.ports.size && terrain.depth > worldShipDraft() + 80) { terrain.grounded = false; terrain.good = { x, z, h, score: 0, hard: 0 }; _trGroundAttitude([], dt); return; }
     const hits = [];
     const score = _trHullScore(x, z, h, off, hits), hard = _trHullScore.hard;
@@ -1425,7 +1440,7 @@ function _trCheckGrounding(t, dt) {
     // 速く乗り上げたら船底に穴（64-damage.js：ゆっくりなら二重底で止まる）
     if (terrain.grounded && (!wasGrounded || worse) && typeof damageGround === 'function') damageGround(hits, vHit);
     _trGroundAttitude(hits, dt);
-    _trSeabedLift(off);
+    _trSeabedLift(off, dt);
     if (terrain.grounded && !wasGrounded && Math.abs(physics.speed || 0) > 0.6 && typeof audioWaveImpact === 'function') {
         audioWaveImpact(shipGroup.position.clone(), Math.min(2, 0.5 + Math.abs(physics.speed) / 6), true);
     }
@@ -1434,14 +1449,76 @@ function _trCheckGrounding(t, dt) {
 // ════════════════════════════════════════════════════════════════
 //  毎フレーム（17-main-loop.js から）
 // ════════════════════════════════════════════════════════════════
+// ── 外洋のモードの海底：平均 3000m（ゆるい起伏 ±250m ほど）──
+// 沈んだ船はここで止まる。描くのは、船底（かカメラ）がその 100m 上まで下りてきたときだけ
+function oceanSeabedAt(x, z) {
+    return -(3000 + 180 * Math.sin(x * 0.00031 + 1.3) * Math.cos(z * 0.00027 - 0.4)
+        + 60 * Math.sin((x - z) * 0.0011) + 20 * Math.sin(x * 0.0047) * Math.sin(z * 0.0039));
+}
+window.oceanSeabedAt = oceanSeabedAt;
+// 船のいちばん低い所（沈んだ船は姿勢のままの船底・甲板の点）と、カメラの、どちらか深い方の高さ
+function _trLowestY() {
+    let y = (physics.y || 0) - worldShipDraft();
+    if (typeof flood !== 'undefined' && (flood.sunk || flood.sinking) && typeof _trSunkWorldPts === 'function') for (const p of _trSunkWorldPts()) y = Math.min(y, p.y);
+    if (typeof camera !== 'undefined' && camera) y = Math.min(y, camera.position.y);
+    return y;
+}
+// 世界のモード：深い海底も、船底（かカメラ）から 100m 以内なら網を作って描く（25m きざみ。浅くなるときは 50m 余裕を見て）
+function _trSeabedCut() {
+    const want = Math.max(-TR_SEABED, Math.ceil((-_trLowestY() + 100) / 25) * 25);
+    const cur = -_trSeabedU.value;
+    if (want > cur || want < cur - 50) { _trSeabedU.value = -want; terrain._dirty = true; }
+}
+let _ocFloor = null;
+function _trOceanFloor() {
+    const keel = _trLowestY(), cx = physics.cgWorldX || 0, cz = physics.cgWorldZ || 0;
+    const near = keel - oceanSeabedAt(cx, cz) < 100;
+    if (!near) { if (_ocFloor) _ocFloor.visible = false; return; }
+    const N = 48, W = 1600;
+    if (!_ocFloor) {
+        const g = new THREE.PlaneGeometry(W, W, N, N); g.rotateX(-Math.PI / 2);
+        const m = new THREE.MeshStandardMaterial({ color: 0x4a4436, roughness: 1, metalness: 0 });
+        m.color.convertSRGBToLinear();
+        if (typeof noShipLightProbe === 'function') noShipLightProbe(m);
+        _ocFloor = new THREE.Mesh(g, m); _ocFloor.receiveShadow = false; _ocFloor.castShadow = false;
+        _ocFloor.frustumCulled = false; _ocFloor.userData.cx = Infinity;
+        scene.add(_ocFloor);
+    }
+    _ocFloor.visible = true;
+    // 船が 200m 動いたら、まわりの起伏を描き直す
+    if (Math.hypot(cx - _ocFloor.userData.cx, cz - _ocFloor.userData.cz) > 200) {
+        const bx = Math.round(cx / 50) * 50, bz = Math.round(cz / 50) * 50;
+        _ocFloor.userData.cx = bx; _ocFloor.userData.cz = bz;
+        const P = _ocFloor.geometry.attributes.position;
+        for (let i = 0; i < P.count; i++) {
+            const x = (i % (N + 1)) / N * W - W / 2 + bx, z = Math.floor(i / (N + 1)) / N * W - W / 2 + bz;
+            P.setXYZ(i, x, oceanSeabedAt(x, z), z);
+        }
+        P.needsUpdate = true; _ocFloor.geometry.computeVertexNormals(); _ocFloor.geometry.computeBoundingSphere();
+    }
+}
+// 外洋のモード：沈んでいく自分の船を海底で止める（世界のモードの _trCheckGrounding と同じ支え方）
+function _trOceanContact(dt) {
+    if (typeof flood === 'undefined' || !(flood.sunk || flood.sinking) || typeof shipGroup === 'undefined' || !shipGroup) return;
+    const hp = window.hullProfile, L = ((hp && hp.ready) ? hp.halfLen * 2 : 12) * (physics.scale || 1);
+    const x = physics.cgWorldX || 0, z = physics.cgWorldZ || 0;
+    terrain.depth = -oceanSeabedAt(x, z);
+    if (physics.y - L - 40 > -terrain.depth) return;
+    const r0 = (physics.heading || 0) * Math.PI / 180, dx = shipGroup.position.x - x, dz = shipGroup.position.z - z;
+    _trSeabedLift({ a: dx * Math.sin(r0) + dz * Math.cos(r0), s: dx * Math.cos(r0) - dz * Math.sin(r0) }, dt);
+}
 function updateWorldTerrain(t, dt) {
     if (typeof updateHornEcho === 'function') updateHornEcho(t);   // 汽笛のこだま（45-horn-echo.js）
     if (world.mode !== 'world') {
         if (terrain.near || terrain.far || terrain.ports.size) _trClearAll();
         _trFarWaterUpdate();
+        _trOceanFloor();
+        _trOceanContact(dt);
         return;
     }
+    if (_ocFloor) _ocFloor.visible = false;
     _trFarWaterUpdate();
+    _trSeabedCut();
     _trDeepRange();
     if (!world.ports) worldBuildPorts();
     // 前回の続き：向きを戻す

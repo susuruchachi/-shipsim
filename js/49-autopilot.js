@@ -1767,8 +1767,15 @@ function updateAutopilot(t, dt) {
     for (let k = autopilot.leg; k < R.length - 1; k++) remain += rhumbCourse(R[k].lat, R[k].lon, R[k + 1].lat, R[k + 1].lon).dist;
     autopilot.remain = remain;
     let order = AP_SPEEDS[autopilot.cruise];
-    if (wp.channel || R.slice(autopilot.leg).every(w => w.channel)) order = Math.min(order, 1);
-    else if (remain < 5 * 1852) order = Math.min(order, 2);
+    // 港の航路は微速：航路の中の区間（前の点も航路）か、航路の点に近づいた（止まれる距離の 1.5 倍・3km の内）とき。
+    //（以前は、残りの点がみな航路の点なら、その手前の外海の長い区間（ソレントからシェルブールの航路の入口まで 60 海里など）も
+    //  ずっと微速だった）
+    {
+        const vv = Math.max(0, physics.speed || 0), dSt = vv * Math.max(0.05, physics.mass || 1) / 0.3;
+        const prevCh = autopilot.leg === 0 || (R[autopilot.leg - 1] && R[autopilot.leg - 1].channel);     //（最初の区間：港の中から出ていく）
+        if (wp.channel && (prevCh || rc.dist < Math.max(3000, dSt * 1.5))) order = Math.min(order, 1);
+        else if (remain < 5 * 1852) order = Math.min(order, 2);
+    }
     if (wp.final && autopilot.finalSlow) order = Math.min(order, 1);
     // 最後の点の手前が短い区間の連なり（港の口など）のときは、最後の区間に入る前から、残りの道のりで止め始める
     if (!wp.final && R[R.length - 1].final) {
@@ -1779,7 +1786,7 @@ function updateAutopilot(t, dt) {
     }
     if (finalOrder !== null) order = Math.min(order, finalOrder);
     // 狭い水路・浅い水道（航路の点の narrow）：手前でタグを呼び、持ち場に着くまで待って、
-    // 付き添ってもらいながら微速（タグが力を出せる 4 くらいまで）で通る。抜けたら帰す
+    // 付き添ってもらいながら微速（タグが付き添える 8 ノットほどまで）で通る。抜けたら帰す
     let escorting = false;
     if (!apUseTugs('narrow') && !tugEscort.manual) {
         // タグを使わない：狭い水路は微速で
@@ -1807,8 +1814,9 @@ function updateAutopilot(t, dt) {
             const ready = tugEscortReady() || !!tugEscort.readyOnce;
             tugEscort.t = ready ? 0 : tugEscort.t + dt;
             if (tugEscort.t > 900) { autopilotStop('タグが持ち場に着けないので、狭い水路の手前で自動航行を止めました'); return; }
-            // 速さ：タグが効く速さまで
-            const cap = v > 4.5 ? 0 : v < 3.5 ? 1 : (autopilot.lastOrder === 0 ? 0 : 1);
+            // 速さ：タグが付き添える速さ（8 ノットほど）まで。以前は 4 ノットほどにしていて、サウサンプトン・ウォーターを
+            // 出るだけで 3 時間半かかっていた（実際の港でも、タグの付き添いは 8〜10 ノットまで）
+            const cap = v > 8.5 ? 0 : v < 7.5 ? 1 : (autopilot.lastOrder === 0 ? 0 : 1);
             order = Math.min(order, cap);
             // 向きを大きく変える所（出港した直後に川の中で回すなど）：ほとんど止まった速さで、タグに回してもらう
             //（舵だけで回ると、大きな船は回り切る前に向かいの岸に当たる）
@@ -1949,7 +1957,12 @@ function renderAutopilotPanel() {
     // 船が画面の中で実際に進む速さ（物理の速さの値 × 早送り の m/s）から、実時間であと何分か
     const v = Math.abs(physics.speed || 0) * (typeof physicsSpeed !== 'undefined' ? physicsSpeed : 1);
     const eta = v > 0.3 ? autopilot.remain / v / 3600 : null;
-    const etaS = eta === null ? '—' : eta < 1 ? Math.round(eta * 60) + '分' : Math.floor(eta) + '時間' + Math.round((eta % 1) * 60) + '分';
+    // 着くまで：24 時間を超える分は日で（例：3日 4時間12分）
+    let etaS = '—';
+    if (eta !== null) {
+        const mAll = Math.round(eta * 60), dd = Math.floor(mAll / 1440), hh = Math.floor((mAll % 1440) / 60), mm = mAll % 60;
+        etaS = mAll < 60 ? mm + '分' : (dd ? dd + '日 ' : '') + hh + '時間' + mm + '分';
+    }
     uiSetHTML(el, `
         <div class="ap-title">${fold}🧭 自動航行 → ${autopilot.dest ? autopilot.dest.name : ''}</div>
         <div class="ap-row">針路 <b>${Math.round(autopilot.course || 0).toString().padStart(3, '0')}°</b>（航程線）</div>

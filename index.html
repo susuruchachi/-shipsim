@@ -869,6 +869,18 @@
           <span class="sp-label" style="min-width:0;">船名:</span>
           <input type="text" id="ship-name-input" placeholder="船名を入力" style="flex:1;background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:6px 8px;font-family:inherit;font-size:12px;">
         </div>
+        <div class="sp-row">
+          <span class="sp-label" style="min-width:0;">会社・組織:</span>
+          <input type="text" id="ship-company" list="ship-company-list" placeholder="例：ホワイト・スター・ライン" oninput="shipInfoChanged()" style="flex:1;min-width:0;background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:6px 8px;font-family:inherit;font-size:12px;">
+          <datalist id="ship-company-list"></datalist>
+        </div>
+        <div class="sp-row" style="gap:6px;">
+          <span class="sp-label" style="min-width:0;">就航:</span>
+          <input type="number" id="ship-year-from" min="1800" max="2100" step="1" placeholder="年" oninput="shipInfoChanged()" style="width:72px;background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:6px 6px;font-family:inherit;font-size:12px;">
+          <span class="sp-label" style="min-width:0;">引退:</span>
+          <input type="number" id="ship-year-to" min="1800" max="2100" step="1" placeholder="年" oninput="shipInfoChanged()" style="width:72px;background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:6px 6px;font-family:inherit;font-size:12px;">
+        </div>
+        <div style="font-size:10px;color:#888;margin:-2px 0 6px;">他の船（🚢）に同じ会社の船があれば、その会社の船として同じ航路・埠頭を回ります。乗っている船の就航〜引退の年と重なる船だけが、他の船として出ます（年が空いている船は、いつでも出ます。引退が空いていれば今も現役）。</div>
         <div class="sp-row" style="gap:8px;">
           <button class="sp-add-btn" style="flex:1;" onclick="saveShipConfig()">💾 この船名で保存</button>
         </div>

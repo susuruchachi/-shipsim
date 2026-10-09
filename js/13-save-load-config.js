@@ -176,6 +176,8 @@ function collectShipConfig() {
         dayProgress: physics.dayProgress,
         moonPhase: physics.moonPhase,
         moonPhaseManual: !!physics.moonPhaseManual,
+        // 船の情報：会社・組織、就航・引退の年（59-traffic.js：他の船として出すときの会社・時代）
+        info: getShipInfo(),
         // 最後に使ったモデル形式名
         lastModelName: window.lastLoadedModelName || null,
         // モデル本体への参照。本体は IndexedDB に保存してある（27-model-store.js）
@@ -191,7 +193,7 @@ function collectShipConfig() {
 // 除外：一覧の中で番号付きで作り直される欄（煙突 #1 の X など。一覧のデータ
 //       として別に保存している）、この端末の音量（端末ごとの設定）、汽笛・
 //       テレグラフ（専用の形で別に保存）
-const PANEL_INPUT_SKIP = /^(audio-|horn-|engine-sound-|bridge-|clip-|bake-|tex-|ship-zip-)|[-_]\d+(_[LR])?(-\w+)?$/;
+const PANEL_INPUT_SKIP = /^(audio-|horn-|engine-sound-|bridge-|clip-|bake-|tex-|ship-zip-|ship-company|ship-year-)|[-_]\d+(_[LR])?(-\w+)?$/;
 function collectPanelInputs() {
     const out = {};
     document.querySelectorAll('#settings-panel input[id], #settings-panel select[id], #settings-panel textarea[id]').forEach((el) => {
@@ -376,6 +378,7 @@ function applyShipConfig(cfg) {
     if (typeof applySubmarineConfig === 'function') applySubmarineConfig(cfg.submarine || null);
     if (typeof applyEngineConfig === 'function') applyEngineConfig(cfg.engines || null);
     if (typeof applyManeuverConfig === 'function') applyManeuverConfig(cfg.maneuver || null);
+    applyShipInfo(cfg.info || null);
     // ── 天候（24-weather.js）──────────────────────────────────────────
     // 天候がONだと風・波はそちらが毎フレーム上書きするので、この設定が
     // 保存していた風速・波の値は効かなくなる。天候機能より前に保存された
@@ -528,6 +531,34 @@ function applyShipConfig(cfg) {
     }
 }
 
+// ── 船の情報（会社・組織、就航・引退の年）──
+//  他の船（59-traffic.js）として出すとき：同じ会社の船があればその会社の航路・埠頭を回り、
+//  今乗っている船の就航〜引退の年と重なる船だけが出る
+window.shipInfo = { company: '', yearFrom: null, yearTo: null };
+function _shipYear(v) { const n = parseInt(v, 10); return Number.isFinite(n) && n >= 1700 && n <= 2200 ? n : null; }
+function getShipInfo() {
+    const c = $('ship-company'), f = $('ship-year-from'), t = $('ship-year-to');
+    if (c || f || t) window.shipInfo = { company: c ? c.value.trim() : '', yearFrom: f ? _shipYear(f.value) : null, yearTo: t ? _shipYear(t.value) : null };
+    return Object.assign({}, window.shipInfo);
+}
+function applyShipInfo(info) {
+    const I = info || {};
+    window.shipInfo = { company: String(I.company || '').trim(), yearFrom: _shipYear(I.yearFrom), yearTo: _shipYear(I.yearTo) };
+    const c = $('ship-company'), f = $('ship-year-from'), t = $('ship-year-to');
+    if (c) c.value = window.shipInfo.company;
+    if (f) f.value = window.shipInfo.yearFrom ?? '';
+    if (t) t.value = window.shipInfo.yearTo ?? '';
+}
+function shipInfoChanged() { getShipInfo(); if (typeof autoSaveConfig === 'function') autoSaveConfig(); }
+// 会社の候補：他の船（59-traffic.js）の会社
+function fillShipCompanyList() {
+    const dl = $('ship-company-list'); if (!dl || typeof TF_SERVICES === 'undefined') return;
+    const set = new Set();
+    for (const k of Object.keys(TF_SERVICES)) for (const sv of TF_SERVICES[k]) if (sv.line) set.add(sv.line);
+    dl.innerHTML = [...set].sort().map(n => `<option value="${n}"></option>`).join('');
+}
+window.getShipInfo = getShipInfo; window.applyShipInfo = applyShipInfo; window.shipInfoChanged = shipInfoChanged;
+
 function loadAllShipSaves() {
     try {
         const raw = localStorage.getItem(SHIP_SAVE_KEY);
@@ -615,6 +646,9 @@ function renderShipSaveList() {
         const safeName = name.replace(/'/g, "\\'").replace(/"/g, '&quot;');
         const ref = all[name] && all[name].modelRef;
         const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const inf = all[name] && all[name].info;
+        const infoLine = inf && (inf.company || inf.yearFrom || inf.yearTo)
+            ? `<div style="font-size:10px;color:#aab;margin:2px 0;">${inf.company ? esc(inf.company) : ''}${inf.company && (inf.yearFrom || inf.yearTo) ? '・' : ''}${inf.yearFrom || inf.yearTo ? `${inf.yearFrom || '?'}〜${inf.yearTo || ''}` : ''}</div>` : '';
         const modelLine = ref
             ? `<div style="font-size:10px;color:#8fb8d8;margin:2px 0 4px;">🚢 ${esc(ref.name)}${ref.embedded ? '（同梱）' : (typeof formatModelSize === 'function' ? ' ' + formatModelSize(ref.size) : '')}</div>`
             : `<div style="font-size:10px;color:#777;margin:2px 0 4px;">モデル未登録（設定のみ）</div>`;
@@ -625,7 +659,7 @@ function renderShipSaveList() {
                 <span class="sp-item-title">${esc(name)}</span>
                 <button class="sp-remove-btn" onclick="deleteShipConfig('${safeName}')">✕</button>
             </div>
-            ${modelLine}
+            ${infoLine}${modelLine}
             <div class="sp-row" style="gap:8px;">
                 <button class="sp-add-btn" style="flex:1;" onclick="loadShipConfig('${safeName}')">📂 読み込み</button>
                 <label class="sp-toggle" style="font-size:10px;white-space:nowrap;"><input type="checkbox" class="ship-zip-pick"> 📦 ZIPに入れる</label>
@@ -720,6 +754,7 @@ function initSettingsComponents() {
     updateNavLights3D();
     updateRudder3D();
     renderShipSaveList();
+    fillShipCompanyList();
     syncLightingPanelUI();
     renderGlbPartsList();
 }
