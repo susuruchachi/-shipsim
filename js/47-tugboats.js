@@ -571,7 +571,8 @@ function _tugStep(t, dt, last) {
     const T = (typeof worldShipDraft === 'function') ? worldShipDraft() : 0.4 * sc;
     const massKg = Math.max(1e5, (physics.mass || 1) * 1e6);
     const speedKn = Math.abs(physics.speed || 0);
-    const escort = speedKn < 5 ? 1 : Math.max(0, 1 - (speedKn - 5) / 3);     // 速いと力を出せない
+    // 速いと力を出せない（付き添いのタグは 6 ノットまでは全力、12 ノットで 0：狭い水路は 10 ノットほどで通る）
+    const escort = speedKn < 6 ? 1 : Math.max(0, 1 - (speedKn - 6) / 6);
     let Fs = 0, Ff = 0, Mz = 0;
     for (let i = tugs.length - 1; i >= 0; i--) {
         const tg = tugs[i];

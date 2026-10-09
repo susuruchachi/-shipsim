@@ -804,8 +804,8 @@ function animateSmoke(t, dt) {
 
             smokeData[i].rand = Math.random();
             const rotY = (physics.heading * Math.PI) / 180;
-            const shipVx = Math.sin(rotY) * physics.speed * 0.5;
-            const shipVz = Math.cos(rotY) * physics.speed * 0.5;
+            const shipVx = Math.sin(rotY) * physics.speed * 0.514444 * 0.5;     // 船の速さ（ノット → m/s）の半分
+            const shipVz = Math.cos(rotY) * physics.speed * 0.514444 * 0.5;
             smokeData[i].vel.set(shipVx, 0, shipVz);
 
             smokeIdx = (smokeIdx + 1) % perf.smokeCap;

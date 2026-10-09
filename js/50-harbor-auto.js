@@ -614,25 +614,39 @@ function _haAllocate(Fs, Mz, list, dt, noPull) {
     const st = tugStations(), sc = physics.scale || 1;
     const T = list.filter(Boolean).map(t => { const s2 = st.find(q => q.key === t.station); return { t, z: s2 ? s2.z * sc : 0, side: s2 && s2.side ? s2.side : 1, canPull: _haCanPull(s2, st, noPull) }; });
     if (!T.length) return;
-    const solve = (w) => {
+    // 力 F・モーメント M を、重み w のタグに割り振る（いちばん小さい力で）。タグが前後の 1 か所にしかいない（1 隻だけ・
+    // 同じ所に並んでいる）ときは、横へ押すと必ず回ってしまうので、回したい向きと同じになるときだけ、小さい方の力で
+    //（以前は横の力だけを出し、84番埠頭の桟橋の間で、船首のタグが座礁して帰ったあと、残った 1 隻だけで押して 18° 回っていた）
+    const solveFM = (F, M, w) => {
         let S0 = 0, S1 = 0, S2 = 0;
         T.forEach((q, i) => { S0 += w[i]; S1 += w[i] * q.z; S2 += w[i] * q.z * q.z; });
         const det = S0 * S2 - S1 * S1;
-        let a, b;
-        if (Math.abs(det) < 1e-6 * Math.max(1, S0 * S2)) { a = Fs / S0; b = 0; }
-        else { a = (Fs * S2 - Mz * S1) / det; b = (S0 * Mz - S1 * Fs) / det; }
+        if (!(S0 > 0)) return T.map(() => 0);
+        if (Math.abs(det) < 1e-6 * Math.max(1, S0 * S2)) {
+            const zc = S1 / S0;
+            if (Math.abs(zc) < 0.1 * Math.max(10, Math.sqrt(S2 / S0)) || Math.abs(zc) < 5) return T.map((q, i) => w[i] * F / S0);
+            //（回したい向きと逆でも、回す力の要求が小さい間は 3 割まで押す：止まったままにならないように）
+            const fF = F, fM = M / zc, lo = 0.3 * Math.abs(fF);
+            const tot = Math.sign(fF) === Math.sign(fM) ? Math.sign(fF) * Math.min(Math.abs(fF), Math.max(Math.abs(fM), lo))
+                : Math.abs(fM) < lo ? fF * 0.3 * (1 - Math.abs(fM) / lo) : 0;
+            return T.map((q, i) => w[i] * tot / S0);
+        }
+        const a = (F * S2 - M * S1) / det, b = (S0 * M - S1 * F) / det;
         return T.map((q, i) => w[i] * (a + b * q.z));
     };
+    const solve = (w) => solveFM(Fs, Mz, w);
     let f = solve(T.map(() => 1));
     f = solve(T.map((q, i) => { const want = Math.sign(f[i]) === q.side ? 'pull' : 'push'; if (want === 'pull' && !q.canPull) return 0.02; return (q.t.action === 'standby' || q.t.action === want) ? 1 : 0.15; }));
     // 索を取れる金物が近くに無いタグは引けない（押すだけ）
     f = f.map((v, i) => (Math.sign(v) === T[i].side && !T[i].canPull) ? 0 : v);
     // 引けないタグの分などで横の力が足りなければ、その向きに力を出せるタグ（押す側か、引ける側）で残りを分け合う
-    //（回す力は少しずれるが、まず動かす。持ち場に着いていないタグがいるときも、着いているタグだけで動かせる）
+    //（持ち場に着いていないタグがいるときも、着いているタグだけで動かせる。足す分は、回す力を変えないように前後で分ける。
+    //  前後の片方にしかいなければ、回ってしまうので足さない）
     const deficit = Fs - f.reduce((a, v) => a + v, 0);
     if (Math.abs(deficit) > Math.abs(Fs) * 0.25) {
-        const able = T.map((q, i) => (Math.sign(deficit) === q.side ? q.canPull : true) ? i : -1).filter(i => i >= 0);
-        for (const i of able) f[i] += deficit / able.length;
+        const w2 = T.map((q, i) => (Math.sign(deficit) === q.side ? q.canPull : true) ? 1 : 0);
+        const add = solveFM(deficit, 0, w2);
+        f = f.map((v, i) => v + add[i]);
     }
     const Fmax = _tugPullN();
     const big = Math.max(...f.map(Math.abs));

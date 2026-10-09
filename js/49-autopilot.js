@@ -72,10 +72,12 @@ function worldTrueCompass() {
     return ((_apNorthHeading() - (physics.heading || 0)) % 360 + 360) % 360;
 }
 window.worldTrueCompass = worldTrueCompass;
-// 舵 25° ほどでの旋回半径[m]（17-main-loop.js：回る速さ ＝ 速さ×0.514 ÷ R × 舵/35、進む速さはそのまま m/s）
+// 舵 25° ほどでの旋回半径[m]（17-main-loop.js：回る速さ ＝ 速さ×0.514 ÷ R × 舵/35、進む速さも 速さ×0.514 m/s）
 // 作り込んだ港（川・入江の奥の港）の中の区間は、実際の港と同じようにタグが付き添う
 function _apInDetail(q) { return !!(q && world.kind === 'real' && typeof _rwDetailBoxOf === 'function' && _rwDetailBoxOf(q.lat, q.lon)); }
-function _apTurnRadius() { return 12 * (physics.scale || 1) * (physics.turningRadiusFactor || 5) / 0.514 * 1.4; }
+function _apTurnRadius() { return 12 * (physics.scale || 1) * (physics.turningRadiusFactor || 5) * 1.4; }
+// 機関を止めてから止まるまでに進む距離[m]（速さ v はノット。機関を止めると速さは 0.3/排水量 の割合で落ちる：17-main-loop.js）
+function apStopDist(v) { return Math.max(0, v || 0) * 0.514444 * Math.max(0.05, physics.mass || 1) / 0.3; }
 function _apHeadingForTrue(course) { return _apNorthHeading() - course; }
 
 // ── 港の航路の上の点（港の点から海の方へ a[m]）──
@@ -682,7 +684,7 @@ function _apResumeRoute() {
     const atEnd = u >= 0.999;
     const route = atEnd ? rest : [{ lat: P.lat, lon: P.lon, label: '航路へ戻る所', narrow: !!B.narrow, channel: !!B.channel }, ...rest];
     autopilot.route = route; autopilot.leg = 0; autopilot.active = true; autopilot.planning = false;
-    autopilot.legFrom = here; autopilot.lastOrder = null; autopilot.overshoot = false;
+    autopilot.legFrom = here; autopilot.lastOrder = null; autopilot.overshoot = false; autopilot.blockT = 0;
     return true;
 }
 window._apResumeRoute = _apResumeRoute;
@@ -990,7 +992,7 @@ async function autopilotStart(port) {
     autopilot.route = route; autopilot.leg = 0; autopilot.planning = false; autopilot.active = true;
     autopilot.planDraft = draft; autopilot.draftT = 0;           // この喫水で引いた航路（深くなったら引き直す）
     if (autopilot.agDest !== port) { autopilot.agDest = port; autopilot.agCount = 0; autopilot.agLog = []; }
-    autopilot.legFrom = worldShipLatLon(); autopilot.lastOrder = null; autopilot.overshoot = false;
+    autopilot.legFrom = worldShipLatLon(); autopilot.lastOrder = null; autopilot.overshoot = false; autopilot.blockT = 0;
     autopilot.note = (port.point && autopilot.pointMoved > 0) ? `指定した所は浅い（または陸）ので、${autopilot.pointMoved >= 1000 ? (autopilot.pointMoved / 1000).toFixed(1) + 'km' : autopilot.pointMoved + 'm'} 離れた深い所で止まります` : '';
     _apMsg('');
     if (typeof worldMapRedraw === 'function') worldMapRedraw(true);
@@ -1004,6 +1006,7 @@ function autopilotStop(msg, silent) {
                              berthPlan: autopilot.berthPlan, deepShip: autopilot.deepShip, planDraft: autopilot.planDraft };
     }
     autopilot.active = false; autopilot.planning = false; autopilot.aground = null; autopilot.turnFirst = null; autopilot.backOff = null; autopilot.boHold = 0;
+    if (!autopilot.chase) physics.apRpm = null;
     if (!silent) { autopilot.route = null; autopilot.dest = null; }
     if (!silent && typeof tugEscortStop === 'function') tugEscortStop();
     autopilot.escort = '';
@@ -1629,10 +1632,15 @@ function _apChase(dt) {
     if (wrong) {
         sa = -(clearA + 200);
         if (pa > -(clearA + 120)) sc = Math.sign(pc || -C.side) * Math.max(off, Math.abs(pc));       // まだ後ろへ出ていない：今の舷のまま下がる
+    } else if (Math.abs(pc) < (Bt + Bo) / 2 + 20 && Math.abs(pa) > clearA * 0.7) {
+        // 横の間がまだ足りない（船尾の後ろを回ってきた直後など）：横へ出るまでは、前後に重ならない所（相手の後ろ・前）にいる
+        //（以前は、回り終えたとたんに全速で前へ出て、横へ出きらないうちに相手の船尾に突っ込んでいた。
+        //  もう横に並んでいる間は、ここではなく下の「近すぎる」で外へ）
+        if (pa < 0) sa = -(clearA + 80); else sa = clearA + 80;
     }
-    // 相手の速さ（動いているとき）・自分の船の速さ（物理の速さの値が、そのまま 1 秒に進む m）
-    const vT = _apChaseVT(S);
-    const vMax = Math.max(1, (physics.maxSpeed || 20) * 0.97), v = physics.speed || 0;
+    // 相手の速さ（動いているとき）・自分の船の速さ（物理の速さはノット → m/s）
+    const vT = _apChaseVT(S), KN = 0.514444;
+    const vMax = Math.max(0.5, (physics.maxSpeed || 20) * KN * 0.97), v = (physics.speed || 0) * KN;
     const pf = (typeof enginePowerFactor === 'function') ? enginePowerFactor() : 1;
     const tau = Math.max(20, Math.max(0.05, physics.mass || 1) / (0.3 * pf));     // 機関で速さが変わる時間[秒]（17-main-loop.js）
     // 止まっている（ゆっくりの）相手：持ち場を通る相手と同じ向きの線（寄る線）に乗って、後ろからまっすぐ寄る。
@@ -1711,7 +1719,7 @@ function _apChase(dt) {
     const near = eAll < Math.max(300, Lt);
     if (near && !wrong) C.I = Math.max(-0.15 * vMax, Math.min(0.15 * vMax, C.I + (want - v) * dt / 200));
     else C.I *= Math.max(0, 1 - dt / 60);
-    let rpm = (want + (want - v) * 1.0 + C.I) / Math.max(1, physics.maxSpeed || 20);
+    let rpm = (want + (want - v) * 1.0 + C.I) / Math.max(0.5, (physics.maxSpeed || 20) * KN);
     // 速すぎて近い：後進もかけて落とす（遠いうちは機関を止めて惰性で）
     const minR = (v - want > 1.5 && dist < 3 * Math.max(Lo, Lt)) ? -0.3 : 0;
     rpm = Math.max(minR, Math.min(rpmCap, rpm));
@@ -1733,15 +1741,18 @@ function _apChase(dt) {
     if (v < -0.2) _apHelm(0, dt);
     else _apHelm(Math.max(big ? -35 : -20, Math.min(big ? 35 : 20, cmd)), dt);
     // 様子
-    const alongNow = !wrong && Math.abs(ea) < Math.max(30, 0.25 * Lt) && Math.abs(ec) < Math.max(25, 0.5 * off);
+    const alongNow = !wrong && sa === 0 && Math.abs(ea) < Math.max(30, 0.25 * Lt) && Math.abs(ec) < Math.max(25, 0.5 * off);
     C.along = alongNow;
-    C.phase = alongNow ? (vT < 0.3 ? '横に並んで止まっています' : '並走しています') : wrong ? '相手の船尾の後ろを回って、反対の舷へ' : C.astern === 'back' ? '相手の後ろへ回って、同じ向きで寄ります' : dist > 2000 ? '追いかけています' : '横へ寄せています';
+    C.phase = alongNow ? (vT < 0.3 ? '横に並んで止まっています' : '並走しています') : wrong ? '相手の船尾の後ろを回って、反対の舷へ' : sa !== 0 && C.astern !== 'back' ? (sa < 0 ? '相手の後ろで、横へ出ています' : '相手の前で、横へ出ています') : C.astern === 'back' ? '相手の後ろへ回って、同じ向きで寄ります' : dist > 2000 ? '追いかけています' : '横へ寄せています';
     C.why = why; C.ea = ea; C.ec = ec; C.vT = vT; C.rpm = rpm; C.crs = crs;
     autopilot.course = crs;
 }
 
+// 港の航路・狭い水路を通る速さ[ノット]
+const AP_CH_KN = 10;
 function updateAutopilot(t, dt) {
     _apOrderClock(dt);
+    if (!autopilot.chase) physics.apRpm = null;        // 回転数で速さを合わせるのは、並走と航路の中だけ（毎回決め直す）
     if (!window.world || world.mode !== 'world') { if (autopilot.chase) apChaseStop(''); if (autopilot.active) autopilotStop('世界を航海するモードではないので、自動航行を止めました'); return; }
     if (autopilot.chase) { _apChase(dt); return; }
     // タグなしの出港：岸壁から横へ離れる（ゆっくり加速し、離れたら航路を引いて出る）
@@ -1889,14 +1900,16 @@ function updateAutopilot(t, dt) {
     // 早めに機関停止、足りなければ後進微速。止まりかけたら到着
     let finalOrder = null;
     if (wp.final) {
-        const k = 0.3 / Math.max(0.05, physics.mass || 1);
         const v = Math.max(0, physics.speed || 0);
-        const dStop = v / k;
+        const dStop = apStopDist(v);
         const near = rc.dist < Math.max(reach, dStop * 0.6);
         // （止めたあとは、残りが止まるまでの道のりの 2 倍を超えるまでかけ直さない。境目で停止と微速を 2 秒ごとに行き来していた）
         if (rc.dist < dStop * (autopilot.lastOrder === 0 ? 2 : 1.15)) finalOrder = 0;
         // 後進はスクリューが止まるまで効き続けるので、遅くなったら早めにやめる（後ろへ走り出さないように）
         if ((rc.dist < dStop * 0.6 || autopilot.overshoot) && v > 1.2) finalOrder = v > 4 ? -2 : -1;
+        // 着いた所の近く（行き過ぎ・止まるところ）では、前へは機関をかけない（後進で止めたあと、微速で前へ出てまた止める、を
+        // くり返して、少しずつ前へ出ていた）
+        if (autopilot.overshoot && finalOrder === null) finalOrder = 0;
         if ((physics.speed || 0) < -0.3) finalOrder = 0;             // 後進で後ろへ動き出したら止める
         autopilot.finalSlow = rc.dist < Math.max(2000, dStop * 3);   // 近づいたら微速に落としておく（強い後進が要らないよう）
         if (rc.dist < reach) autopilot.overshoot = true;            // 行き過ぎても、止まるまで後進
@@ -1955,34 +1968,53 @@ function updateAutopilot(t, dt) {
     for (let k = autopilot.leg; k < R.length - 1; k++) remain += rhumbCourse(R[k].lat, R[k].lon, R[k + 1].lat, R[k + 1].lon).dist;
     autopilot.remain = remain;
     let order = AP_SPEEDS[autopilot.cruise];
-    // 港の航路は微速：航路の中の区間（前の点も航路）か、航路の点に近づいた（止まれる距離の 1.5 倍・3km の内）とき。
+    // 港の航路・狭い水路の速さの上限[ノット]（テレグラフの段ではなく、機関の回転数で合わせる：下の _apOrder の前）
+    let chKn = Infinity;
+    // 港の航路は 10 ノットほど：航路の中の区間（前の点も航路）か、航路の点に近づいた（止まれる距離の 1.5 倍・3km の内）とき。
     //（以前は、残りの点がみな航路の点なら、その手前の外海の長い区間（ソレントからシェルブールの航路の入口まで 60 海里など）も
     //  ずっと微速だった）
     {
-        const vv = Math.max(0, physics.speed || 0), dSt = vv * Math.max(0.05, physics.mass || 1) / 0.3;
+        const dSt = apStopDist(physics.speed);
         //（最初の区間：港の中から出ていく。両端が航路の点でも、12km より長い区間は外海：前の点から 2km 出たら速く）
         const legLen = legRc.dist, fromPrev = Math.max(0, legLen - rc.dist);
         const prevCh = autopilot.leg === 0 || (R[autopilot.leg - 1] && R[autopilot.leg - 1].channel && (legLen < 12000 || fromPrev < 2000));
-        //（いったん微速にしたら、止まれる距離の 3 倍まで微速のまま：減速して止まれる距離が縮み、境目で全速と微速を行き来しないように）
-        const near = rc.dist < Math.max(3000, dSt * ((autopilot.lastOrder | 0) <= 1 ? 3 : 1.5));
-        if (wp.channel && (prevCh || near)) order = Math.min(order, 1);
+        //（いったん落としたら、止まれる距離の 3 倍まで落としたまま：減速して止まれる距離が縮み、境目で全速と行き来しないように）
+        const near = rc.dist < Math.max(3000, dSt * (autopilot.chOn ? 3 : 1.5));
+        if (wp.channel && (prevCh || near)) chKn = AP_CH_KN;
         else if (remain < 5 * 1852) order = Math.min(order, 2);
     }
     if (wp.final && autopilot.finalSlow) order = Math.min(order, 1);
     // 最後の点の手前が短い区間の連なり（港の口など）のときは、最後の区間に入る前から、残りの道のりで止め始める
     if (!wp.final && R[R.length - 1].final) {
-        const vv = Math.max(0, physics.speed || 0), dAll = vv * Math.max(0.05, physics.mass || 1) / 0.3;
+        const dAll = apStopDist(physics.speed);
         if (remain < Math.max(2000, dAll * 3)) order = Math.min(order, 1);
         // （止めたあとは、残りが止まるまでの道のりの 2 倍を超えるまで機関をかけ直さない。境目で停止と微速を行き来していた）
         if (remain < dAll * (autopilot.lastOrder === 0 ? 2 : 1.2)) order = Math.min(order, 0);
     }
     if (finalOrder !== null) order = Math.min(order, finalOrder);
+    // 最後の点の近く（300m＋船の長さの半分の内）をゆっくり（3 ノットまで）進むとき：このまま惰性で進んだ所（止まるまでの距離
+    // ＋15m 先）で、船体のどこかが浅い所・桟橋・岸壁にかかるなら、後進で止めて、そこを着いた所にする（あとは離着岸のタグで）
+    //（ニューヨークの桟橋の外で、最後の点の手前で急に曲がる所を 1 ノットほどの惰性で進み、船首の角が桟橋の先に乗り上げていた）。
+    // いったん止め始めたら 30 秒は続ける（止める → 止まれる距離が縮んで外れる → 前進、をくり返さないように）
+    autopilot.blockT = Math.max(0, (autopilot.blockT || 0) - dt);
+    if (R[R.length - 1].final) {
+        const v = physics.speed || 0, last = R[R.length - 1];
+        const dF = rhumbCourse(here.lat, here.lon, last.lat, last.lon).dist;
+        if (dF < 300 + apShipLen() / 2 && v > 0.05 && v < 3) {
+            const ds = apStopDist(v) * (autopilot.blockT > 0 ? 1.4 : 1) + 15, hd = physics.heading * _apRad;
+            for (const f of [0.5, 1]) if (_apPoseBlockedAt(physics.cgWorldX + Math.sin(hd) * ds * f, physics.cgWorldZ + Math.cos(hd) * ds * f, hd)) { autopilot.blockT = 30; break; }
+        }
+        if (autopilot.blockT > 0) {
+            order = Math.min(order, v > 0.3 ? -1 : 0);
+            if (dF < 300 + apShipLen() / 2) { autopilot.leg = R.length - 1; autopilot.overshoot = true; }
+        }
+    }
     // 狭い水路・浅い水道（航路の点の narrow）：手前でタグを呼び、持ち場に着くまで待って、
     // 付き添ってもらいながら微速（タグが付き添える 8 ノットほどまで）で通る。抜けたら帰す
     let escorting = false;
     if (!apUseTugs('narrow') && !tugEscort.manual) {
-        // タグを使わない：狭い水路は微速で
-        if (wp.narrow) order = Math.min(order, 1);
+        // タグを使わない：狭い水路も航路と同じ速さで
+        if (wp.narrow) chKn = AP_CH_KN;
         if (tugEscort.active || tugEscort.held) tugEscortStop();
         autopilot.escort = '';
     } else if (typeof tugEscortStart === 'function') {
@@ -1996,7 +2028,7 @@ function updateAutopilot(t, dt) {
             }
         }
         const v = Math.max(0, physics.speed || 0);
-        const dStop = v * Math.max(0.05, physics.mass || 1) / 0.3;
+        const dStop = apStopDist(v);
         // 呼ぶ距離は止まれる距離で決まるので、速い船は減速するほど短くなる。いったん呼んだら、呼んだときの距離（＋2km）の内は
         // 呼んだままに（以前は、23 ノットで近づくと、止める → 呼ぶ距離が縮んで外れる → 全速 → また入る、を 12 秒ごとに
         //  繰り返し、テレグラフが停止と全速を 40 回行き来していた）
@@ -2010,10 +2042,9 @@ function updateAutopilot(t, dt) {
             const ready = tugEscortReady() || !!tugEscort.readyOnce;
             tugEscort.t = ready ? 0 : tugEscort.t + dt;
             if (tugEscort.t > 900) { autopilotStop('タグが持ち場に着けないので、狭い水路の手前で自動航行を止めました'); return; }
-            // 速さ：タグが付き添える速さ（8 ノットほど）まで。以前は 4 ノットほどにしていて、サウサンプトン・ウォーターを
+            // 速さ：タグが付き添える速さ（10 ノットほど）まで。以前は 4 ノットほどにしていて、サウサンプトン・ウォーターを
             // 出るだけで 3 時間半かかっていた（実際の港でも、タグの付き添いは 8〜10 ノットまで）
-            const cap = v > 8.5 ? 0 : v < 7.5 ? 1 : (autopilot.lastOrder === 0 ? 0 : 1);
-            order = Math.min(order, cap);
+            chKn = AP_CH_KN;
             // 向きを大きく変える所（出港した直後に川の中で回すなど）：ほとんど止まった速さで、タグに回してもらう
             //（舵だけで回ると、大きな船は回り切る前に向かいの岸に当たる）
             const eH = Math.abs(((_apHeadingForTrue(course) - physics.heading + 540) % 360) - 180);
@@ -2042,6 +2073,21 @@ function updateAutopilot(t, dt) {
     const sv = physics.speed || 0;
     if (sv < -0.3 || (autopilot.sternBrake && sv < -0.05)) { autopilot.sternBrake = true; order = Math.max(order, 1); }
     else autopilot.sternBrake = false;
+    // 港の航路・狭い水路：テレグラフの段（微速は最大の 3 割：23 ノットの船で 7 ノット、半速は 14 ノット）ではなく、
+    // 機関の回転数で 10 ノットほどに。速すぎるうちは機関を止めて落とす。ほかの理由（止まる・回す・前の船）で
+    // その段より遅くするときは、そのままテレグラフで
+    let rpm = null;
+    if (Number.isFinite(chKn) && order >= 1) {
+        const maxKn = Math.max(1, physics.maxSpeed || 20);
+        if (chKn < ENG_RPM_OF_AP[order] * maxKn - 0.3) {
+            if (sv > chKn + 2) autopilot.chBrake = true; else if (sv < chKn + 0.5) autopilot.chBrake = false;
+            rpm = autopilot.chBrake ? 0 : chKn / maxKn;
+            order = rpm <= 0 ? 0 : rpm < 0.45 ? 1 : rpm < 0.8 ? 2 : 3;      // テレグラフは近い段を出しておく
+        }
+    }
+    if (rpm === null) autopilot.chBrake = false;
+    autopilot.chOn = Number.isFinite(chKn);
+    physics.apRpm = rpm;
     _apOrder(order);
     // 舵：針路のずれ（物理の向き）と回る速さで
     const want = _apHeadingForTrue(course);
@@ -2164,8 +2210,8 @@ function renderAutopilotPanel() {
         return;
     }
     const R = autopilot.route, wp = R[autopilot.leg];
-    // 船が画面の中で実際に進む速さ（物理の速さの値 × 早送り の m/s）から、実時間であと何分か
-    const v = Math.abs(physics.speed || 0) * (typeof physicsSpeed !== 'undefined' ? physicsSpeed : 1);
+    // 船が画面の中で実際に進む速さ（物理の速さ[ノット]→m/s × 早送り）から、実時間であと何分か
+    const v = Math.abs(physics.speed || 0) * 0.514444 * (typeof physicsSpeed !== 'undefined' ? physicsSpeed : 1);
     const eta = v > 0.3 ? autopilot.remain / v / 3600 : null;
     // 着くまで：24 時間を超える分は日で（例：3日 4時間12分）
     let etaS = '—';
@@ -2180,7 +2226,7 @@ function renderAutopilotPanel() {
         <div class="ap-row">残り ${_apFmtDist(autopilot.remain || 0)}・${R.length - autopilot.leg} 区間・着くまで ${etaS}</div>
         ${autopilot.note ? `<div class="ap-row ap-msg">${autopilot.note}</div>` : ''}
         ${autopilot.trafficWhy ? `<div class="ap-row ap-escort">⚠ ${autopilot.trafficWhy}</div>` : ''}
-        ${autopilot.escort ? `<div class="ap-row ap-escort">🚢 ${{ wait: 'タグを待っています（狭い水路の手前）', ahead: 'この先は狭い水路：タグが付き添います', on: 'タグの付き添いで狭い水路を微速で通っています' }[autopilot.escort]}</div>` : ''}
+        ${autopilot.escort ? `<div class="ap-row ap-escort">🚢 ${{ wait: 'タグを待っています（狭い水路の手前）', ahead: 'この先は狭い水路：タグが付き添います', on: 'タグの付き添いで狭い水路を 10 ノットほどで通っています' }[autopilot.escort]}</div>` : ''}
         <div class="ap-row">${Object.entries({ full: '全速', half: '半速', slow: '微速' }).map(([k, l]) => `<button class="${autopilot.cruise === k ? 'on' : ''}" onclick="autopilotSetCruise('${k}')">${l}</button>`).join('')}
             <button class="ap-off" onclick="autopilotStop('自動航行を切りました')">解除</button></div>
         ${autopilot.dest && autopilot.dest.point ? '' : `<div class="ap-row"><label><input type="checkbox" ${autopilot.berth ? 'checked' : ''} onchange="autopilotSetBerth(this.checked)"> 着いたらタグで岸壁に着岸</label> <select onchange="harborSetSidePref(this.value)" title="岸壁に付ける舷">${[['auto', '舷：自動'], ['port', '左舷付け'], ['starboard', '右舷付け']].map(([k, l]) => `<option value="${k}"${(harborAuto.sidePref || 'auto') === k ? ' selected' : ''}>${l}</option>`).join('')}</select>${autopilot.berthPlan ? '' : (autopilot.berth && autopilot.berthWhy ? `<div class="ap-msg">${autopilot.berthWhy}</div>` : '')}</div>`}

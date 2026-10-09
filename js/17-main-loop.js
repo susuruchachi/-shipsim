@@ -182,7 +182,7 @@ function animate() {
         // --- 旋回・船首方位 ---
         const LReal = 12.0 * physics.scale;
         const R = LReal * physics.turningRadiusFactor;
-        const speedMps = physics.speed * 0.514;
+        const speedMps = physics.speed * 0.514444;
         const maxRudder = 35.0;
 
         const rudderLeverArm = Math.abs(physics.rudderOffset.z * physics.scale - physics.cgOffset.z * physics.scale);
@@ -205,8 +205,10 @@ function animate() {
         // 水平方向の進出量は cos(pitch) 分だけ減る（ピッチが付くほど、推力の一部が
         // 鉛直成分に回される）。鉛直成分は下のheave計算で thrustAccMag から加える。
         const cosPitchFwd = Math.cos(physics.pitch);
-        const dx = isDesignMode ? 0 : Math.sin(rotY) * cosPitchFwd * physics.speed * subDt;
-        const dz = isDesignMode ? 0 : Math.cos(rotY) * cosPitchFwd * physics.speed * subDt;
+        // 速さ（physics.speed）はノット。進む距離は m/s（×0.514444）で（以前は値をそのまま m/s として進めていて、
+        // 表示の 2 倍ほどの速さで進んでいた：表示 20 ノットで実は 39 ノット。他の船・タグ・旋回はノットで計算していた）
+        const dx = isDesignMode ? 0 : Math.sin(rotY) * cosPitchFwd * speedMps * subDt;
+        const dz = isDesignMode ? 0 : Math.cos(rotY) * cosPitchFwd * speedMps * subDt;
         physics.cgWorldX += dx; physics.cgWorldZ += dz;
 
         // ── 喫水線基準の目標Y計算 ──────────────────────────────────

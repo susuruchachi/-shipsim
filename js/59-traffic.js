@@ -1478,10 +1478,8 @@ function _tfPlayerAsShip() {
     const ll = _tfPlayerLL();
     const L = (window.hullProfile && hullProfile.ready) ? hullProfile.halfLen * 2 * (physics.scale || 1) : 200;
     const hdg = typeof worldTrueCompass === 'function' ? worldTrueCompass() : 0;
-    //（自分の船は、物理の速さの値がそのまま 1 秒に進む m：17-main-loop.js。以前は ×0.514 してノットとみていて、
-    //  他の船は自分の船の速さを半分ほどに見積もり、最接近の予測がずれていた）
     const B = typeof _apShipHalfBeam === 'function' ? _apShipHalfBeam() * 2 : L / 9;
-    return { player: true, lat: ll.lat, lon: ll.lon, hdg, v: Math.abs(physics.speed || 0), L, B, name: '自分の船' };
+    return { player: true, lat: ll.lat, lon: ll.lon, hdg, v: Math.abs(physics.speed || 0) * 0.514444, L, B, name: '自分の船' };
 }
 function _tfVel(o) { const h = o.hdg * _tfR; return { e: Math.sin(h) * (o.v || 0), n: Math.cos(h) * (o.v || 0) }; }
 // 最接近（CPA[m]・TCPA[秒]）

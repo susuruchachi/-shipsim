@@ -1031,8 +1031,8 @@ function animateBubbles(t, dt) {
         const jetV = absRpm * maxSpd * (0.25 + 0.6 * slip);
         const spin = (typeof getPropSpinRate === 'function') ? Math.abs(getPropSpinRate()) : 0;
         const rotY = (physics.heading * Math.PI) / 180;
-        const shipVx = Math.sin(rotY) * physics.speed;
-        const shipVz = Math.cos(rotY) * physics.speed;
+        const shipVx = Math.sin(rotY) * physics.speed * 0.514444;      // （速さはノット → m/s）
+        const shipVz = Math.cos(rotY) * physics.speed * 0.514444;
         let n = 0;
         while (bubbleEmitAccum >= 1) {
             bubbleEmitAccum -= 1;
