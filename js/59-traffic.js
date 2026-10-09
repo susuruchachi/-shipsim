@@ -805,8 +805,31 @@ function _tfMakeShip(spec) {
     if (!S.name) S.name = _tfNewName(S);
     return S;
 }
+// 船の名前の比べ方：大文字・小文字、空白・点・記号、頭の「RMS」「SS」「HMS」などの略号は見ない（RMS Olympic ＝ Olympic）
+function _tfNameKey(n) {
+    return String(n || '').normalize('NFKC').toLowerCase().trim()
+        .replace(/^(r\.?m\.?s|s\.?s|m\.?v|m\.?s|h\.?m\.?s|u\.?s\.?s|h\.?m\.?h\.?s|t\.?s\.?s|s\.?t\.?s|t\.?s)\.?\s+/, '')
+        .replace(/[\s.\-_・'’"]/g, '');
+}
+// 保存した船の名前（モデルの有る無し・使う使わないに関わらず、保存の一覧にある名前すべて）
+function _tfSavedNameKeys() {
+    const s = new Set();
+    if (typeof loadAllShipSaves === 'function') for (const n of Object.keys(loadAllShipSaves())) { const k = _tfNameKey(n); if (k) s.add(k); }
+    return s;
+}
+// 保存した船と同じ名前か（その保存した船そのものは除く）
+function _tfSavedNameDup(n) { return !!(traffic.savedNames && traffic.savedNames.size && traffic.savedNames.has(_tfNameKey(n))); }
+// 保存した船と同じ名前の他の船は出さない（保存の一覧が変わったとき：もう出ている船は居なくなったことにして、ほかの船に入れ替える）
+function _tfDropSavedNameDupes() {
+    for (const S of traffic.ships) {
+        if (S.saved || S.placed || S.st === 'gone' || !_tfSavedNameDup(S.name)) continue;
+        _tfDropMesh(S); S.st = 'gone';
+    }
+}
 function _tfNewName(S) {
     const used = new Set(traffic.ships.map(o => o.name));
+    //（保存した船と同じ名前は使わない）
+    if (traffic.savedNames) for (const n of [...(TF_NAMES[S.cls] || TF_NAMES.steamer)]) if (_tfSavedNameDup(n)) used.add(n);
     if (world.kind !== 'real') {
         for (let k = 0; k < 40; k++) { const w = _tfPick(TF_GEN_SYL) + _tfPick(TF_GEN_SYL), n = w[0].toUpperCase() + w.slice(1) + ' Maru'; if (!used.has(n)) return n; }
     }
@@ -903,6 +926,7 @@ function _tfSpawnFleet() {
     // 決まった航路の船（少なめのときは、半分ほど）
     if (rk && TF_SERVICES[rk]) for (const sv of TF_SERVICES[rk]) {
         if (!_tfEraOk(sv.cls) || !_tfYearsOk(_tfYearsOf(sv)) || (traffic.density === 'few' && Math.random() < 0.5)) continue;
+        if (_tfSavedNameDup(sv.name)) continue;          // 保存した船と同じ名前の船は出さない（保存した船の方を出す）
         traffic.ships.push(_tfMakeShip(sv));
     }
     // そのほかの船：その世界の港の種類に合う船を、出る割合で
@@ -2323,7 +2347,12 @@ function updateTraffic(t, dt) {
         return;
     }
     // 保存した船の組み合わせ（保存の一覧を読むのは重いので、3 秒ごと）
-    if (traffic.sig === undefined || !(t - (traffic.sigT || -1e9) < 3) || t < traffic.sigT) { traffic.sigT = t; traffic.sig = _tfSavedSig(); }
+    if (traffic.sig === undefined || !(t - (traffic.sigT || -1e9) < 3) || t < traffic.sigT) {
+        traffic.sigT = t; traffic.sig = _tfSavedSig();
+        // 保存した船の名前：変わったら、同じ名前の他の船を入れ替える
+        const nk = _tfSavedNameKeys(), nsig = [...nk].sort().join('|');
+        if (nsig !== traffic.savedNamesSig) { traffic.savedNames = nk; traffic.savedNamesSig = nsig; _tfDropSavedNameDupes(); }
+    }
     const key = _tfWorldKey() + '|' + traffic.density + '|' + traffic.era + '|' + traffic.sig;
     if (key !== traffic.key) { _tfClear(); traffic.key = key; traffic.initT = t; }
     if (!traffic.ready) {
@@ -2470,6 +2499,18 @@ function trafficPickAt(p, cv) {
     return best;
 }
 window.trafficPickAt = trafficPickAt;
+// 地図の点 p の近く（14 点以内）の他の船を、近い順に全部（印が重なっているとき、押すたびに順に選ぶ：43-world.js）
+function trafficPickAllAt(p, cv) {
+    if (!traffic.on || typeof _wmToScreen !== 'function') return [];
+    const out = [];
+    for (const S of traffic.ships) {
+        if (!_tfShown(S)) continue;
+        const q = _wmToScreen(S.lat, S.lon, cv), d = Math.hypot(q.x - p.x, q.y - p.y);
+        if (d < 14) out.push({ S, d });
+    }
+    return out.sort((a, b) => a.d - b.d).map(x => x.S);
+}
+window.trafficPickAllAt = trafficPickAllAt;
 // 選んだ船の説明：会社・種類・大きさ、速力、どこからどこへ、と「追う」ボタン
 function trafficShipInfoHTML(id) {
     const S = _tfById(id), close = `<button onclick="_wm.selShip=null;_wm.followShip=null;_wmShowInfo();worldMapRedraw(true)">閉じる</button>`;

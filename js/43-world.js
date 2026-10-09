@@ -1916,19 +1916,31 @@ function _wmToScreen(lat, lon, cv) {
     let dl = lon - _wm.cx; dl = ((dl + 540) % 360) - 180;
     return { x: cv.clientWidth / 2 + dl / dpd, y: cv.clientHeight / 2 - (lat - _wm.cy) / dpd };
 }
+// 押した所の近くの印（他の船：14 点・港：22 点の内）を、押した所に近い順に（狙った印が最初に選ばれる）
+function _wmPickList(p, cv) {
+    const out = [];
+    if (!_wm.draft && typeof trafficPickAllAt === 'function') for (const S of trafficPickAllAt(p, cv)) { const q = _wmToScreen(S.lat, S.lon, cv); out.push({ k: 's' + S.id, ship: S, d: Math.hypot(q.x - p.x, q.y - p.y) }); }
+    for (const q of worldPortGroups()) {
+        const s = _wmToScreen(q.lat, q.lon, cv), d = Math.hypot(s.x - p.x, s.y - p.y);
+        if (d < 22) out.push({ k: 'p' + q.ports[0].id, port: q, d });
+    }
+    return out.sort((a, b) => a.d - b.d);
+}
+// 今選んでいる印の鍵（重なった印を順に選ぶときの、今どれか）
+function _wmSelKey() { return _wm.selShip != null ? 's' + _wm.selShip : _wm.sel ? 'p' + _wm.sel.ports[0].id : null; }
 function _wmTap(p) {
     const cv = document.getElementById('wp-canvas');
+    // 船・港の印が重なっているときは、同じ所をもう一度押すたびに次の印へ（押した所に近い順。15 秒たったら最初から）
+    //（順番は最初に押したときの近い順のまま：船が動いて近さの順が入れ替わっても、飛ばしたり同じ船に戻ったりしない）
+    const cands = _wmPickList(p, cv), sig = cands.map(c => c.k).sort().join(','), T = _wm.tapCycle;
+    let i = 0, order = cands.map(c => c.k);
+    if (T && cands.length > 1 && T.sig === sig && Math.hypot(T.x - p.x, T.y - p.y) < 14 && performance.now() - T.t < 15000 && T.cur === _wmSelKey()) { i = (T.i + 1) % cands.length; order = T.order; }
+    const pick = cands.find(c => c.k === order[i]) || cands[0] || null;
+    _wm.tapCycle = cands.length > 1 ? { sig, order, x: p.x, y: p.y, i, n: cands.length, t: performance.now(), cur: pick.k } : null;
     // 他の船（59-traffic.js）：速力・どこからどこへ・追うボタン
-    const ship = !_wm.draft && typeof trafficPickAt === 'function' ? trafficPickAt(p, cv) : null;
-    if (ship) { _wm.sel = null; _wm.selPt = null; _wm.selShip = ship.id; _wmShowInfo(); worldMapRedraw(true); return; }
+    if (pick && pick.ship) { _wm.sel = null; _wm.selPt = null; _wm.selShip = pick.ship.id; _wmShowInfo(); worldMapRedraw(true); return; }
     _wm.selShip = null;
-    const groups = worldPortGroups();
-    let best = null, bd = 22;
-    for (const q of groups) {
-        const s = _wmToScreen(q.lat, q.lon, cv);
-        const d = Math.hypot(s.x - p.x, s.y - p.y);
-        if (d < bd) { bd = d; best = q; }
-    }
+    const best = pick && pick.port ? pick.port : null;
     _wm.sel = best;
     // 港でない所：その海域を選ぶ（自動航行の行き先にできる）
     _wm.selPt = null;
@@ -1943,7 +1955,14 @@ function _wmTap(p) {
     _wmShowInfo();
     worldMapRedraw(true);
 }
+// 重なった印を選んだときは、パネルの上に「ここに n つ重なっています（i/n）」
 function _wmShowInfo() {
+    _wmShowInfo0();
+    const el = document.getElementById('wp-info'), T = _wm.tapCycle;
+    if (!el || !T || el.style.display === 'none' || T.cur !== _wmSelKey()) return;
+    el.insertAdjacentHTML('afterbegin', `<div class="wp-pmeta" style="opacity:.85">🔁 ここに ${T.n} 個の印（船・港）が重なっています。同じ所をもう一度押すと次へ（${T.i + 1}/${T.n}）</div>`);
+}
+function _wmShowInfo0() {
     const el = document.getElementById('wp-info');
     if (!el) return;
     const G = _wm.sel;

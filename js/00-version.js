@@ -237,7 +237,10 @@
 //               最後の点の近くで、惰性で進んだ先に船体がかかる（桟橋の先など）なら後進で止めてそこで着いたことに。
 //               タグが前後の片方にしかいないとき（座礁して帰ったなど）は、横へ押して回してしまわないように。
 //               並走：相手の船尾の後ろを回ってきたあと、横へ出きるまで前へ出ない（相手の船尾に突っ込んでいた）
-var APP_VERSION = '0.03.016.002';
+// 0.03.016.003 保存した船と同じ名前の他の船は出さない（RMS・SS などの頭の略号・大文字小文字・空白は見ない。あとから保存した
+//               ときも、出ている同じ名前の船は入れ替わる）。地図で船・港の印が重なっているときは、同じ所を押すたびに次の印へ
+//               （押した所に近い順。パネルの上に「ここに n 個の印が重なっています（i/n）」）
+var APP_VERSION = '0.03.016.003';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
