@@ -959,7 +959,10 @@ function _trFarWaterMesh() {
     return _trFarWater;
 }
 function _trFarWaterUpdate() {
-    const show = world.mode === 'world' && !!(terrain.near || terrain.far);
+    // 波の水面（船のまわりの四角）の外の海：どのモードでも（「海だけ」・外洋の真ん中で陸の地形が無いときも）。
+    //（以前は世界のモードで陸の地形があるときだけで、ほかでは高い所から見ると、波の水面の四角の外に海が無かった）
+    // 海面を非表示にしているときは出さない
+    const show = !!(window.world && (world.mode === 'world' || world.mode === 'ocean')) && typeof waterMesh !== 'undefined' && !!waterMesh && waterMesh.visible;
     const m = show ? _trFarWaterMesh() : _trFarWater;
     if (!m) return;
     if (show && !m.parent) scene.add(m);

@@ -1630,8 +1630,17 @@ function _apChase(dt) {
     let sa = 0, sc = C.side * off;
     // 後ろに付く（side 0）：相手の船尾の後ろ（船の長さの半分ずつ＋間）。横はそろえる
     const astern = C.side === 0;
-    if (astern) sa = -(clearA + Math.max(60, (Lt + Lo) * 0.3));
-    const sideRef = C.side || Math.sign(pc) || 1;                 // （後ろに付くときの、回り込む向きの基準）
+    if (astern) {
+        sa = -(clearA + Math.max(60, (Lt + Lo) * 0.3));
+        // まだ相手の後ろへ回っていない（前・横にいる）：相手の横を、船体の間をあけてすれ違ってから後ろへ回る
+        //（以前は真後ろの持ち場へまっすぐ向かい、相手の前にいると正面からぶつかっていた）。
+        // 正面から行き会うときは、たがいに右へよけて左舷どうしで（相手の左舷側を）すれ違う
+        if (pa > -(clearA + 40)) {
+            if (!C.sideA) C.sideA = Math.abs(pc) > 50 ? Math.sign(pc) : -1;
+            sc = C.sideA * Math.max(off + 60, Math.abs(pc) * 0.9);
+        } else if (Math.abs(pc) < off) C.sideA = 0;
+    }
+    const sideRef = C.side || C.sideA || Math.sign(pc) || 1;      // （後ろに付くときの、回り込む向きの基準）
     const wrong = !astern && Math.sign(pc || C.side) !== C.side && Math.abs(pc) < off + 600 && pa > -(clearA + 600);
     if (astern) { /* 前後に重ならないよう、下の「近すぎる」で後ろへ下がる */ }
     else if (wrong) {
@@ -1676,7 +1685,8 @@ function _apChase(dt) {
     if (eAll < 3000) { const lim = Math.max(1.5, Math.max(vT, Math.abs(cA)) * 0.84) * (eAll < 1000 ? 1 : 1 + (eAll - 1000) / 500); cC = Math.max(-lim, Math.min(lim, cC)); }
     // 船体が重なりそう（相手の横にいて、間が狭い）：すぐ外へ
     const tight = Math.abs(pa) < clearA + 20 && Math.abs(pc) < (Bt + Bo) / 2 + 15;
-    if (tight && astern) { cA = Math.min(cA, -1.5); }                                   // 後ろに付く：相手の船尾に近すぎる → 下がる
+    if (tight && astern && pa < 0) { cA = Math.min(cA, -1.5); }                         // 後ろに付く：相手の船尾に近すぎる → 下がる
+    else if (tight && astern) { cC = (C.sideA || Math.sign(pc) || -1) * Math.max(Math.abs(cC), 2); }   // 相手の前・横に重なりそう → 横へ
     else if (tight) { cC = Math.sign(pc || C.side) * Math.max(Math.abs(cC), 2); cA = Math.min(cA, 0); }
     const w = { e: f.e * cA + r.e * cC, n: f.n * cA + r.n * cC };
     // 相手の速さ＋寄る分。全体が自分の船の速さの上限を超えるときは、寄る分だけを縮める（向きは持ち場へ）

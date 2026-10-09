@@ -1433,7 +1433,11 @@ function _tfLeaderOf(S) {
 function _tfTeamed(S, O) {
     if (!S || !O) return false;
     const f = (A, B) => !!(A.follow && (B.player ? A.follow.id === 'player' : A.follow.id === B.id));
-    return f(S, O) || f(O, S);
+    if (f(S, O)) return true;
+    if (!f(O, S)) return false;
+    // 追従してくる船が、まだ自分の前の進路の上にいる（後ろへ回る途中）：その船はよける・待つ相手のまま
+    const e = _tfEN(S, O), h = S.hdg * _tfR, a = e.e * Math.sin(h) + e.n * Math.cos(h), c = e.e * Math.cos(h) - e.n * Math.sin(h);
+    return !(a > 0 && Math.abs(c) < (S.B + (O.B || 20)) / 2 + 60);
 }
 function _tfFollowBegin(S) {
     S.followReq = false;
@@ -1483,13 +1487,28 @@ function _tfFollowStep(S, d, far) {
         st = _tfOff(Ld, Lh + 90 * F.side, (LB + S.B) / 2 + gapS);
         for (const a of [0, S.L / 2, -S.L / 2]) if (_tfDepth(a ? _tfOff(st, Lh, a) : st) < S.d + 3) { mode = 'astern'; break; }
     }
+    // 後ろに付くのに、まだ相手の前・横にいる：相手の横を、間をあけてすれ違ってから後ろへ（相手の斜め後ろの所へ）。
+    //（真後ろの跡をまっすぐたどろうとすると、相手の前で止まって、正面からぶつかっていた。正面から行き会うときは、
+    //  たがいに右へよけて、相手の左舷側を通る）
+    if (mode === 'astern') {
+        const e0 = _tfEN(Ld, S), h0 = Lh * _tfR, pa = e0.e * Math.sin(h0) + e0.n * Math.cos(h0), pc = e0.e * Math.cos(h0) - e0.n * Math.sin(h0);
+        if (pa > -(LL / 2 + S.L / 2 + 20)) {
+            if (!F.sideA) F.sideA = Math.abs(pc) > 40 ? Math.sign(pc) : -1;
+            const lat = F.sideA * Math.max((LB + S.B) / 2 + gapS + 120, Math.abs(pc) * 0.9);
+            // 目指す所は、相手から見て今の所の 600m 後ろ（相手の後ろの持ち場まで）の、横へずれた所：
+            // 前後の差を小さく見せて、先に横へ出きってからすれ違う（遠い持ち場を目指すと、横へはほとんど出ない）
+            const aT = Math.max(-(LL / 2 + S.L / 2 + gapA), pa - 600);
+            st = _tfOff(_tfOff(Ld, Lh, aT), Lh + 90, lat);
+            mode = 'pass';
+        } else if (Math.abs(pc) < (LB + S.B) / 2 + gapS) F.sideA = 0;
+    }
     F.mode = mode;
     // 跡の上の、自分のいる所と、後ろの持ち場
     const pts = tr.concat([{ lat: Ld.lat, lon: Ld.lon }]), cum = [0];
     for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + _tfDist(pts[i - 1], pts[i]));
     const total = cum[cum.length - 1], sSt = Math.max(0, total - (LL / 2 + S.L / 2 + gapA));
     let wantH = S.hdg, wantV = 0;
-    if (mode === 'side') {
+    if (mode === 'side' || mode === 'pass') {
         const e = _tfEN(S, st), fe = Math.sin(Lh * _tfR), fn = Math.cos(Lh * _tfR), dist = Math.hypot(e.e, e.n);
         // 相手の速さ＋持ち場へ寄る速さ（離れているほど速く。全体は船の最大の速さまで）
         let ve = fe * vL + 0.02 * e.e, vn = fn * vL + 0.02 * e.n;
@@ -1526,7 +1545,8 @@ function _tfFollowStep(S, d, far) {
     const e = _tfWrap(wantH - S.hdg);
     const rate = Math.max(0.15, 1.3 * S.v / _tfRad(S) / _tfR);
     S.hdg = (S.hdg + Math.sign(e) * Math.min(Math.abs(e), rate * d) + 360) % 360;
-    const vT = wantV * Math.max(0.25, Math.cos(Math.min(Math.abs(e), 75) * _tfR));
+    // （向きが大きく違う間も、回るための行き足は残す：回る速さは行き足に比例するので、遅いといつまでも回り切らない）
+    const vT = wantV * Math.max(0.6, Math.cos(Math.min(Math.abs(e), 75) * _tfR));
     S.v += Math.max(-S.acc * 1.5 * d, Math.min(S.acc * d, vT - S.v)); S.v = Math.max(0, S.v);
     const q = _tfOff(S, S.hdg, S.v * d); S.lat = q.lat; S.lon = q.lon;
 }
@@ -2794,16 +2814,37 @@ function trafficPlaceShip(o) {
     delete spec.route;
     if (route.length >= 2) spec.route = route.map(p => p.name);
     const S = _tfMakeShip(spec);
+    // 同じ船（同じ保存した船のモデル）・同じ名前の船がもう地図の上にいれば、そちらは消す（置いた船だけにする）
+    const gone = _tfRemoveSame(S, v);
     S.placed = true; S.noRespawn = true;
     S.lat = o.lat; S.lon = o.lon; S.hdg = Number.isFinite(o.hdg) ? o.hdg : 0; S.v = 0; S.st = 'placed'; S.t = 0;
     S.port = null; S.gate = null; S.dPl = _tfDist(_tfPlayerLL(), S);
     if (S.svc) S.svc.i = -1;
     else if (route.length === 1) S.to = { P: route[0] };
     traffic.ships.push(S);
-    _tfMsg(`${S.name}（${_tfClassOf(S).label}）を置きました${route.length ? `：${route.map(p => worldBerthLabel(p)).join(' → ')}` : ''}`);
+    _tfMsg(`${S.name}（${_tfClassOf(S).label}）を置きました${route.length ? `：${route.map(p => worldBerthLabel(p)).join(' → ')}` : ''}${gone ? `（同じ船が ${gone} 隻いたので消しました）` : ''}`);
     return S;
 }
 window.trafficPlaceShip = trafficPlaceShip;
+// 置こうとしている船 N と同じ船（同じ保存した船のモデル v）・同じ名前の船を消す。消した数
+function _tfRemoveSame(N, v) {
+    const key = _tfNameKey(N.name);
+    let n = 0;
+    for (const S of traffic.ships) {
+        if (S === N || S.st === 'gone') continue;
+        const same = (v && S.saved && S.saved.key === v.key) || (key && _tfNameKey(S.name) === key);
+        if (!same) continue;
+        _tfDropMesh(S);
+        if (S.port) _tfSlotFree(S.port, S.id);
+        if (S.mPort) _tfSlotFree(S.mPort, S.id);
+        if (S.to && S.to.P) _tfSlotFree(S.to.P, S.id);
+        if (traffic.camFollow === S.id) trafficFollow(null);
+        if (typeof autopilot !== 'undefined' && autopilot.chase && autopilot.chase.id === S.id && typeof apChaseStop === 'function') apChaseStop(`${S.name} が地図から消えたので、追いかけるのをやめました（機関停止）`);
+        S.st = 'gone'; S.noRespawn = true; S.follow = null;
+        n++;
+    }
+    return n;
+}
 function _tfPlacedGo(S) {
     if (!S.to) { const x = _tfChooseDest(S); if (!x) { S.t = 10; S.why = '行き先が見つかりません'; return; } S.to = x; S.toB = null; }
     if (S.to.P && !_tfSlotOf(S.to.P, S.id)) { const b = _tfSlotFind(S.to.P, S.L, S.id, S); if (b !== null) { _tfSlotTake(S.to.P, b, S.L, S.id, true); S.toB = b; } }
