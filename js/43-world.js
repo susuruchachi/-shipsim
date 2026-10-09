@@ -1550,6 +1550,20 @@ setInterval(() => { const p = document.getElementById('settings-panel'); if (p &
 
 // 港から出航する：港の前の泊地に、海の方を向けて置く。
 // 船が深すぎて港に入れないときは、足りる深さの所まで沖へ出して置く。
+// 「ここから出航」：その埠頭に他の船が着いていれば、一度知らせる（続けるなら、その船を別の埠頭へ移してから）
+function worldStartAtPortAsk(id) {
+    const P = world.ports.find(q => q.id === id); if (!P) return;
+    const B = (typeof trafficBerthShips === 'function' && window.world && world.mode === 'world') ? trafficBerthShips(P) : [];
+    if (B.length && !(_wm.startWarn && _wm.startWarn.id === id)) { _wm.startWarn = { id, names: B.map(S => S.name) }; _wmShowInfo(); return; }
+    worldStartAtPortGo(id);
+}
+function worldStartAtPortGo(id) {
+    const P = world.ports.find(q => q.id === id); if (!P) return;
+    _wm.startWarn = null;
+    if (typeof trafficEvictBerth === 'function') trafficEvictBerth(P);
+    worldStartAtPort(P); toggleWorldMap(false);
+}
+window.worldStartAtPortAsk = worldStartAtPortAsk; window.worldStartAtPortGo = worldStartAtPortGo;
 function worldStartAtPort(port) {
     // 作り込んだ港で、細かい地形をまだ読んでいなければ、読んでから（船を置く所を本物の深さで決める）
     if (_RW && _RW.hdMeta && _rwDetailBoxOf(port.lat, port.lon) && !_rwDetailOf(port.lat, port.lon) && !port._hdTried) {
@@ -1978,7 +1992,10 @@ function _wmShowInfo0() {
         return t;
     };
     const btns = (p) => _wm.draft ? `<button onclick="trafficDraftRoute('add', '${p.id}')">➕ 置く船の航路に加える</button>`
-        : `${(ll && typeof autopilotStart === 'function') ? `<button onclick="autopilotStart(world.ports.find(q => q.id === '${p.id}'))">🧭 ここへ自動航行</button>` : ''}<button onclick="worldStartAtPort(world.ports.find(q => q.id === '${p.id}')); toggleWorldMap(false);">⚓ ここから出航</button>`;
+        : `${(ll && typeof autopilotStart === 'function') ? `<button onclick="autopilotStart(world.ports.find(q => q.id === '${p.id}'))">🧭 ここへ自動航行</button>` : ''}<button onclick="worldStartAtPortAsk('${p.id}')">⚓ ここから出航</button>`
+        + (_wm.startWarn && _wm.startWarn.id === p.id ? `<div class="wp-pmeta" style="color:#ffcf6b">⚠ この埠頭には ${_wm.startWarn.names.join('・')} が着いています。
+            それでもここから出航するなら、その船は別の埠頭へ移します（空いている埠頭が無ければ、いなくなります）。</div>
+            <div class="wp-pbtns"><button onclick="worldStartAtPortGo('${p.id}')">⚓ 移してここから出航</button><button onclick="_wm.startWarn=null;_wmShowInfo()">やめる</button></div>` : '');
     // 岸壁に付ける舷（「ここから出航」で着岸した状態から始めるときと、自動の着岸。50-harbor-auto.js）
     const sideRow = typeof harborSetSidePref === 'function' ? `<div class="wp-side">岸壁に付ける舷：${[['auto', '自動'], ['port', '左舷付け'], ['starboard', '右舷付け']].map(([k, l]) =>
         `<button class="${(harborAuto.sidePref || 'auto') === k ? 'on' : ''}" onclick="harborSetSidePref('${k}');_wmShowInfo()">${l}</button>`).join('')}</div>` : '';
@@ -2265,6 +2282,12 @@ function toggleWorldMap(open) {
 window.toggleWorldMap = toggleWorldMap;
 
 // 世界地図を開いている間は、船の位置の印を時々更新する
-setInterval(() => { if (_wm.open && world.mode === 'world') { worldMapRedraw(true); if (_wm.selShip != null) _wmShowInfo(); } }, 1000);
+setInterval(() => {
+    if (!_wm.open || world.mode !== 'world') return;
+    worldMapRedraw(true);
+    // （船の欄のプルダウン・入力を触っている間は描き直さない：選んでいる途中で閉じてしまう）
+    const el = document.getElementById('wp-info'), a = document.activeElement;
+    if (_wm.selShip != null && !(el && a && a !== document.body && el.contains(a) && /SELECT|INPUT/.test(a.tagName))) _wmShowInfo();
+}, 1000);
 // 前回が現実世界なら、ページを読み終えたら地形を読んで続きから
 if (world._pendingReal) window.addEventListener('load', () => { setTimeout(worldRestoreReal, 0); });

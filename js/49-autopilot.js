@@ -826,7 +826,7 @@ async function autopilotStart(port) {
             try {
                 const pts = await worldPlanRoute(from, tgt, { tug: mode === 'tug', wide: mode === 'wide' });
                 if (autopilot.dest !== port || !autopilot.planning) return;      // 途中でやめた
-                for (const p of pts.slice(1)) route.push({ lat: p.lat, lon: p.lon, label: '', narrow: !!p.narrow });
+                for (const p of pts.slice(1)) route.push({ lat: p.lat, lon: p.lon, label: p.label || '', narrow: !!p.narrow });
                 Object.assign(route[route.length - 1], { label: port.name, final: true });
                 autopilot.berthPlan = null; autopilot.berthWhy = null; autopilot.deepShip = false;
                 autopilot.pointMoved = tgt.moved;
@@ -872,7 +872,7 @@ async function autopilotStart(port) {
                 }
                 if (!pts) throw err;
                 if (autopilot.dest !== port || !autopilot.planning) return;
-                for (const q of pts.slice(1)) route.push({ lat: q.lat, lon: q.lon, label: '', narrow: !!q.narrow });
+                for (const q of pts.slice(1)) route.push({ lat: q.lat, lon: q.lon, label: q.label || '', narrow: !!q.narrow });
                 if (viaFar) { route[route.length - 1].label = `${port.name} 航路の延長線`; route.push({ lat: end.lat, lon: end.lon, label: `${port.name} 航路の入口`, channel: true, narrow: channelNarrow }); }
                 else Object.assign(route[route.length - 1], { label: deepShip ? `${port.name} 沖の錨地` : `${port.name} 航路の入口` });
                 if (deepShip) Object.assign(route[route.length - 1], { final: true });
@@ -949,7 +949,7 @@ async function autopilotStart(port) {
             if (!pts) throw err;
             const viaFar = target === 'far';
             if (autopilot.dest !== port || !autopilot.planning) return;      // 途中でやめた
-            for (const p of pts.slice(1)) route.push({ lat: p.lat, lon: p.lon, label: '', narrow: !!p.narrow });
+            for (const p of pts.slice(1)) route.push({ lat: p.lat, lon: p.lon, label: p.label || '', narrow: !!p.narrow });
             if (viaFar) { route[route.length - 1].label = `${port.name} 航路の延長線`; route.push(Object.assign(outer, { label: `${port.name} 沖` })); }
             else if (target === 'inner') Object.assign(route[route.length - 1], { label: `${port.name} 航路の入口`, channel: true, narrow: channelNarrow || route[route.length - 1].narrow });
             else route[route.length - 1].label = `${port.name} 沖`;
@@ -1576,14 +1576,17 @@ function apChaseStart(id, side) {
     if (autopilot.active || autopilot.planning) autopilotStop('');
     if (autopilot.selfDepart) _apSpringLine(autopilot.selfDepart, false);
     autopilot.pendingDepart = null; autopilot.selfDepart = null;
-    autopilot.chase = { id: S.id, name: S.name, side: side === 1 || side === -1 ? side : _apChaseSideNow(S), I: 0, along: false, dist: S.dPl, phase: '', why: '' };
+    // side：+1 右舷側・−1 左舷側・0 後ろ（相手の通った跡を後ろから付いていく）。指定が無ければ、今いる舷
+    autopilot.chase = { id: S.id, name: S.name, side: side === 1 || side === -1 || side === 0 ? side : _apChaseSideNow(S), I: 0, along: false, dist: S.dPl, phase: '', why: '' };
     if (traffic.player) traffic.player.chaseId = S.id;
     autopilot.lastOrder = null;
     _apMsg('');
     if (typeof worldMapRedraw === 'function') worldMapRedraw(true);
 }
 // 並走する舷を替える（相手の船尾の後ろを回って反対の舷へ）
-function apChaseSwapSide() { const C = autopilot.chase; if (C) { C.side = -C.side; renderAutopilotPanel(); } }
+function apChaseSwapSide() { const C = autopilot.chase; if (C) { C.side = C.side ? -C.side : _apChaseSideNow(_tfById(C.id) || {}); renderAutopilotPanel(); } }
+// 付く所を決める（+1 右舷側・−1 左舷側・0 後ろ）
+function apChaseSetSide(v) { const C = autopilot.chase; if (C && (v === 1 || v === -1 || v === 0)) { C.side = v; C.astern = false; renderAutopilotPanel(); } }
 // how：'keep' 機関はそのままの段（回転数にいちばん近いテレグラフ）で続ける（「やめる」のボタン）、
 //      'hands' テレグラフは手で動かしたまま、ほかは機関を止める
 function apChaseStop(msg, how) {
@@ -1601,7 +1604,7 @@ function apChaseStop(msg, how) {
     _apMsg(msg || '');
     if (typeof worldMapRedraw === 'function') worldMapRedraw(true);
 }
-Object.assign(window, { apChaseStart, apChaseStop, apChaseSwapSide });
+Object.assign(window, { apChaseStart, apChaseStop, apChaseSwapSide, apChaseSetSide });
 const ENG_RPM_OF_AP = { 3: 1, 2: 0.6, 1: 0.3, 0: 0, '-1': -0.15, '-2': -0.3, '-3': -0.5 };
 function _apChaseKA(tau) { return 1 / (1.6 * tau); }
 function _apChaseVT(S) { return (S.st === 'go' || S.st === 'anchoring' || S.st === 'placed') ? Math.max(0, S.v || 0) : 0; }
@@ -1625,8 +1628,13 @@ function _apChase(dt) {
     // 持ち場：相手の真横（真ん中どうしをそろえる）。反対の舷にいて、横に近い（相手の前後に重なる・横切る）うちは、
     // 相手の船尾の後ろ（船の長さの半分ずつ＋200m）へ下がってから、そちらの舷へ回る
     let sa = 0, sc = C.side * off;
-    const wrong = Math.sign(pc || C.side) !== C.side && Math.abs(pc) < off + 600 && pa > -(clearA + 600);
-    if (wrong) {
+    // 後ろに付く（side 0）：相手の船尾の後ろ（船の長さの半分ずつ＋間）。横はそろえる
+    const astern = C.side === 0;
+    if (astern) sa = -(clearA + Math.max(60, (Lt + Lo) * 0.3));
+    const sideRef = C.side || Math.sign(pc) || 1;                 // （後ろに付くときの、回り込む向きの基準）
+    const wrong = !astern && Math.sign(pc || C.side) !== C.side && Math.abs(pc) < off + 600 && pa > -(clearA + 600);
+    if (astern) { /* 前後に重ならないよう、下の「近すぎる」で後ろへ下がる */ }
+    else if (wrong) {
         sa = -(clearA + 200);
         if (pa > -(clearA + 120)) sc = Math.sign(pc || -C.side) * Math.max(off, Math.abs(pc));       // まだ後ろへ出ていない：今の舷のまま下がる
     } else if (Math.abs(pc) < (Bt + Bo) / 2 + 20 && Math.abs(pa) > clearA * 0.7) {
@@ -1668,7 +1676,8 @@ function _apChase(dt) {
     if (eAll < 3000) { const lim = Math.max(1.5, Math.max(vT, Math.abs(cA)) * 0.84) * (eAll < 1000 ? 1 : 1 + (eAll - 1000) / 500); cC = Math.max(-lim, Math.min(lim, cC)); }
     // 船体が重なりそう（相手の横にいて、間が狭い）：すぐ外へ
     const tight = Math.abs(pa) < clearA + 20 && Math.abs(pc) < (Bt + Bo) / 2 + 15;
-    if (tight) { cC = Math.sign(pc || C.side) * Math.max(Math.abs(cC), 2); cA = Math.min(cA, 0); }
+    if (tight && astern) { cA = Math.min(cA, -1.5); }                                   // 後ろに付く：相手の船尾に近すぎる → 下がる
+    else if (tight) { cC = Math.sign(pc || C.side) * Math.max(Math.abs(cC), 2); cA = Math.min(cA, 0); }
     const w = { e: f.e * cA + r.e * cC, n: f.n * cA + r.n * cC };
     // 相手の速さ＋寄る分。全体が自分の船の速さの上限を超えるときは、寄る分だけを縮める（向きは持ち場へ）
     const ww = w.e * w.e + w.n * w.n, b = vT * (f.e * w.e + f.n * w.n), c0 = vT * vT - vMax * vMax;
@@ -1680,7 +1689,7 @@ function _apChase(dt) {
     let V = Math.hypot(Ve, Vn), crs = V > 0.4 ? (Math.atan2(Ve, Vn) / _apRad + 360) % 360 : S.hdg;
     if (C.astern === 'back' || C.astern === 'final') {
         // 線に沿って：線からのずれ ey（線の向きに右が＋）が大きいほど、線へ向けて最大 60° まで切り込む
-        const back = C.astern === 'back', lat = back ? sc + C.side * 2 * rho : sc;
+        const back = C.astern === 'back', lat = back ? sc + sideRef * 2 * rho : sc;
         //（寄る線は相手と同じ向き f なので右は r、下がる線は逆向きなので右は −r）
         const ey = back ? (lat - pc) : (pc - lat);
         const base = back ? S.hdg + 180 : S.hdg;
@@ -1740,7 +1749,7 @@ function _apChase(dt) {
     // 様子
     const alongNow = !wrong && sa === 0 && Math.abs(ea) < Math.max(30, 0.25 * Lt) && Math.abs(ec) < Math.max(25, 0.5 * off);
     C.along = alongNow;
-    C.phase = alongNow ? (vT < 0.3 ? '横に並んで止まっています' : '並走しています') : wrong ? '相手の船尾の後ろを回って、反対の舷へ' : sa !== 0 && C.astern !== 'back' ? (sa < 0 ? '相手の後ろで、横へ出ています' : '相手の前で、横へ出ています') : C.astern === 'back' ? '相手の後ろへ回って、同じ向きで寄ります' : dist > 2000 ? '追いかけています' : '横へ寄せています';
+    C.phase = astern ? (eAll < 150 ? (vT < 0.3 ? '後ろで止まっています' : '後ろに付いて走っています') : C.astern === 'back' ? '相手の後ろへ回っています' : '後ろへ寄せています') : alongNow ? (vT < 0.3 ? '横に並んで止まっています' : '並走しています') : wrong ? '相手の船尾の後ろを回って、反対の舷へ' : sa !== 0 && C.astern !== 'back' ? (sa < 0 ? '相手の後ろで、横へ出ています' : '相手の前で、横へ出ています') : C.astern === 'back' ? '相手の後ろへ回って、同じ向きで寄ります' : dist > 2000 ? '追いかけています' : '横へ寄せています';
     C.why = why; C.ea = ea; C.ec = ec; C.vT = vT; C.rpm = rpm; C.crs = crs;
     autopilot.course = crs;
 }
@@ -2401,11 +2410,11 @@ function renderAutopilotPanel() {
     if (autopilot.chase) {
         const C = autopilot.chase, kn = (x) => (x / 0.514444).toFixed(1);
         uiSetHTML(el, `<div class="ap-title">${fold}🚢 ${C.name} と並走</div>
-            <div class="ap-row"><b>${C.phase || '追いかけています'}</b>（相手の${C.side > 0 ? '右舷' : '左舷'}側）</div>
+            <div class="ap-row"><b>${C.phase || '追いかけています'}</b>（相手の${C.side > 0 ? '右舷側' : C.side < 0 ? '左舷側' : '後ろ'}）</div>
             <div class="ap-row">相手まで ${C.dist < 2000 ? Math.round(C.dist) + ' m' : _apFmtDist(C.dist || 0)}・相手 ${kn(C.vT || 0)} ノット・針路 ${Math.round(C.crs || 0).toString().padStart(3, '0')}°</div>
             <div class="ap-row">機関の回転 ${Math.round((C.rpm || 0) * 100)}%${Number.isFinite(C.ea) ? `・前後のずれ ${C.ea > 0 ? '前へ' : '後ろへ'} ${Math.round(Math.abs(C.ea))} m・横 ${Math.round(Math.abs(C.ec))} m` : ''}</div>
             ${C.why ? `<div class="ap-row ap-escort">⚠ ${C.why}</div>` : ''}
-            <div class="ap-row"><button onclick="apChaseSwapSide()">反対の舷へ回る</button>
+            <div class="ap-row">付く所：${[[1, '右舷側'], [-1, '左舷側'], [0, '後ろ']].map(([v, l]) => `<button class="${C.side === v ? 'on' : ''}" onclick="apChaseSetSide(${v})">${l}</button>`).join('')}
             <button class="ap-off" onclick="apChaseStop('並走をやめました（機関はそのまま）', 'keep')">やめる</button></div>
             ${autopilot.msg ? `<div class="ap-msg">${autopilot.msg}</div>` : ''}`);
         return;

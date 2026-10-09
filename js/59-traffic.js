@@ -531,14 +531,14 @@ function _tfLane(a, b) {
     return L1 || L2 || null;
 }
 // 航路を探してもらう（近い所から先に）
-function _tfLaneNeed(a, b) {
+function _tfLaneNeed(a, b, urgent) {
     const L = _tfLane(a, b);
-    if (L) return L;
+    if (L) { if (urgent && L.state === 'queued') { const q = traffic.laneQ.find(x => x.a.key === a.key && x.b.key === b.key); if (q) q.urgent = true; } return L; }
     const me = _tfPlayerLL();
     const pri = Math.min(_tfDist(me, a), _tfDist(me, b));
     const st = { state: 'queued' };
     traffic.lanes.set(a.key + '|' + b.key, st);
-    traffic.laneQ.push({ a, b, pri });
+    traffic.laneQ.push({ a, b, pri, urgent: !!urgent });
     return st;
 }
 function _tfLanePump() {
@@ -546,7 +546,8 @@ function _tfLanePump() {
     if (typeof autopilot !== 'undefined' && autopilot.planning) return;      // 自分の船の航路探しが先
     // 近い所から（自分の船が動けば、近さも変わる）
     const me = _tfPlayerLL();
-    for (const q of traffic.laneQ) q.pri = Math.min(_tfDist(me, q.a), _tfDist(me, q.b));
+    // （地図で置いた・行き先を変えた船は、いちばん先に）
+    for (const q of traffic.laneQ) q.pri = q.urgent ? -1 : Math.min(_tfDist(me, q.a), _tfDist(me, q.b));
     traffic.laneQ.sort((x, y) => x.pri - y.pri);
     const q = traffic.laneQ.shift(), key = traffic.key, slot = traffic.lanes.get(q.a.key + '|' + q.b.key);
     traffic.laneBusy = true;
@@ -1354,6 +1355,13 @@ function _tfFromAnchor(S) {
     if (S.dPl < 15000) _tfMsg(`${S.name}：錨を上げて ${worldBerthLabel ? worldBerthLabel(P) : P.name} へ向かいます`);
 }
 function _tfStep(S, d, far) {
+    // 追従を頼まれた船：動ける状態になったら付いていく（岸壁に着いている船は、早めに離岸してから）
+    if (S.followReq) {
+        if (S.st === 'go' || S.st === 'anchoring' || S.st === 'anchored' || S.st === 'holding' || S.st === 'placed') _tfFollowBegin(S);
+        else if (S.st === 'berth' && S.t > 3) S.t = 3;
+    }
+    // 行き先を変えた船：岸壁に着いたら、早めにそちらへ
+    if (S.redirect && S.st === 'berth') { S.to = { P: S.redirect }; S.toB = null; S.redirect = null; S.svc = null; if (S.t > 5) S.t = 5; }
     switch (S.st) {
         case 'pending':
             S.t = (S.t || 0) - d;
@@ -1372,7 +1380,16 @@ function _tfStep(S, d, far) {
             if (S.t <= 0) { S.to = null; _tfTryDepart(S, far); }
             return;
         case 'placed':           // 地図で置いた船：その場で止まって、航路が見つかったら走り出す（trafficPlaceShip）
-            S.t -= d; S.v = 0;
+            S.t -= d;
+            // 航行中に行き先を変えた船・追従をやめた船：道すじが決まるまで、今の向きのまま、道すじを引き始める点（replanPt）へ。
+            // 着いても決まらなければ、行き足を落として止まる
+            if (S.v > 0 && !far) {
+                const toP = S.replanPt ? _tfDist(S, S.replanPt) : 0;
+                if (toP < 40) S.v = Math.max(0, S.v - S.acc * 0.5 * d);
+                const ds = Math.min(S.v * d, toP > 0 ? toP : Infinity), q = _tfOff(S, S.hdg, ds);
+                if (_tfDepth(q) > S.d + 1) { S.lat = q.lat; S.lon = q.lon; } else S.v = 0;
+            }
+            else S.v = 0;
             if (S.t <= 0) _tfPlacedGo(S);
             return;
         case 'anchored':
@@ -1389,10 +1406,156 @@ function _tfStep(S, d, far) {
         case 'go': case 'anchoring':
             _tfMove(S, d, far);
             return;
+        case 'follow':           // 他の船（自分の船も）に付いていく（trafficSetFollow）
+            _tfFollowStep(S, d, far);
+            return;
         case 'damaged':           // 被弾して漂っている・沈んでいく（65-ship-hits.js）
             return;
     }
 }
+// ════════════════════════════════════════════════════════════════
+//  他の船に付いていく（追従）
+// ════════════════════════════════════════════════════════════════
+//  S.follow = { id（相手の船の番号。自分の船は 'player'）, side（+1 右舷側・−1 左舷側・0 後ろ）, trail（相手の通った跡） }
+//  追従している船に追従させるのも自由（列になる）。横に付けない所（水路の中で、横が浅い）では、その間だけ後ろに付く。
+//  後ろに付くときは、相手の通った跡の上をたどる（相手が曲がった所で曲がる：近道して浅い所に入らない）。
+//  向きを変える速さ・加速は、その船の性能まで（その場でくるっとは回らない）
+function _tfLeaderOf(S) {
+    const F = S.follow; if (!F) return null;
+    if (F.id === 'player') return _tfPlayerAsShip();
+    const O = _tfById(F.id);
+    return O && _tfShown(O) ? O : null;
+}
+// S と O が、追従しあう組か（たがいによけない・前をふさがれたと思わない）
+function _tfTeamed(S, O) {
+    if (!S || !O) return false;
+    const f = (A, B) => !!(A.follow && (B.player ? A.follow.id === 'player' : A.follow.id === B.id));
+    return f(S, O) || f(O, S);
+}
+function _tfFollowBegin(S) {
+    S.followReq = false;
+    if (S.to && S.to.P && _tfSlotOf(S.to.P, S.id)) _tfSlotFree(S.to.P, S.id);
+    S.to = null; S.path = null; S.anch = null; S.svc = null; S.redirect = null;
+    S.st = 'follow'; S.turning = false; S.off = 0; S.why = '';
+}
+function _tfFollowEnd(S, why) {
+    const nm = S.follow ? _tfLeaderName(S.follow.id) : '';
+    S.follow = null; S.followReq = false;
+    if (S.st === 'follow') { S.st = 'placed'; S.t = 2; S.to = null; S.path = null; S.replanPt = _tfReplanPt(S); }
+    if (why && S.dPl < 15000) _tfMsg(`${S.name}：${nm ? nm + ' ' : ''}${why}`);
+}
+// 行き先を変えた・追従をやめた船が、道すじを引き始める点：今の向きのまま 1 分半ほど進んだ所（浅ければ、その手前・止まっていれば今の所）
+function _tfReplanPt(S) {
+    if (!(S.v > 0.5)) return null;
+    const D = Math.max(200, Math.min(2000, S.v * 90));
+    let best = null;
+    for (let x = 50; x <= D; x += 50) { const q = _tfOff(S, S.hdg, x); if (_tfDepth(q) < S.d + 2) break; best = q; }
+    return best ? { lat: best.lat, lon: best.lon } : null;
+}
+function _tfLeaderName(id) { if (id === 'player') return '自分の船'; const O = _tfById(id); return O ? O.name : '相手の船'; }
+// 跡（点の列）の上の、始めから s[m] の所
+function _tfTrailAt(pts, cum, s) {
+    if (s <= 0) return pts[0];
+    for (let i = 1; i < pts.length; i++) if (cum[i] >= s) {
+        const u = (s - cum[i - 1]) / Math.max(1e-6, cum[i] - cum[i - 1]);
+        return { lat: pts[i - 1].lat + (pts[i].lat - pts[i - 1].lat) * u, lon: pts[i - 1].lon + (pts[i].lon - pts[i - 1].lon) * u };
+    }
+    return pts[pts.length - 1];
+}
+function _tfFollowStep(S, d, far) {
+    const F = S.follow, Ld = _tfLeaderOf(S);
+    if (!F) { S.st = 'placed'; S.t = 2; return; }
+    if (!Ld) { _tfFollowEnd(S, 'が見えなくなったので、追従をやめます'); return; }
+    if (Ld.st === 'berthing' || Ld.st === 'berth') { _tfFollowEnd(S, 'が岸壁へ入ったので、追従をやめます'); return; }
+    if (Ld.st === 'damaged' && Ld.dmg && Ld.dmg.sunk) { _tfFollowEnd(S, 'が沈んだので、追従をやめます'); return; }
+    // 相手の通った跡（15m ごと。長さは 9km まで）
+    const tr = F.trail, lt = tr[tr.length - 1];
+    if (!lt || _tfDist(lt, Ld) > 15) { tr.push({ lat: Ld.lat, lon: Ld.lon }); if (tr.length > 600) tr.splice(0, tr.length - 600); }
+    const vL = Math.max(0, Ld.v || 0), Lh = Ld.hdg, LL = Ld.L || 100, LB = Ld.B || LL / 8;
+    const gapA = Math.max(60, (LL + S.L) * 0.3);                // 後ろ：船尾と船首の間
+    const gapS = Math.max(40, (LB + S.B) * 1.2);                // 横：舷と舷の間
+    // 横の持ち場（相手の真横）。そこが浅い（水路の中など）間は、後ろに付く
+    let mode = F.side ? 'side' : 'astern', st = null;
+    if (F.side) {
+        st = _tfOff(Ld, Lh + 90 * F.side, (LB + S.B) / 2 + gapS);
+        for (const a of [0, S.L / 2, -S.L / 2]) if (_tfDepth(a ? _tfOff(st, Lh, a) : st) < S.d + 3) { mode = 'astern'; break; }
+    }
+    F.mode = mode;
+    // 跡の上の、自分のいる所と、後ろの持ち場
+    const pts = tr.concat([{ lat: Ld.lat, lon: Ld.lon }]), cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + _tfDist(pts[i - 1], pts[i]));
+    const total = cum[cum.length - 1], sSt = Math.max(0, total - (LL / 2 + S.L / 2 + gapA));
+    let wantH = S.hdg, wantV = 0;
+    if (mode === 'side') {
+        const e = _tfEN(S, st), fe = Math.sin(Lh * _tfR), fn = Math.cos(Lh * _tfR), dist = Math.hypot(e.e, e.n);
+        // 相手の速さ＋持ち場へ寄る速さ（離れているほど速く。全体は船の最大の速さまで）
+        let ve = fe * vL + 0.02 * e.e, vn = fn * vL + 0.02 * e.n;
+        const vv = Math.hypot(ve, vn), vmax = S.vSea;
+        if (vv > vmax) { ve *= vmax / vv; vn *= vmax / vv; }
+        if (far) { S.lat = st.lat; S.lon = st.lon; S.hdg = Lh; S.v = vL; return; }
+        if (dist < 10 && vL < 0.3) { wantV = 0; wantH = Lh; }
+        else { wantV = Math.hypot(ve, vn); wantH = wantV > 0.3 ? (Math.atan2(ve, vn) / _tfR + 360) % 360 : Lh; }
+        // 持ち場の近くでは、相手と同じ向きにそろえる
+        if (dist < 60 && vL > 0.3) wantH = (Lh + Math.max(-15, Math.min(15, _tfWrap(wantH - Lh))) + 360) % 360;
+    } else {
+        if (far) { const q = _tfTrailAt(pts, cum, sSt); S.lat = q.lat; S.lon = q.lon; S.hdg = Lh; S.v = vL; return; }
+        // 跡にいちばん近い所
+        let bd = Infinity, bs = 0;
+        for (let i = 1; i < pts.length; i++) {
+            const sg = _tfEN(pts[i - 1], pts[i]), rl = _tfEN(pts[i - 1], S), l2 = sg.e * sg.e + sg.n * sg.n;
+            const u = l2 > 0 ? Math.max(0, Math.min(1, (rl.e * sg.e + rl.n * sg.n) / l2)) : 0;
+            const dd = Math.hypot(rl.e - sg.e * u, rl.n - sg.n * u);
+            if (dd < bd) { bd = dd; bs = cum[i - 1] + u * Math.sqrt(l2); }
+        }
+        if (pts.length < 2) bs = 0;
+        const ds = sSt - bs;                                    // ＋：持ち場はまだ前
+        const look = Math.max(80, S.L * 0.8 + S.v * 10);
+        // 跡の上の少し先を目指す（跡から離れていれば、跡の近い所へ寄りながら）
+        const q = _tfTrailAt(pts, cum, Math.min(total, bs + look));
+        wantH = _tfDist(S, q) > 5 ? _tfBrg(S, q) : Lh;
+        wantV = Math.max(0, Math.min(S.vSea, vL + 0.015 * ds));
+        if (ds < -20 || (vL < 0.3 && ds < 30)) wantV = 0;
+    }
+    // 浅い所の手前では止まる
+    const dStop = S.v * S.v / (2 * Math.max(0.01, S.acc)) + S.L / 2 + 20;
+    if (wantV > 0 && _tfDepth(_tfOff(S, S.hdg, dStop)) < S.d + 1) { wantV = 0; S.why = '浅い所の手前で止まっています'; } else S.why = '';
+    // 向き（その船の旋回半径で回れる速さまで）と速さ
+    const e = _tfWrap(wantH - S.hdg);
+    const rate = Math.max(0.15, 1.3 * S.v / _tfRad(S) / _tfR);
+    S.hdg = (S.hdg + Math.sign(e) * Math.min(Math.abs(e), rate * d) + 360) % 360;
+    const vT = wantV * Math.max(0.25, Math.cos(Math.min(Math.abs(e), 75) * _tfR));
+    S.v += Math.max(-S.acc * 1.5 * d, Math.min(S.acc * d, vT - S.v)); S.v = Math.max(0, S.v);
+    const q = _tfOff(S, S.hdg, S.v * d); S.lat = q.lat; S.lon = q.lon;
+}
+// 追従させる（lead：相手の船の番号・'player'・null でやめる。side：1 右舷側・−1 左舷側・0 後ろ）
+function trafficSetFollow(id, lead, side) {
+    const S = _tfById(id); if (!S) return;
+    if (lead == null || lead === '') { if (S.follow || S.followReq) _tfFollowEnd(S, 'への追従をやめます'); _wmRefreshShipInfo(); return; }
+    if (lead !== 'player') { lead = +lead; if (lead === S.id || !_tfById(lead)) return; }
+    S.follow = { id: lead, side: +side === 1 || +side === -1 ? +side : 0, trail: [] };
+    S.followReq = true; S.redirect = null;
+    if (S.st === 'go' || S.st === 'anchoring' || S.st === 'anchored' || S.st === 'holding' || S.st === 'placed') _tfFollowBegin(S);
+    _tfMsg(`${S.name}：${_tfLeaderName(lead)}の${S.follow.side === 1 ? '右舷側' : S.follow.side === -1 ? '左舷側' : '後ろ'}に付いていきます${S.st === 'berth' ? '（離岸してから）' : ''}`);
+    _wmRefreshShipInfo();
+}
+window.trafficSetFollow = trafficSetFollow;
+// 行き先を変える（P：埠頭）。航行中なら今の所から道すじを引き直す。岸壁に着いている船は、早めにそちらへ出る
+function trafficSetDest(id, portId) {
+    const S = _tfById(id), P = _tfPorts().find(p => p.id === portId);
+    if (!S || !P) return;
+    if (S.follow || S.followReq) { S.follow = null; S.followReq = false; }
+    if (S.to && S.to.P && S.to.P !== P && _tfSlotOf(S.to.P, S.id)) _tfSlotFree(S.to.P, S.id);
+    S.svc = null;
+    if (S.st === 'berth') { S.to = { P }; S.toB = null; if (S.t > 5) S.t = 5; }
+    else if (S.st === 'unberth' || S.st === 'berthing') S.redirect = P;
+    else if (S.st === 'damaged') return;
+    else { S.to = { P }; S.toB = null; S.st = 'placed'; S.t = 0; S.path = null; S.anch = null; S.replanPt = _tfReplanPt(S); }
+    _tfMsg(`${S.name}：行き先を ${worldBerthLabel ? worldBerthLabel(P) : P.name} に変えました`);
+    _wmRefreshShipInfo();
+}
+window.trafficSetDest = trafficSetDest;
+function _wmRefreshShipInfo() { if (typeof _wmShowInfo === 'function' && typeof _wm !== 'undefined' && _wm.selShip != null) _wmShowInfo(); }
+
 // 道すじの上を進む。near（25km 以内）のときは、ルール（_tfRules）で決めた減速 rv・横へのずれ offT に従う
 function _tfMove(S, d, far) {
     const P = S.path;
@@ -1659,6 +1822,7 @@ function _tfScan(S, obs, offT) {
         // 自分の船がこの船と並走している（49-autopilot.js）：申し合わせて並んでいるので、この船は針路・速力を保つ
         //（よけるのは並走している自分の船の方。曲がる先に自分の船の船首がかかっても、待って止まらない）
         if (O.player && traffic.player && traffic.player.chaseId === S.id) continue;
+        if (_tfTeamed(S, O)) continue;                     // 追従しあう組
         if (Math.abs(O.lat - S.lat) > 0.06) continue;
         if (_tfDist(S, O) > D + S.L / 2 + _tfReach(O) + 30) continue;
         if (!pts) { pts = _tfAheadPts(S, D, offT); pts.sort((x, y) => x.sig - y.sig); }
@@ -1711,7 +1875,7 @@ function _tfPri(S) {
     return 2;
 }
 function _tfRules() {
-    const near = traffic.ships.filter(S => S.dPl < TF_NEAR && (S.st === 'go' || S.st === 'anchoring' || S.st === 'anchored' || S.st === 'berthing' || S.st === 'unberth' || S.st === 'holding' || S.st === 'damaged'));
+    const near = traffic.ships.filter(S => S.dPl < TF_NEAR && (S.st === 'go' || S.st === 'anchoring' || S.st === 'anchored' || S.st === 'berthing' || S.st === 'unberth' || S.st === 'holding' || S.st === 'damaged' || S.st === 'follow'));
     const me = _tfPlayerAsShip();
     const all = me ? near.concat([me]) : near;
     // 前をふさぐ船を探すときは、埠頭に付いている船も
@@ -1727,6 +1891,7 @@ function _tfRules() {
             if (O === S) continue;
             // 自分の船がこの船と並走している（49-autopilot.js）：申し合わせて並んで走っているので、よけない
             if (O.player && traffic.player && traffic.player.chaseId === S.id) continue;
+            if (_tfTeamed(S, O)) continue;                 // 追従しあう組：申し合わせて並んでいる
             // 離着岸中の船は、下の停泊中の船と同じく、岸壁（埠頭）の反対側・動いていく先の外を通る（通れなければ手前で待つ：_tfScan）
             if (O.st === 'berthing' || O.st === 'unberth') continue;
             const c = _tfCPA(S, O);
@@ -2544,10 +2709,32 @@ function trafficShipInfoHTML(id) {
           <button ${canCam || cam ? '' : 'disabled title="近く（12km 以内）の船だけ"'} onclick="trafficFollow(${cam ? 'null' : S.id})">${cam ? '🎥 追うのをやめる' : '🎥 カメラで追う'}</button>
           <button onclick="_wm.followShip=${mapF ? 'null' : S.id};_wmShowInfo();worldMapRedraw(true)">${mapF ? '📍 地図で追うのをやめる' : '📍 地図で追う'}</button>
           ${chase ? `<button class="on" onclick="apChaseStop('並走をやめました（機関はそのまま）','keep');_wmShowInfo()">🚢 並走をやめる</button>`
-                  : `<button ${canChase ? '' : 'disabled title="岸壁に着いている・着けている船は追えません"'} onclick="apChaseStart(${S.id});_wmShowInfo()">🚢 自分の船で追いかけて並走</button>`}
-          ${close}</div>`;
+                  : `<small style="align-self:center">🚢 自分の船で追いかけて付く：</small>${[[1, '右舷側'], [-1, '左舷側'], [0, '後ろ']].map(([v, l]) => `<button ${canChase ? '' : 'disabled title="岸壁に着いている・着けている船は追えません"'} onclick="apChaseStart(${S.id}, ${v});_wmShowInfo()">${l}</button>`).join('')}`}
+          ${close}</div>
+        ${_tfShipEditHTML(S)}`;
 }
 window.trafficShipInfoHTML = trafficShipInfoHTML;
+// この船の行き先・追従を変える欄（選んでいる途中の値は _wm.tfForm に覚える：欄は 1 秒ごとに描き直す）
+function _tfShipEditHTML(S) {
+    if (S.st === 'damaged') return '';
+    const F = (_wm.tfForm && _wm.tfForm.id === S.id) ? _wm.tfForm : (_wm.tfForm = { id: S.id, lead: S.follow ? String(S.follow.id) : 'player', side: S.follow ? String(S.follow.side) : '1', dest: '' });
+    const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    const others = traffic.ships.filter(O => O !== S && _tfShown(O) && O.st !== 'damaged' && _tfDist(S, O) < 40000)
+        .sort((a, b) => _tfDist(S, a) - _tfDist(S, b)).slice(0, 25);
+    const leadOpts = [['player', '自分の船']].concat(others.map(O => [String(O.id), `${O.name}（${(_tfDist(S, O) / 1852).toFixed(1)}海里${O.follow ? '・追従中' : ''}）`]))
+        .map(([v, l]) => `<option value="${v}" ${F.lead === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
+    const sideOpts = [['1', '右舷側'], ['-1', '左舷側'], ['0', '後ろ']].map(([v, l]) => `<option value="${v}" ${F.side === v ? 'selected' : ''}>${l}</option>`).join('');
+    const ports = _tfPorts().filter(P => P.id && Number.isFinite(P.lat)).map(P => [P, _tfDist(S, P)]).sort((a, b) => a[1] - b[1]).slice(0, 60);
+    const destOpts = `<option value="">（選んでください）</option>` + ports.map(([P, dd]) => `<option value="${esc(P.id)}" ${F.dest === P.id ? 'selected' : ''}>${esc(worldBerthLabel ? worldBerthLabel(P) : P.name)}（${(dd / 1852).toFixed(0)}海里）</option>`).join('');
+    const fol = S.follow ? `<div class="wp-side">🔗 ${esc(_tfLeaderName(S.follow.id))}の${S.follow.side === 1 ? '右舷側' : S.follow.side === -1 ? '左舷側' : '後ろ'}に付いていきます${S.follow.mode === 'astern' && S.follow.side ? '（横が浅いので、今は後ろ）' : ''}${S.followReq ? '（離岸してから）' : ''}
+        <button onclick="trafficSetFollow(${S.id}, null)">やめる</button></div>` : '';
+    return `<div class="wp-pmeta" style="margin-top:6px">この船を動かす</div>${fol}
+        <div class="wp-side">追従：<select onchange="_wm.tfForm.lead=this.value">${leadOpts}</select>
+          <select onchange="_wm.tfForm.side=this.value">${sideOpts}</select>
+          <button onclick="trafficSetFollow(${S.id}, _wm.tfForm.lead, _wm.tfForm.side)">🔗 付いていかせる</button></div>
+        <div class="wp-side">行き先：<select onchange="_wm.tfForm.dest=this.value" style="max-width:14em">${destOpts}</select>
+          <button onclick="if(_wm.tfForm.dest)trafficSetDest(${S.id}, _wm.tfForm.dest)">➡ そこへ行かせる</button></div>`;
+}
 // カメラで他の船を追う：カメラの注視点をその船に付けて動かす（向き・距離は指で変えられる。自由視点と同じ）
 function trafficFollow(id) {
     const S = _tfById(id);
@@ -2617,8 +2804,11 @@ window.trafficPlaceShip = trafficPlaceShip;
 function _tfPlacedGo(S) {
     if (!S.to) { const x = _tfChooseDest(S); if (!x) { S.t = 10; S.why = '行き先が見つかりません'; return; } S.to = x; S.toB = null; }
     if (S.to.P && !_tfSlotOf(S.to.P, S.id)) { const b = _tfSlotFind(S.to.P, S.L, S.id, S); if (b !== null) { _tfSlotTake(S.to.P, b, S.L, S.id, true); S.toB = b; } }
-    const a = { lat: S.lat, lon: S.lon, key: 'u' + S.id + '@' + S.lat.toFixed(4) + ',' + S.lon.toFixed(4) };
-    const L = _tfLaneNeed(a, _tfEnd(S.to));
+    // 航行中に行き先を変えた船は、少し先（今の向きのまま進んだ所：replanPt）から道すじを引く
+    //（道すじを探す間も進むので、今の所から引くと、探しているうちに所が変わって、いつまでも探し直していた）
+    const p0 = S.replanPt || S;
+    const a = { lat: p0.lat, lon: p0.lon, key: 'u' + S.id + '@' + p0.lat.toFixed(4) + ',' + p0.lon.toFixed(4) };
+    const L = _tfLaneNeed(a, _tfEnd(S.to), true);
     if (L && (L.fail || L.state === 'fail' || (L.ok && L.draft < S.d + 1))) {
         S.why = `${_tfPlaceName(S.to)} へは行けません（海とつながっていない・この船には浅い）`;
         if (S.to.P) { const sl = _tfSlotOf(S.to.P, S.id); if (sl && sl.res) _tfSlotFree(S.to.P, S.id); }
@@ -2628,9 +2818,14 @@ function _tfPlacedGo(S) {
     }
     if (!L || !L.ok) { S.t = 2; return; }
     const path = _tfComposePath(S, { pt: a }, S.to, L);
+    // 先の点から引いたときは、今の所からその点までを道すじの頭に足す
+    if (S.replanPt && _tfDist(S, S.replanPt) > 30) { path.pts.unshift({ lat: S.lat, lon: S.lon, ch: false }); if (path.arriveIdx >= 0) path.arriveIdx++; }
+    S.replanPt = null;
     _tfKeepRight(S, path.pts);
     S.path = _tfPrepPath(S, _tfSmoothPath(S, path)); S.s = 0; S.k = 0; S.checked = false; S.from = { pt: a }; S.off = 0; S.why = '';
-    _tfSnapToPath(S); S.st = 'go'; S.v = 0;
+    // （今の所から道すじを引くので、行き足はそのまま。道すじの向きと違えば、_tfMove が止めてから向きを変える）
+    const h0 = S.hdg;
+    _tfSnapToPath(S); S.st = 'go'; if (S.v > 0.3) S.hdg = h0;
 }
 // 地図に描く：選んだ船のこの先の道すじ・置こうとしている船の場所と航路
 function _tfDrawMapExtras(g, cv) {
@@ -2659,18 +2854,28 @@ function _tfDrawMapExtras(g, cv) {
 function trafficDraftHTML() {
     const D = _wm.draft; if (!D) return '';
     const ports = _tfPorts();
-    const opts = Object.entries(TF_CLASSES).map(([k, c]) => `<option value="c:${k}" ${D.kind === 'c:' + k ? 'selected' : ''}>${c.icon || ''} ${c.label}</option>`).join('')
-        + _tfSavedAll().filter(v => !v.own).map(v => `<option value="s:${v.name.replace(/"/g, '&quot;')}" ${D.kind === 's:' + v.name ? 'selected' : ''}>💾 ${v.name.replace(/</g, '&lt;')}（保存した船）</option>`).join('');
+    // 保存した船（今乗っている船のモデルも）を先に。モデルの無い保存は選べない（他の船は、その船のモデルで描く）
+    const sv = _tfSavedAll();
+    const opts = (sv.length ? `<optgroup label="💾 保存した船">` + sv.map(v => `<option value="s:${v.name.replace(/"/g, '&quot;')}" ${D.kind === 's:' + v.name ? 'selected' : ''}>💾 ${v.name.replace(/</g, '&lt;')}${v.own ? '（今乗っている船と同じモデル）' : ''}</option>`).join('') + `</optgroup>` : '')
+        + `<optgroup label="船の種類">` + Object.entries(TF_CLASSES).map(([k, c]) => `<option value="c:${k}" ${D.kind === 'c:' + k ? 'selected' : ''}>${c.icon || ''} ${c.label}</option>`).join('') + `</optgroup>`;
     const rt = D.route.map((id, i) => { const P = ports.find(p => p.id === id); return P ? `<div class="wp-berth">${i + 1}. ${worldBerthLabel(P)} <button onclick="trafficDraftRoute('del', ${i})">✕</button></div>` : ''; }).join('');
     return `<div class="wp-pname">🚢 他の船を置く</div>
         <div class="wp-pmeta">${worldFmtLatLon(D.lat, D.lon)}（置く所を変えるときは、海をタップ）</div>
         <div class="wp-side">種類：<select onchange="_wm.draft.kind=this.value">${opts}</select></div>
         <div class="wp-side">船名：<input type="text" placeholder="空なら自動" value="${(D.name || '').replace(/"/g, '&quot;')}" oninput="_wm.draft.name=this.value" style="width:9em"></div>
-        <div class="wp-pmeta">航路：${D.route.length ? '' : '地図で港をタップして「➕ 航路に加える」（加えなければ行き先は自動。2 つ以上なら、その順に回り続けます）'}</div>
+        <div class="wp-side">追従：<select onchange="_wm.draft.follow=this.value">${_tfDraftFollowOpts(D)}</select>
+          <select onchange="_wm.draft.fside=this.value">${[['1', '右舷側'], ['-1', '左舷側'], ['0', '後ろ']].map(([v, l]) => `<option value="${v}" ${(D.fside || '1') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div class="wp-pmeta">航路：${D.route.length ? '' : '地図で港をタップして「➕ 航路に加える」（加えなければ行き先は自動。2 つ以上なら、その順に回り続けます。追従させるときは航路は使いません）'}</div>
         ${rt ? `<div class="wp-berths">${rt}</div>` : ''}
         <div class="wp-pbtns"><button onclick="trafficDraftGo()">🚢 ここに出す</button><button onclick="_wm.draft=null;_wmShowInfo();worldMapRedraw(true)">やめる</button></div>`;
 }
 window.trafficDraftHTML = trafficDraftHTML;
+function _tfDraftFollowOpts(D) {
+    const p = { lat: D.lat, lon: D.lon };
+    const near = traffic.ships.filter(O => _tfShown(O) && O.st !== 'damaged' && _tfDist(p, O) < 40000).sort((a, b) => _tfDist(p, a) - _tfDist(p, b)).slice(0, 25);
+    return [['', '（追従しない）'], ['player', '自分の船']].concat(near.map(O => [String(O.id), `${O.name}（${(_tfDist(p, O) / 1852).toFixed(1)}海里）`]))
+        .map(([v, l]) => `<option value="${v}" ${(D.follow || '') === v ? 'selected' : ''}>${String(l).replace(/</g, '&lt;')}</option>`).join('');
+}
 function trafficDraftStart(lat, lon) {
     if (!traffic.on) { traffic.on = true; _tfSave(); }
     _wm.draft = { lat, lon, kind: (_wm.draft && _wm.draft.kind) || 'c:steamer', name: '', route: [] };
@@ -2691,8 +2896,9 @@ function trafficDraftGo() {
     const o = { lat: D.lat, lon: D.lon, name: (D.name || '').trim(), route: D.route.slice() };
     if (D.kind.startsWith('s:')) o.saved = D.kind.slice(2); else o.cls = D.kind.slice(2);
     const S = trafficPlaceShip(o);
+    const fol = D.follow, fs = D.fside || '1';
     _wm.draft = null;
-    if (S) { _wm.selShip = S.id; }
+    if (S) { _wm.selShip = S.id; if (fol) trafficSetFollow(S.id, fol, fs); }
     _wmShowInfo(); worldMapRedraw(true);
 }
 window.trafficDraftGo = trafficDraftGo;
@@ -2700,7 +2906,7 @@ window.trafficDraftGo = trafficDraftGo;
 // ════════════════════════════════════════════════════════════════
 //  設定と、近くの船の一覧（世界地図の「🚢 他の船」）
 // ════════════════════════════════════════════════════════════════
-const TF_STATE_LABEL = { berth: '着岸中', go: '航行中', unberth: '離岸中', berthing: '着岸作業中', anchoring: '錨地へ', anchored: '錨泊中（埠頭が空くのを待っています）', holding: '待機中', placed: '出発の用意（航路を探しています）' };
+const TF_STATE_LABEL = { berth: '着岸中', go: '航行中', unberth: '離岸中', berthing: '着岸作業中', anchoring: '錨地へ', anchored: '錨泊中（埠頭が空くのを待っています）', holding: '待機中', placed: '出発の用意（航路を探しています）', follow: '追従中' };
 function trafficSet(k, v) {
     if (k === 'on') traffic.on = !!v;
     else if (k === 'density' && TF_DENSITY[v]) traffic.density = v;
@@ -2778,6 +2984,30 @@ function _tfClearBerthFor(P) {
         S.port = P; S.st = 'pending'; S.seedMid = 0.05; S.t = 0; S.tries = -360;     // （航路が見つかるまで、30 分ほど待てる）
     }
 }
+// その埠頭に着いている（着けている・離れている途中の）他の船（「ここから出航」の確かめ：43-world.js）
+function trafficBerthShips(P) {
+    if (!traffic.on || !P) return [];
+    return traffic.ships.filter(S => S.port === P && (S.st === 'berth' || S.st === 'berthing' || S.st === 'unberth'));
+}
+window.trafficBerthShips = trafficBerthShips;
+// 自分の船をその埠頭に置くので、着いている他の船を、近くの空いている別の埠頭へ移す（無ければいなくなる）。
+// その埠頭へ向かっている船の予約も外す（着いたときにふさがっていれば、錨地で待つ）
+function trafficEvictBerth(P) {
+    if (!P) return;
+    for (const S of traffic.ships) {
+        if (S.to && S.to.P === P && S.port !== P) { const sl = _tfSlotOf(P, S.id); if (sl) _tfSlotFree(P, S.id); }
+        if (!(S.port === P && (S.st === 'berth' || S.st === 'berthing' || S.st === 'unberth'))) continue;
+        _tfDropMesh(S);
+        _tfSlotFree(P, S.id); if (S.mPort) { _tfSlotFree(S.mPort, S.id); S.mPort = null; }
+        S.port = null; S.steps = null; S.turning = false; S.follow = null; S.followReq = false;
+        const alt = _tfPorts().filter(q => q !== P && _tfSuits(S.cls, q) && _tfFits(S, q) && _tfSlotFind(q, S.L, S.id, S) !== null)
+            .sort((a, b) => _tfDist(P, a) - _tfDist(P, b))[0];
+        if (alt && _tfPlaceBerthed(S, alt, Math.random())) { _tfMsg(`${S.name} を ${worldBerthLabel ? worldBerthLabel(alt) : alt.name} へ移しました`); continue; }
+        S.st = 'gone'; S.noRespawn = !!S.placed;
+        _tfMsg(`${S.name} は、空いている埠頭が無いので、いなくなりました`);
+    }
+}
+window.trafficEvictBerth = trafficEvictBerth;
 // その埠頭（自分の船が付く所）にいる・付こうとしている他の船
 function _tfBerthBlocker(P) {
     const R = _tfPlayerResRange(P);
