@@ -1,3 +1,5 @@
+        /* メニュー・ボタンの上では、スクロールだけ許して拡大（2本指・ダブルタップ）はさせない */
+        html, button, input, select, textarea, label, #ui-container, #settings-panel, #viewpoint-menu { touch-action: pan-x pan-y; }
         body {
             margin: 0;
             padding: 0;
@@ -19,8 +21,8 @@
         }
         #menu-toggle {
             position: absolute;
-            top: 10px;
-            left: 10px;
+            top: calc(10px + env(safe-area-inset-top));
+            left: calc(10px + env(safe-area-inset-left));
             z-index: 15;
             background: rgba(10, 30, 60, 0.9);
             border: 1px solid #ffffff;
@@ -46,7 +48,7 @@
             font-size: 13px;
             background: rgba(10, 25, 50, 0.95);
             padding: 20px;
-            padding-top: 70px;
+            padding-top: calc(70px + env(safe-area-inset-top));
             box-shadow: 5px 0 25px rgba(0,0,0,0.6);
             width: 280px;
             height: 100vh;
@@ -109,6 +111,59 @@
         #btn-left   { bottom: calc(60px + env(safe-area-inset-bottom)); right: 120px; }
         #btn-right  { bottom: calc(60px + env(safe-area-inset-bottom)); right: 30px; }
 
+        #btn-horn   { bottom: calc(210px + env(safe-area-inset-bottom)); left: 30px; font-size: 28px; }
+        /* 画面のテレグラフ・舵輪（37-bridge-controls.js） */
+        .bridge-widget {
+            position: absolute; z-index: 10; touch-action: none; pointer-events: auto;
+            bottom: calc(14px + env(safe-area-inset-bottom));
+            filter: drop-shadow(0 4px 10px rgba(0,0,0,0.5));
+            transition: left 0.3s ease-in-out;
+        }
+        #telegraph-widget { left: calc(14px + env(safe-area-inset-left)); }
+        #wheel-widget { right: calc(14px + env(safe-area-inset-right)); }
+        body.menu-open #telegraph-widget { left: 300px; }
+        body.hud-hidden .bridge-widget { display: none !important; }
+        /* 照明の焼き込み中の表示（40-light-bake.js） */
+        #bake-hud {
+            position: absolute; z-index: 12; left: 50%; transform: translateX(-50%);
+            top: calc(12px + env(safe-area-inset-top));
+            padding: 4px 12px; border-radius: 12px; font-size: 12px; color: #ffe6a8;
+            background: rgba(10, 25, 50, 0.75); border: 1px solid rgba(255, 210, 120, 0.4);
+            pointer-events: none; white-space: nowrap;
+        }
+        body.hud-hidden #bake-hud { display: none !important; }
+        body.hud-hidden #telemetry-panel, body.hud-hidden #btn-horn, body.hud-hidden #worldmap-toggle { display: none !important; }
+        body.menu-open #btn-horn { left: 310px; }
+        /* 汽笛信号（36-horns.js）：📯 の右の「信号」ボタンと、そこから開く一覧 */
+        #btn-horn-sig {
+            bottom: calc(221px + env(safe-area-inset-bottom)); left: 112px;
+            width: 48px; height: 48px; font-size: 13px; letter-spacing: 1px;
+        }
+        #btn-horn-sig.on { background: rgba(255, 210, 120, 0.45); border-color: #ffd278; }
+        body.menu-open #btn-horn-sig { left: 392px; }
+        body.hud-hidden #btn-horn-sig, body.hud-hidden #horn-sig-panel { display: none !important; }
+        #horn-sig-panel {
+            position: fixed; z-index: 30; display: none; width: 264px; max-width: calc(100vw - 16px);
+            overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y;
+            padding: 8px; border-radius: 10px; box-sizing: border-box;
+            background: rgba(8, 20, 40, 0.92); border: 1px solid rgba(0, 255, 204, 0.5);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5); color: #cfe; font-size: 11px;
+        }
+        #horn-sig-panel.open { display: block; }
+        #horn-sig-panel .hs-title { color: #00ffcc; font-weight: bold; margin: 0 2px 6px; }
+        #horn-sig-panel .hs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+        #horn-sig-panel button {
+            font-family: inherit; color: #e8fff8; background: rgba(0, 255, 204, 0.08);
+            border: 1px solid rgba(0, 255, 204, 0.4); border-radius: 6px; cursor: pointer;
+            touch-action: manipulation;
+        }
+        #horn-sig-panel button:active { background: rgba(0, 255, 204, 0.35); }
+        #horn-sig-panel .hs-btn { display: flex; flex-direction: column; align-items: flex-start; padding: 5px 7px; text-align: left; }
+        #horn-sig-panel .hs-btn.fog { border-color: rgba(160, 190, 255, 0.5); background: rgba(120, 150, 255, 0.1); }
+        #horn-sig-panel .hs-pat { font-size: 15px; letter-spacing: 2px; color: #ffd278; line-height: 1.1; }
+        #horn-sig-panel .hs-name { font-size: 11px; font-weight: bold; }
+        #horn-sig-panel .hs-mean { font-size: 10px; opacity: 0.7; }
+        #horn-sig-panel .hs-stop { width: 100%; margin-top: 6px; padding: 5px; }
         body.menu-open #btn-faster { left: 310px; }
         body.menu-open #btn-slower { left: 310px; }
 
@@ -190,8 +245,8 @@
         /* ===== SHIP SETTINGS PANEL ===== */
         #settings-toggle {
             position: absolute;
-            top: 10px;
-            left: 120px;
+            top: calc(10px + env(safe-area-inset-top));
+            left: calc(120px + env(safe-area-inset-left));
             z-index: 15;
             background: rgba(10, 30, 60, 0.9);
             border: 1px solid #ffaa00;
@@ -209,8 +264,8 @@
 
         #camera-mode-toggle {
             position: absolute;
-            top: 10px;
-            left: 230px;
+            top: calc(10px + env(safe-area-inset-top));
+            left: calc(230px + env(safe-area-inset-left));
             z-index: 15;
             background: rgba(10, 30, 60, 0.9);
             border: 1px solid #00ffcc;
@@ -228,8 +283,8 @@
 
         #viewpoint-toggle {
             position: absolute;
-            top: 10px;
-            left: 340px;
+            top: calc(10px + env(safe-area-inset-top));
+            left: calc(340px + env(safe-area-inset-left));
             z-index: 15;
             background: rgba(10, 30, 60, 0.9);
             border: 1px solid #ffdd55;
@@ -247,8 +302,8 @@
 
         #screenshot-toggle {
             position: absolute;
-            top: 10px;
-            left: 450px;
+            top: calc(10px + env(safe-area-inset-top));
+            left: calc(450px + env(safe-area-inset-left));
             z-index: 15;
             background: rgba(10, 30, 60, 0.9);
             border: 1px solid #ff88cc;
@@ -283,7 +338,7 @@
 
         #viewpoint-menu {
             position: absolute;
-            top: 54px;
+            top: calc(54px + env(safe-area-inset-top));
             left: 340px;
             z-index: 16;
             display: none;
@@ -314,15 +369,15 @@
         .vp-menu-item.active { background: rgba(255,221,85,0.35); border-color: #ffdd55; color: #fff; }
 
         @media (max-width: 768px) {
-            #viewpoint-toggle { left: auto; right: 10px; top: 56px; }
-            #viewpoint-menu { left: auto; right: 10px; top: 100px; }
-            #screenshot-toggle { left: auto; right: 10px; top: 102px; }
+            #viewpoint-toggle { left: auto; right: calc(10px + env(safe-area-inset-right)); top: calc(56px + env(safe-area-inset-top)); }
+            #viewpoint-menu { left: auto; right: calc(10px + env(safe-area-inset-right)); top: calc(100px + env(safe-area-inset-top)); }
+            #screenshot-toggle { left: auto; right: calc(10px + env(safe-area-inset-right)); top: calc(102px + env(safe-area-inset-top)); }
         }
 
         #settings-panel {
             position: absolute;
-            top: 10px; right: 10px;
-            width: 380px; height: calc(100vh - 20px);
+            top: calc(10px + env(safe-area-inset-top)); right: calc(10px + env(safe-area-inset-right));
+            width: 380px; height: calc(100vh - 20px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
             z-index: 100;
             background: rgba(10, 20, 35, 0.85);
             backdrop-filter: blur(5px);
@@ -659,3 +714,335 @@
             box-shadow: 0 0 8px currentColor;
             font-weight: bold;
         }
+
+        /* ── 右上の TELEMETRY（メニューから独立。見出しを押すとたためる） ── */
+        #telemetry-panel {
+            position: absolute;
+            top: calc(10px + env(safe-area-inset-top));
+            right: calc(10px + env(safe-area-inset-right));
+            z-index: 12;
+            background: rgba(6, 18, 36, 0.62);
+            border: 1px solid rgba(0, 255, 204, 0.35);
+            border-radius: 6px;
+            padding: 5px 9px 6px;
+            color: #ffffff;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 11px;
+            line-height: 1.35;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+            pointer-events: none;
+            max-width: calc(100vw - 20px);
+            box-sizing: border-box;
+        }
+        #telemetry-head {
+            pointer-events: auto; cursor: pointer; user-select: none; -webkit-user-select: none;
+            color: #00ffcc; font-weight: bold; letter-spacing: 1px; text-align: center;
+        }
+        #telemetry-body { margin-top: 3px; }
+        #telemetry-body > div { white-space: pre; }
+        #telemetry-panel.folded #telemetry-body { display: none; }
+        .telemetry-sep { border-top: 1px solid rgba(255,255,255,0.25); margin: 3px 0; }
+        /* 狭い画面では、右側に並ぶボタン（視点・スクショ）の下へ */
+        @media (max-width: 768px) {
+            #telemetry-panel { top: calc(148px + env(safe-area-inset-top)); font-size: 10px; }
+        }
+
+        /* ── 世界地図（43-world.js） ── */
+        #worldmap-toggle {
+            position: absolute;
+            top: calc(10px + env(safe-area-inset-top));
+            left: calc(565px + env(safe-area-inset-left));
+            z-index: 15;
+            background: rgba(10, 30, 60, 0.9);
+            border: 1px solid #7ee3c8; color: #7ee3c8;
+            padding: 10px 16px; border-radius: 6px;
+            font-weight: bold; font-size: 14px; cursor: pointer; pointer-events: auto;
+        }
+        #worldmap-toggle:active { background: rgba(126,227,200,0.3); }
+        @media (max-width: 768px) {
+            #worldmap-toggle { left: auto; right: calc(10px + env(safe-area-inset-right)); top: calc(148px + env(safe-area-inset-top)); }
+            #telemetry-panel { top: calc(194px + env(safe-area-inset-top)); }
+        }
+        #world-panel {
+            position: fixed; inset: 0; z-index: 300; display: none; flex-direction: column;
+            background: rgba(4, 14, 28, 0.97); color: #eaf4ff; font-family: 'Courier New', Courier, monospace;
+            padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+        }
+        #world-panel.open { display: flex; }
+        #world-panel .wp-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; flex-wrap: wrap; border-bottom: 1px solid rgba(126,227,200,0.3); }
+        #world-panel .wp-title { font-weight: bold; color: #7ee3c8; font-size: 15px; margin-right: 6px; }
+        #world-panel .wp-modes button, #world-panel .wp-tools button, #world-panel .wp-pbtns button, #world-panel .wp-close {
+            background: rgba(10, 30, 60, 0.9); color: #cfe8ff; border: 1px solid rgba(126,227,200,0.5);
+            border-radius: 5px; padding: 6px 10px; font-size: 13px; cursor: pointer; font-family: inherit;
+        }
+        #world-panel .wp-modes button.on { background: #1c6b5a; color: #fff; border-color: #7ee3c8; }
+        #world-panel .wp-chartbtn { margin-left: 0; font-size: 13px; background: rgba(0,0,0,0.3); color: #cfe; border: 1px solid rgba(126,227,200,0.5); border-radius: 6px; padding: 5px 10px; font-family: inherit; cursor: pointer; }
+        #world-panel .wp-chartbtn.on { background: #e8f0f8; color: #16283c; border-color: #fff; }
+        #world-panel .wp-close { margin-left: 0; }
+        #world-panel #wp-chart { margin-left: auto; }
+        #world-panel .wp-body { position: relative; flex: 1; min-height: 0; }
+        /* 他の船（59-traffic.js）：設定と近くの船の一覧 */
+        #wp-traffic-panel { position: absolute; right: 60px; top: 10px; width: min(330px, calc(100% - 80px)); max-height: calc(100% - 60px); overflow-y: auto;
+            -webkit-overflow-scrolling: touch; overscroll-behavior: contain; background: rgba(6, 20, 40, 0.94); border: 1px solid rgba(126,227,200,0.5);
+            border-radius: 6px; padding: 8px 10px; font-size: 12px; color: #cfe8ff; z-index: 2; }
+        #wp-traffic-panel[hidden] { display: none; }
+        #wp-traffic-panel .tf-row { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; margin: 0 0 6px; }
+        #wp-traffic-panel .tf-row b { margin-right: 6px; color: #7ee3c8; }
+        #wp-traffic-panel button { background: rgba(10, 30, 60, 0.9); color: #cfe8ff; border: 1px solid rgba(126,227,200,0.5); border-radius: 5px; padding: 4px 8px; font-size: 12px; cursor: pointer; font-family: inherit; }
+        #wp-traffic-panel button.on { background: #1c6b5a; color: #fff; border-color: #7ee3c8; }
+        #wp-traffic-panel .tf-list > div { border-top: 1px solid rgba(255,255,255,0.12); padding: 5px 0; }
+        #wp-traffic-panel .tf-list small, #wp-traffic-panel .tf-msgs small { color: #a9c4d8; }
+        #wp-traffic-panel .tf-msgs { margin-top: 6px; }
+        #wp-traffic-panel .tf-saved { display: flex; flex-direction: column; gap: 3px; margin: 0 0 4px 4px; }
+        #wp-traffic-panel .tf-saved label { cursor: pointer; }
+        #wp-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+        #world-panel .wp-tools { position: absolute; right: 10px; top: 10px; display: flex; flex-direction: column; gap: 6px; }
+        #world-panel .wp-tools button { width: 40px; height: 40px; font-size: 18px; padding: 0; }
+        #world-panel .wp-legend { position: absolute; left: 10px; bottom: 10px; display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px;
+            background: rgba(0,0,0,0.45); padding: 5px 8px; border-radius: 5px; }
+        #world-panel .wp-legend i, #wp-info i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+        #wp-info { display: none; position: absolute; left: 10px; top: 10px; max-width: min(360px, calc(100% - 70px));
+            background: rgba(6, 20, 40, 0.94); border: 1px solid rgba(126,227,200,0.5); border-radius: 6px; padding: 8px 10px; }
+        #wp-info .wp-pname { font-weight: bold; font-size: 14px; }
+        #wp-info .wp-pmeta { font-size: 11px; color: #a9c4d8; margin: 3px 0 6px; }
+        #wp-info .wp-pbtns { display: flex; gap: 6px; flex-wrap: wrap; }
+        #wp-info .wp-side { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; margin: 4px 0 6px; font-size: 12px; color: #cfe8ff; }
+        #wp-info .wp-side button { background: rgba(10, 30, 60, 0.9); color: #cfe8ff; border: 1px solid rgba(126,227,200,0.5); border-radius: 5px; padding: 4px 8px; font-size: 12px; cursor: pointer; font-family: inherit; }
+        #wp-info .wp-side button.on { background: #1c6b5a; color: #fff; border-color: #7ee3c8; }
+        /* 埠頭の一覧（同じ港の埠頭をまとめた港をタップしたとき） */
+        #wp-info .wp-berths { max-height: 45vh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; margin: 2px 0 8px; }
+        #wp-info .wp-berth { border-top: 1px solid rgba(255,255,255,0.12); padding: 6px 0; }
+        #wp-info .wp-bname { font-size: 13px; margin-bottom: 4px; }
+        #wp-info .wp-bname i, #wp-info .wp-pname i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+        #wp-info .wp-btype { font-size: 10px; color: #a9c4d8; margin-left: 6px; }
+        #wp-status { position: absolute; left: 50%; transform: translateX(-50%); bottom: 44px; font-size: 11px; color: #ffe38a;
+            background: rgba(0,0,0,0.45); padding: 3px 8px; border-radius: 4px; pointer-events: none; }
+        #wp-status:empty { display: none; }
+
+/* 係船設備の設定（46-mooring.js） */
+.moor-sel { background:#0a1932; color:#00ffcc; border:1px solid #00ffcc; border-radius:4px; padding:4px 8px; font-family:inherit; font-size:11px; max-width:100%; }
+
+/* タグボート（47-tugboats.js）：「タグ」ボタンと指示のパネル */
+#btn-tug { bottom: calc(221px + env(safe-area-inset-bottom)); left: 168px; width: 48px; height: 48px; font-size: 13px; letter-spacing: 1px; }
+#btn-tug.on { background: rgba(255, 210, 120, 0.45); border-color: #ffd278; }
+body.menu-open #btn-tug { left: 448px; }
+body.hud-hidden #btn-tug, body.hud-hidden #tug-panel { display: none !important; }
+#tug-panel {
+    position: fixed; z-index: 30; display: none; width: 300px; max-width: calc(100vw - 16px); overflow-y: auto;
+    overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y;
+    padding: 8px; border-radius: 10px; box-sizing: border-box;
+    background: rgba(8, 20, 40, 0.92); border: 1px solid rgba(0, 255, 204, 0.5);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5); color: #cfe; font-size: 11px;
+}
+#tug-panel.open { display: block; }
+#tug-panel button, #tug-panel select {
+    font-family: inherit; color: #e8fff8; background: rgba(0, 255, 204, 0.08); font-size: 11px;
+    border: 1px solid rgba(0, 255, 204, 0.4); border-radius: 6px; padding: 4px 8px; cursor: pointer; touch-action: manipulation;
+}
+#tug-panel select { width: 100%; background: #0a1932; }
+#tug-panel button.on { background: #1c6b5a; color: #fff; border-color: #7ee3c8; }
+#tug-panel button:disabled { opacity: 0.4; }
+#tug-panel .tg-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+#tug-panel .tg-title { color: #00ffcc; font-weight: bold; margin-right: auto; }
+#tug-panel .tg-item { border-top: 1px solid rgba(0, 255, 204, 0.2); padding: 6px 0 2px; }
+#tug-panel .tg-item.leaving { opacity: 0.5; }
+#tug-panel .tg-row { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; flex-wrap: wrap; }
+#tug-panel .tg-state { color: #ffd278; margin-left: 6px; margin-right: auto; }
+#tug-panel .tg-sep { width: 8px; }
+#tug-panel .tg-empty { color: #9ab; line-height: 1.5; }
+
+/* 小さな地図（48-minimap.js）：TELEMETRY の下に丸く */
+#minimap { position: absolute; z-index: 11; right: calc(10px + env(safe-area-inset-right)); top: 240px; width: 150px; height: 150px; pointer-events: auto; }
+#minimap.hidden, #minimap.off { display: none; }
+body.hud-hidden #minimap { display: none !important; }
+#mm-canvas { width: 150px; height: 150px; display: block; cursor: pointer; border-radius: 50%; box-shadow: 0 4px 14px rgba(0,0,0,0.45); }
+#minimap .mm-b {
+    position: absolute; width: 24px; height: 24px; padding: 0; border-radius: 50%; font-size: 12px; line-height: 22px; text-align: center;
+    background: rgba(8, 20, 40, 0.85); color: #cfe; border: 1px solid rgba(0, 255, 204, 0.5); cursor: pointer; font-family: inherit; touch-action: manipulation;
+}
+#minimap .mm-b.on { background: #1c6b5a; color: #fff; }
+#minimap .mm-n { left: -6px; top: -4px; font-weight: bold; }
+#minimap .mm-x { right: -6px; top: -4px; }
+#minimap .mm-plus { left: -6px; bottom: -4px; }
+#minimap .mm-minus { right: -6px; bottom: -4px; }
+#minimap .mm-d { left: 50%; top: -10px; transform: translateX(-50%); font-size: 11px; }
+#minimap .mm-depth { position: absolute; left: 50%; bottom: -30px; transform: translateX(-50%); font-size: 10px; color: #bfe6ff; white-space: nowrap; text-shadow: 0 1px 2px #000; pointer-events: none; }
+#minimap .mm-depth.warn { color: #ff6a5a; font-weight: bold; }
+#minimap .mm-scale { position: absolute; left: 50%; bottom: -16px; transform: translateX(-50%); font-size: 10px; color: #cfe; white-space: nowrap; text-shadow: 0 1px 2px #000; pointer-events: none; }
+@media (max-width: 600px) {
+    #minimap, #mm-canvas { width: 120px; height: 120px; }
+}
+
+/* 自動航行（49-autopilot.js）：ミニマップの下 */
+#ap-panel { position: absolute; z-index: 11; right: calc(10px + env(safe-area-inset-right)); top: 420px; width: 230px; display: none;
+    padding: 7px 9px; border-radius: 8px; background: rgba(8, 20, 40, 0.88); border: 1px solid rgba(255, 90, 208, 0.55);
+    color: #e6f4ff; font-size: 11px; line-height: 1.5; box-sizing: border-box;
+    overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+#ap-panel.open { display: block; }
+body.hud-hidden #ap-panel { display: none !important; }
+#ap-panel .ap-title { color: #ff8ae0; font-weight: bold; margin-bottom: 2px; }
+#ap-panel .ap-msg { color: #ffe38a; margin: 3px 0; }
+#ap-panel .ap-escort { color: #ffb347; }
+#ap-panel button { font-family: inherit; font-size: 11px; color: #e8fff8; background: rgba(0, 255, 204, 0.08); border: 1px solid rgba(0, 255, 204, 0.4);
+    border-radius: 6px; padding: 3px 8px; margin: 3px 3px 0 0; cursor: pointer; touch-action: manipulation; }
+#ap-panel button.on { background: #1c6b5a; color: #fff; border-color: #7ee3c8; }
+#ap-panel button.ap-off { border-color: rgba(255, 120, 120, 0.7); }
+@media (max-width: 600px) { #ap-panel { width: 190px; font-size: 10px; } }
+
+/* タグでの自動離着岸（50-harbor-auto.js） */
+#tug-panel .tg-auto { border-bottom: 1px solid rgba(0, 255, 204, 0.2); padding-bottom: 6px; }
+#tug-panel .tg-automsg { width: 100%; color: #ffe38a; margin-top: 2px; }
+#ap-panel label { cursor: pointer; }
+
+/* 自動航行パネルをたたむ */
+#ap-panel .ap-fold { float: right; margin: -2px 0 0 6px !important; padding: 0 7px !important; font-weight: bold; }
+#ap-panel.folded { width: auto; max-width: 260px; padding: 4px 8px; }
+#ap-panel .ap-line { display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; }
+#ap-panel .ap-line .ap-fold { float: none; margin: 0 !important; order: 2; }
+#ap-panel .ap-line span { overflow: hidden; text-overflow: ellipsis; }
+
+/* 測距儀・照準・舵輪の横のボタン（66-sights.js） */
+#rf-scope { position: fixed; inset: 0; pointer-events: none; z-index: 5; display: none; }
+#rf-scope.on { display: block; }
+#rf-scope::before { content: ''; position: absolute; inset: 0; background: radial-gradient(ellipse 62vmin 30vmin at 50% 50%, transparent 0, transparent 92%, rgba(0,0,0,0.92) 100%); }
+#rf-scope::after { content: ''; position: absolute; inset: 0; background:
+    radial-gradient(ellipse 62vmin 30vmin at 50% 50%, transparent 99%, #000 100%); }
+#rf-scope::before, #rf-scope::after { z-index: 0; }
+#rf-scope > div { z-index: 1; }
+#rf-scope .rf-split { position: absolute; left: calc(50% - 62vmin); right: calc(50% - 62vmin); top: 50%; height: 1px; background: rgba(255, 220, 140, 0.55); }
+#rf-scope .rf-h { position: absolute; left: 50%; top: 50%; width: 10vmin; height: 2px; margin: -1px 0 0 -5vmin; background: rgba(255, 220, 140, 0.9); }
+#rf-scope .rf-v { position: absolute; left: 50%; top: 50%; width: 2px; height: 10vmin; margin: -5vmin 0 0 -1px; background: rgba(255, 220, 140, 0.9); }
+#rf-scope .rf-scale { position: absolute; left: calc(50% - 20vmin); width: 40vmin; top: calc(50% + 3vmin); height: 8px;
+    background: repeating-linear-gradient(90deg, rgba(255,220,140,0.7) 0 1px, transparent 1px 4vmin); }
+#rf-scope .rf-info { position: absolute; left: 0; right: 0; bottom: calc(50% - 30vmin - 6px); text-align: center; color: #ffe6a8; font: 13px monospace; text-shadow: 0 0 4px #000; line-height: 1.5; }
+.sg-bar { position: absolute; left: 50%; transform: translateX(-50%); pointer-events: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: center; max-width: 96vw; }
+#rf-scope .rf-bar { bottom: calc(50% - 30vmin - 64px); }
+#sub-scope .ss-bar { bottom: calc(50% - 36vmin - 72px); }
+.sg-bar button { background: rgba(10, 30, 20, 0.75); color: #e9f5d0; border: 1px solid #8fbf80; border-radius: 12px; padding: 4px 12px; font: 12px monospace; cursor: pointer; }
+.sg-bar button.on { background: rgba(120, 60, 10, 0.85); border-color: #ffb060; color: #fff; }
+.sg-bar .sg-fire { background: rgba(90, 20, 10, 0.85); border-color: #ff8a6a; }
+.sg-bar .rf-z { color: #ffe6a8; font: 12px monospace; }
+#sub-scope .sg-tinfo { position: absolute; left: 0; right: 0; top: calc(50% - 36vmin - 4px); text-align: center; color: #ffe6a8; font: 13px monospace; text-shadow: 0 0 4px #000; }
+.sg-msg { color: #ffd27a; }
+#sg-lead { position: fixed; z-index: 6; pointer-events: none; display: none; width: 18px; height: 18px; margin: -9px 0 0 -9px; border: 2px solid #ff6a3a; transform: rotate(45deg); }
+#sg-lead span { position: absolute; left: 16px; top: -18px; transform: rotate(-45deg); color: #ffb08a; font: 11px monospace; white-space: nowrap; text-shadow: 0 0 3px #000; }
+#fire-stack { position: absolute; z-index: 10; bottom: calc(14px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; }
+#fire-stack button { width: 58px; height: 52px; border-radius: 12px; border: 1px solid rgba(255, 200, 140, 0.6); background: rgba(20, 25, 35, 0.78); color: #ffe6c8;
+    font-size: 20px; line-height: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer; }
+#fire-stack button small { font-size: 10px; letter-spacing: 1px; }
+#fire-stack button.on { background: rgba(140, 70, 10, 0.85); border-color: #ffb060; }
+#fire-stack .fs-fire { background: rgba(110, 25, 15, 0.85); border-color: #ff8a6a; }
+#fire-stack button:disabled { opacity: 0.4; }
+body.hud-hidden #fire-stack { display: none !important; }
+
+/* 被害・浸水（63-flooding.js） */
+#btn-flood { width: 48px; height: 48px; font-size: 13px; letter-spacing: 1px; }
+#btn-flood.on { background: rgba(120, 200, 255, 0.45); border-color: #8fd0ff; }
+#btn-flood.alert { background: rgba(255, 80, 60, 0.45); border-color: #ff8a7a; }
+body.hud-hidden #btn-flood, body.hud-hidden #flood-panel { display: none !important; }
+#flood-panel {
+    position: fixed; z-index: 30; display: none; width: 320px; max-width: calc(100vw - 16px); overflow-y: auto;
+    overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y;
+    padding: 8px; border-radius: 10px; box-sizing: border-box;
+    background: rgba(6, 18, 34, 0.92); border: 1px solid rgba(120, 200, 255, 0.5);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5); color: #cfe; font-size: 11px;
+}
+#flood-panel.open { display: block; }
+#flood-panel .fp-title { color: #8fd0ff; font-weight: bold; }
+#flood-panel canvas { width: 100%; height: auto; display: block; background: rgba(0, 0, 0, 0.25); border-radius: 6px; margin-top: 4px; }
+#flood-panel .fp-stat { line-height: 1.6; margin: 6px 0; color: #dff; }
+#flood-panel .fp-msg { color: #ffe38a; }
+#flood-panel .fp-btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+#flood-panel button { background: #0a1932; color: #cfe; border: 1px solid rgba(120, 200, 255, 0.45); border-radius: 6px; padding: 5px 7px; font-size: 11px; }
+
+/* 潜水艦（54-submarine.js） */
+#btn-sub { bottom: calc(221px + env(safe-area-inset-bottom)); left: 224px; width: 48px; height: 48px; font-size: 13px; letter-spacing: 1px; }
+#btn-sub.on { background: rgba(120, 200, 255, 0.45); border-color: #8fd0ff; }
+body.menu-open #btn-sub { left: 504px; }
+body.hud-hidden #btn-sub, body.hud-hidden #sub-panel { display: none !important; }
+#sub-panel {
+    position: fixed; z-index: 30; display: none; width: 340px; max-width: calc(100vw - 16px); overflow-y: auto;
+    overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y;
+    padding: 8px; border-radius: 10px; box-sizing: border-box;
+    background: rgba(6, 18, 34, 0.92); border: 1px solid rgba(120, 200, 255, 0.5);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5); color: #cfe; font-size: 11px;
+}
+#sub-panel.open { display: block; }
+#sub-panel button { background: #0a1932; color: #cfe; border: 1px solid rgba(120, 200, 255, 0.45); border-radius: 6px; padding: 5px 7px; font-size: 11px; }
+#sub-panel button.on { background: #1c4f6b; color: #fff; border-color: #8fd0ff; }
+#sub-panel button:disabled { opacity: 0.4; }
+#sub-panel .sb-head { display: flex; align-items: center; margin-bottom: 4px; }
+#sub-panel .sb-title { color: #8fd0ff; font-weight: bold; }
+#sub-panel .sb-status { line-height: 1.6; margin-bottom: 6px; color: #dff; }
+#sub-panel .sb-msg { color: #ffe38a; }
+#sub-panel .sb-row { display: flex; align-items: center; gap: 4px; margin-bottom: 5px; flex-wrap: wrap; }
+#sub-panel .sb-blow { background: #5a1414; border-color: #ff8a8a; margin-left: auto; }
+#sub-panel .sb-sonar { display: flex; gap: 8px; align-items: flex-start; border-top: 1px solid rgba(120, 200, 255, 0.2); padding-top: 6px; }
+#sub-panel canvas { width: 150px; height: 150px; border-radius: 50%; border: 1px solid rgba(80, 255, 170, 0.4); flex: none; }
+#sub-panel .sb-scol { display: flex; flex-direction: column; gap: 5px; }
+#sub-panel .sb-note { color: #8ab; font-size: 10px; line-height: 1.4; }
+#sub-panel .sb-fire { background: #4a2a08; border-color: #ffb060; }
+#sub-scope { position: fixed; inset: 0; pointer-events: none; z-index: 5; display: none; }
+#sub-scope.on { display: block; }
+#sub-scope .ss-ring { position: absolute; inset: 0; background: radial-gradient(circle at 50% 50%, transparent 0, transparent 38vmin, rgba(0,0,0,0.88) 39.5vmin, #000 46vmin); }
+#sub-scope .ss-h { position: absolute; left: 50%; top: 50%; width: 60vmin; height: 1px; margin-left: -30vmin; background: rgba(0,0,0,0.75);
+    box-shadow: 0 0 0 0.5px rgba(255,255,255,0.15); }
+#sub-scope .ss-v { position: absolute; left: 50%; top: 50%; width: 1px; height: 40vmin; margin-top: -20vmin; background: rgba(0,0,0,0.75); }
+#sub-scope .ss-bow { position: absolute; left: 50%; bottom: calc(50% - 36vmin - 34px); transform: translateX(-50%); pointer-events: auto; cursor: pointer;
+    background: rgba(10, 30, 20, 0.7); color: #bfe8c8; border: 1px solid #6fae80; border-radius: 12px; padding: 3px 12px; font: 12px monospace; }
+#sub-scope .ss-info { position: absolute; left: 0; right: 0; bottom: calc(50% - 36vmin); text-align: center; color: #bfe8c8; font: 13px monospace; text-shadow: 0 0 4px #000; }
+.wp-suit { color: #ffd84a; margin-right: 3px; }
+
+/* 機関の独立操作（56-engines.js） */
+#btn-engines { left: calc(var(--eng-x, 14px) + env(safe-area-inset-left)); transition: left 0.3s ease-in-out; width: auto; min-width: 70px; height: 28px; padding: 0 8px; font-size: 11px; border-radius: 14px; }
+#btn-engines.on { background: rgba(255, 210, 120, 0.45); border-color: #ffd278; }
+body.menu-open #btn-engines { left: calc(var(--eng-x, 14px) + 286px); }   /* テレグラフと同じだけ（14px → 300px）右へ */
+body.hud-hidden #btn-engines, body.hud-hidden #engine-tgs { display: none !important; }
+#engine-tgs { position: absolute; z-index: 10; transition: left 0.3s ease-in-out; left: calc(14px + env(safe-area-inset-left)); bottom: calc(14px + env(safe-area-inset-bottom)); gap: 6px; align-items: flex-end; touch-action: none; filter: drop-shadow(0 4px 10px rgba(0,0,0,0.5)); }
+body.menu-open #engine-tgs { left: 300px; }
+#engine-tgs canvas { touch-action: none; }
+.ap-tugopt button, #tug-panel .ap-tugopt button { font-size: 10px; padding: 2px 6px; }
+#tug-panel .ap-tugopt { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; width: 100%; margin-top: 4px; }
+
+/* 汽笛の右に並ぶ小さなボタンの列（37-bridge-controls.js の applyBridgeLayout） */
+#hud-row { position: absolute; z-index: 10; left: 112px; display: flex; gap: 8px; align-items: center; pointer-events: none; transition: left 0.3s ease-in-out; }
+#hud-row .control-btn { position: relative; left: auto !important; bottom: auto !important; pointer-events: auto; }
+body.menu-open #hud-row { left: 392px; }
+body.hud-hidden #hud-row { display: none !important; }
+
+/* 操船（58-maneuvering.js）：サイドスラスター・アジポッド */
+#btn-mnv { width: 48px; height: 48px; font-size: 13px; letter-spacing: 1px; }
+#btn-mnv.on { background: rgba(0, 255, 204, 0.35); border-color: #7ee3c8; }
+body.hud-hidden #btn-mnv, body.hud-hidden #mnv-panel { display: none !important; }
+#mnv-panel {
+    position: fixed; z-index: 30; display: none; width: 360px; max-width: calc(100vw - 16px); max-height: calc(100vh - 80px); overflow-y: auto;
+    overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y;
+    padding: 8px; border-radius: 10px; box-sizing: border-box;
+    background: rgba(6, 18, 34, 0.92); border: 1px solid rgba(0, 255, 204, 0.5);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5); color: #cfe; font-size: 11px;
+}
+#mnv-panel.open { display: block; }
+#mnv-panel button { font-family: inherit; color: #e8fff8; background: rgba(0, 255, 204, 0.08); font-size: 11px; border: 1px solid rgba(0, 255, 204, 0.4); border-radius: 6px; padding: 4px 7px; cursor: pointer; touch-action: manipulation; }
+#mnv-panel button.on { background: #1c6b5a; color: #fff; border-color: #7ee3c8; }
+#mnv-panel button:disabled { opacity: 0.35; }
+#mnv-panel .mv-head { margin-bottom: 4px; }
+#mnv-panel .mv-title { color: #00ffcc; font-weight: bold; }
+#mnv-panel .mv-body { display: flex; gap: 8px; align-items: flex-start; }
+#mnv-panel #mnv-diag { flex: none; width: 110px; height: 200px; background: rgba(0, 20, 40, 0.6); border-radius: 8px; }
+#mnv-panel .mv-ctl { flex: 1; min-width: 0; }
+#mnv-panel .mv-sec { color: #00ffcc; font-weight: bold; margin: 2px 0 4px; border-bottom: 1px solid rgba(0, 255, 204, 0.2); }
+#mnv-panel .mv-th { margin-bottom: 5px; }
+#mnv-panel .mv-thn { margin-bottom: 2px; }
+#mnv-panel .mv-val { color: #ffd65a; }
+#mnv-panel .mv-row { display: flex; gap: 3px; flex-wrap: wrap; margin-bottom: 5px; }
+#mnv-panel .mv-note { color: #8ab; font-size: 10px; line-height: 1.4; margin-bottom: 5px; }
+#mnv-panel .mv-dials { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-bottom: 4px; }
+#mnv-panel .mv-dial { text-align: center; font-size: 10px; }
+#mnv-panel .mv-dial canvas { width: 96px; height: 96px; touch-action: none; cursor: pointer; }
+#mnv-panel .mv-joy { display: flex; gap: 6px; align-items: flex-start; margin-bottom: 4px; }
+#mnv-panel #mnv-pad { width: 130px; height: 130px; flex: none; touch-action: none; cursor: grab; }
+#mnv-panel .mv-jcol { display: flex; flex-direction: column; gap: 3px; font-size: 10px; min-width: 0; }
+#mnv-panel .mv-jcol input[type=range] { width: 100%; touch-action: none; }
+#mnv-panel .mv-stat { color: #bde; font-size: 10px; line-height: 1.5; border-top: 1px solid rgba(0, 255, 204, 0.2); padding-top: 4px; }
+#mnv-panel .mv-hold { color: #ffd65a; }
+@media (max-width: 420px) { #mnv-panel .mv-body { flex-direction: column; } #mnv-panel #mnv-diag { align-self: center; } }

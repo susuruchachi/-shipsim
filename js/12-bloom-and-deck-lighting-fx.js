@@ -30,6 +30,20 @@ function initBloomComposer() {
     bloomRenderPass = new THREE.RenderPass(scene, camera);
     bloomComposer.addPass(bloomRenderPass);
     bloomComposer.addPass(bloomPass);
+    // 抽出パスでシーンを描いた先（renderTarget2）の奥行きを、テクスチャとして
+    // 読めるようにしておく。霧の中の灯りのにじみ（26-glow-emitters.js）が、
+    // 灯りとカメラの間に壁などがあるかをこれで調べる。
+    try {
+        const rt = bloomComposer.renderTarget2;
+        if (renderer.capabilities.isWebGL2 || renderer.extensions.get('WEBGL_depth_texture')) {
+            rt.depthTexture = new THREE.DepthTexture(rt.width, rt.height);
+            rt.depthTexture.format = THREE.DepthFormat;
+            rt.depthTexture.type = renderer.capabilities.isWebGL2 ? THREE.UnsignedIntType : THREE.UnsignedShortType;
+            rt.depthTexture.minFilter = THREE.NearestFilter;
+            rt.depthTexture.magFilter = THREE.NearestFilter;
+            rt.dispose();   // 次に使うときに奥行きテクスチャ付きで作り直させる
+        }
+    } catch (e) { console.warn('[Bloom] 奥行きテクスチャを用意できませんでした:', e); }
 
     // --- ② ブルーム結果をキャンバスに加算で重ねるための全画面クアッド ---
     // renderer.render(scene, camera) でキャンバスへ直接描いた直後に、これを
@@ -52,6 +66,12 @@ function initBloomComposer() {
 // Points（煙突の煙・スクリューの泡・引き波など）はMeshと違って同じ手法でマテリアルを
 // 差し替えられないため、抽出パスの間だけ visible=false にして除外する。
 function darkenNoBloomObjects(obj) {
+    // 水面は自前のシェーダーのまま黒く塗る（差し替えると波の形が消えて平らになり、
+    // 波に隠れた窓の光まで抽出されてしまうため。04-scene-and-water-init.js 参照）
+    if (obj.isMesh && obj.userData.noBloom && obj.material && obj.material.uniforms && obj.material.uniforms.uBloomDark) {
+        obj.material.uniforms.uBloomDark.value = 1.0;
+        return;
+    }
     if (obj.isMesh && obj.userData.noBloom && obj.material !== noBloomDarkMaterial) {
         noBloomMaterialCache.set(obj.uuid, obj.material);
         obj.material = noBloomDarkMaterial;
@@ -63,6 +83,10 @@ function darkenNoBloomObjects(obj) {
 
 // ブルーム抽出パスの直後に元のマテリアルへ戻す。
 function restoreNoBloomObjects(obj) {
+    if (obj.isMesh && obj.material && obj.material.uniforms && obj.material.uniforms.uBloomDark) {
+        obj.material.uniforms.uBloomDark.value = 0.0;
+        return;
+    }
     const mat = noBloomMaterialCache.get(obj.uuid);
     if (mat) {
         obj.material = mat;
@@ -76,7 +100,52 @@ function restoreNoBloomObjects(obj) {
 // ①noBloom対象を黒く塗りつぶしてブルーム抽出 → ②元に戻す →
 // ③renderer.render()でキャンバスへ直接描画 → ④ブルーム結果を加算で重ねる。
 function renderWithBloom() {
-    scene.traverse(darkenNoBloomObjects);
+    // 光のにじみの抽出は毎フレーム行う。以前、軽くするために1フレームおきに
+    // したところ、視点を動かすと前のフレームのにじみが古い位置に重なり、
+    // 窓の光が残像のようにぶれて見えた。
+    _renderBloomExtract();
+
+    renderer.setRenderTarget(null);
+    renderer.autoClear = true;
+    // 影マップは本描画のときだけ描き直す（04-scene-and-water-init.js 参照）。
+    // ブルーム抽出パスは前フレームの影マップを使うが、抽出されるのは発光面
+    // だけなので見た目には影響しない。
+    renderer.shadowMap.needsUpdate = true;
+    renderer.render(scene, camera);
+
+    renderer.autoClear = false;
+    renderer.render(bloomOverlayScene, bloomOverlayCamera);
+    renderer.autoClear = true;
+}
+
+// 黒く塗る対象（noBloom）の一覧。毎フレームシーン全体（陸の建物・地形まで数千）をたどると重いので、
+// 1 秒ごとに作り直し、その間は一覧だけを回す
+const _bloomList = { list: [], frame: 0 };
+// 新しく光らない物を足したら、次のフレームで一覧を作り直す
+function bloomTargetsDirty() { _bloomList.frame = 0; }
+window.bloomTargetsDirty = bloomTargetsDirty;
+function _bloomTargets() {
+    if ((_bloomList.frame++ % 60) === 0) {
+        const L = [];
+        scene.traverse(o => {
+            // 光らない物（陸の地形・建物・港の施設・タグの船体など、発光の無い陰影付きの材質）は、
+            // 決まっていなければブルームから外す。外さないと、昼の明るい地面が光ってにじみ、
+            // カメラの近く（抽出のときは霧が黒いので、遠くは暗い）だけが白っぽく明るく見えた
+            if (o.isMesh && o.userData.noBloom === undefined) o.userData.noBloom = _bloomAutoNo(o.material);
+            if ((o.isMesh || o.isPoints) && o.userData.noBloom) L.push(o);
+        });
+        _bloomList.list = L;
+    }
+    return _bloomList.list;
+}
+function _bloomAutoNo(m) {
+    const one = (q) => !!q && (q.isMeshStandardMaterial || q.isMeshLambertMaterial || q.isMeshPhongMaterial)
+        && !q.emissiveMap && (!q.emissive || q.emissive.getHex() === 0);   // 夜だけ光る物（強さを後で上げる）は色が付いているので外さない
+    return Array.isArray(m) ? m.length > 0 && m.every(one) : one(m);
+}
+function _renderBloomExtract() {
+    const targets = _bloomTargets();
+    for (const o of targets) darkenNoBloomObjects(o);
 
     // v87: ブルーム抽出パスの間だけ霧の色を黒に差し替える。
     // 理由: 窓明かりなど(hasWindowGlow=trueでnoBloom対象から外れているメッシュ)は
@@ -92,21 +161,44 @@ function renderWithBloom() {
     bloomComposer.render();
 
     if (scene.fog && savedFogColorHex !== null) scene.fog.color.setHex(savedFogColorHex);
-    scene.traverse(restoreNoBloomObjects);
+    for (const o of targets) restoreNoBloomObjects(o);
+}
 
-    renderer.setRenderTarget(null);
-    renderer.autoClear = true;
-    renderer.render(scene, camera);
-
-    renderer.autoClear = false;
-    renderer.render(bloomOverlayScene, bloomOverlayCamera);
-    renderer.autoClear = true;
+// 今のフレームのシーンの奥行き（ブルーム抽出パスで描いたもの）。無ければ null。
+// 抽出パスは本描画の直前に描くので、本描画中はこのフレームの奥行きになっている。
+function getSceneDepthTexture() {
+    if (!bloomEnabled || !bloomComposer || !bloomComposer.renderTarget2) return null;
+    return bloomComposer.renderTarget2.depthTexture || null;
 }
 
 function setBloomEnabled(enabled) {
-    bloomEnabled = enabled;
+    bloomEnabled = !!enabled;
+    if (bloomEnabled && !bloomComposer) initBloomComposer();
 }
-function setBloomStrength(v)   { if (bloomPass) bloomPass.strength   = v; }
+function setBloomStrength(v)   { bloomBaseStrength = v; if (bloomPass) bloomPass.strength = v; }
+
+// 毎フレーム：霧・雨の中ではブルームを弱めて切る（発光面はにじませず、くっきり
+// 遠くから見えるようにする）。戻り値：このフレームでブルームを使うか
+function updateBloomForWeather() {
+    if (!bloomEnabled || !bloomPass) return false;
+    const w = window.weather;
+    const haze = (w && w.enabled) ? Math.max(0, (w.haze || 1) - 1) : 0;
+    const rain = (w && w.enabled && typeof w.rain === 'number') ? w.rain : 0;
+    const fog  = (w && w.enabled && typeof w.fog === 'number') ? w.fog : 0;
+    // （風が強いだけのもや（haze）では切らない。以前は haze×0.25 で、晴れた嵐の夜（風力 12・雲なし）に
+    //  ブルームが切れて、船の明かりがプロムナードを照らさず沈んで見えた：26-glow-emitters.js のにじみも同じ）
+    const wet = haze * 0.04 + rain * 0.6 + fog * 1.0;
+    const k = 1 - THREE.MathUtils.smoothstep(wet, 0.08, 0.5);
+    bloomPass.strength = bloomBaseStrength * k;
+    // 昼（窓・甲板の灯りが消えていて、稲妻も無い）は、にじませる光が無いので抽出しない。
+    // 抽出のパスはシーン全体（船・陸・海面）をもう一度描くので、昼はこれだけで描く量がほぼ半分になる
+    const night = typeof lightingNightFactor === 'number' ? lightingNightFactor : 1;
+    const manualLights = typeof glbLightAutoMode !== 'undefined' && !glbLightAutoMode;
+    const strike = typeof _lightning !== 'undefined' && _lightning && _lightning.strike;
+    const glow = typeof _alGlowFactor !== 'undefined' ? _alGlowFactor : 0;
+    if (night < 0.02 && !manualLights && !strike && glow < 0.01) return false;
+    return k > 0.02;
+}
 function setBloomRadius(v)     { if (bloomPass) bloomPass.radius     = v; }
 function setBloomThreshold(v)  { if (bloomPass) bloomPass.threshold  = v; }
 
@@ -125,73 +217,119 @@ function clearFunnelUplights() {
     funnelUplights.length = 0;
 }
 
+// ── 煙突照明の置き方（煙突ごと。左右はいつも対称）──
+//  f.up = {
+//    side    : 煙突の中心から左右それぞれの付け根までの距離
+//    h       : 煙突の根元からの高さ（負＝根元より下）
+//    fz      : 前後のずれ（+ で前）
+//    tiltIn  : 内向きの傾き[度]（0＝真上、+ で煙突の方へ倒す）
+//    tiltFore: 前後の傾き[度]（+ で前へ倒す）
+//  }
+//  以前の保存データ（左右それぞれの回転 upRotL/upRotR）は、左側の向きから傾きを読み取る。
+function funnelUplightParams(f) {
+    if (!f) return { side: 1, h: -1, fz: 0, tiltIn: 21.8, tiltFore: 0 };
+    if (!f.up) {
+        const rx = f.rx || 0.4, ry = f.ry || 1.2;
+        const up = { side: +(rx * 1.8 + 0.8).toFixed(3), h: +(-ry * 0.5 - 1.2).toFixed(3), fz: 0, tiltIn: 21.8, tiltFore: 0 };
+        if (f.upRotL) {
+            const d = new THREE.Vector3(-0.4, 1, 0).normalize()
+                .applyEuler(new THREE.Euler(f.upRotL.x || 0, f.upRotL.y || 0, f.upRotL.z || 0));
+            up.tiltIn = +THREE.MathUtils.radToDeg(Math.atan2(-d.x, d.y)).toFixed(1);
+            up.tiltFore = +THREE.MathUtils.radToDeg(Math.asin(Math.max(-1, Math.min(1, d.z)))).toFixed(1);
+        }
+        f.up = up;
+        delete f.upRotL; delete f.upRotR;
+    }
+    return f.up;
+}
+// sign：+1 は +X 側（-X の煙突の方へ向く）、-1 は反対側
+function _funnelUplightDir(P, sign) {
+    const ti = THREE.MathUtils.degToRad(P.tiltIn || 0), tf = THREE.MathUtils.degToRad(P.tiltFore || 0);
+    return new THREE.Vector3(-sign * Math.sin(ti) * Math.cos(tf), Math.cos(ti) * Math.cos(tf), Math.sin(tf)).normalize();
+}
+
 /**
- * 煙突の左右両脇、根元より下（甲板付近）に SpotLight を1つずつ配置し、
- * 下から斜め上の煙突に向けて照らし上げる「ライトアップ」を実現する。
- * 各サイドには見た目だけのマーカー(Object3D)があり、これをギズモで回転させると
- * 照射方向（角度）を調整できる。
- * @param {number} x, y, z  煙突の根元座標（shipGroupローカル）
- * @param {number} rx       煙突の下径
- * @param {number} ry       煙突の高さ
- * @param {number} funnelIndex
- * @param {boolean} isMirror
+ * 煙突の左右両脇に SpotLight を1つずつ置き、下から煙突を照らし上げる。
+ * 付け根は煙突の中心に対して左右対称で、funnels[i].up（funnelUplightParams）で
+ * 上下・左右・前後に動かし、傾けられる。各サイドのマーカーをギズモで動かす・
+ * 回すと、反対側も対称に付いてくる（10-ship-editor-propulsors.js）。
  */
 function createFunnelUplight(x, y, z, rx, ry, funnelIndex, isMirror) {
     const spotColor = 0xffcc66;  // 温かみのあるアンバー
-    // 煙突の真横・やや外側に配置（rx基準で余裕をもたせる）
-    const sideOffset = rx * 1.8 + 0.8;
-    // スポットライトの設置高さ：煙突根元より大きく下（甲板より下）
-    const baseY = y - ry * 0.5 - 1.2;
-
-    function makeSide(sign, savedRot) {
-        // angle広め（PI/5 ≒ 36°）で煙突全体を照らせる円錐角、距離制限なし(0)
+    function makeSide(sign) {
         const spot = new THREE.SpotLight(spotColor, 0, 0, Math.PI / 5, 0.35, 1.5);
-        spot.position.set(x + sign * sideOffset, baseY, z);
         spot.castShadow = false;
         spot.userData.isFunnelUplight = true;
-
         const target = new THREE.Object3D();
         shipGroup.add(target);
         spot.target = target;
         shipGroup.add(spot);
-
-        // ギズモ操作用マーカー：回転させると照射方向（仰角・振り）が変わる。
+        // ギズモ操作用マーカー：動かすと付け根が、回すと傾きが変わる
         const marker = new THREE.Object3D();
-        marker.position.copy(spot.position);
-        // 既定の照射方向＝真上斜め内側（下から煙突頂部に向かう）
-        // sign=+1(左)なら右内側(-X)・上に向ける。sign=-1(右)なら左内側(+X)・上
-        marker.userData.aimDir = new THREE.Vector3(-sign * 0.4, 1.0, 0).normalize();
         marker.userData.spot = spot;
-        marker.userData.aimDistance = ry + sideOffset + 1.5;
-        if (savedRot) marker.rotation.set(savedRot.x || 0, savedRot.y || 0, savedRot.z || 0);
+        marker.userData.sign = sign;
+        marker.userData.funnelIndex = funnelIndex;
         shipGroup.add(marker);
-        updateFunnelUplightAim(marker);
-
         return { spot, target, marker };
     }
-
-    const f = funnels[funnelIndex];
-    const rotKeyL = isMirror ? 'upRotR' : 'upRotL'; // ミラー側は左右が入れ替わる
-    const rotKeyR = isMirror ? 'upRotL' : 'upRotR';
-    const sideA = makeSide(1, f && f[rotKeyL]);
-    const sideB = makeSide(-1, f && f[rotKeyR]);
-
-    funnelUplights.push({
+    const sideA = makeSide(1);
+    const sideB = makeSide(-1);
+    const entry = {
         spotL: sideA.spot, targetL: sideA.target, markerL: sideA.marker,
         spotR: sideB.spot, targetR: sideB.target, markerR: sideB.marker,
-        baseIntensity: 5.0, funnelIndex, isMirror: !!isMirror
+        baseIntensity: 5.0, funnelIndex, isMirror: !!isMirror,
+        fx: x, fy: y, fz: z, ry,
+    };
+    funnelUplights.push(entry);
+    _placeFunnelUplight(entry, null);
+}
+
+// 付け根と向きを funnels[i].up から置き直す（skipMarker：ギズモで動かしている最中のもの）
+function _placeFunnelUplight(entry, skipMarker) {
+    const P = funnelUplightParams(funnels[entry.funnelIndex]);
+    [[entry.spotL, entry.targetL, entry.markerL, 1], [entry.spotR, entry.targetR, entry.markerR, -1]].forEach(([spot, target, marker, sign]) => {
+        const pos = new THREE.Vector3(entry.fx + sign * P.side, entry.fy + P.h, entry.fz + P.fz);
+        const dir = _funnelUplightDir(P, sign);
+        spot.position.copy(pos);
+        target.position.copy(pos).addScaledVector(dir, Math.max(1, (entry.ry || 1.2) + Math.abs(P.h) + 1.5));
+        if (marker !== skipMarker) {
+            marker.position.copy(pos);
+            marker.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+        }
     });
+}
+// 煙突 fi の照明をすべて（対称の煙突の分も）置き直す
+function refreshFunnelUplight(fi, skipMarker) {
+    funnelUplights.forEach(e => { if (e.funnelIndex === fi) _placeFunnelUplight(e, skipMarker); });
+}
+// ギズモでマーカーを動かした・回したとき（10-ship-editor-propulsors.js）
+function onFunnelUplightMarkerChanged(marker, mode) {
+    const fi = marker.userData.funnelIndex;
+    const f = funnels[fi];
+    const entry = funnelUplights.find(e => e.markerL === marker || e.markerR === marker);
+    if (!f || !entry) return;
+    const P = funnelUplightParams(f);
+    const sign = marker.userData.sign;
+    const r = (v, k = 1000) => Math.round(v * k) / k;
+    if (mode === 'rotate') {
+        const d = new THREE.Vector3(0, 1, 0).applyQuaternion(marker.quaternion);
+        P.tiltIn = r(THREE.MathUtils.radToDeg(Math.atan2(-sign * d.x, d.y)), 10);
+        P.tiltFore = r(THREE.MathUtils.radToDeg(Math.asin(Math.max(-1, Math.min(1, d.z)))), 10);
+    } else {
+        P.side = r(Math.max(0, sign * (marker.position.x - entry.fx)));
+        P.h = r(marker.position.y - entry.fy);
+        P.fz = r(marker.position.z - entry.fz);
+    }
+    delete f.upRotL; delete f.upRotR;
+    refreshFunnelUplight(fi, marker);
+    if (typeof syncFunnelUplightInputs === 'function') syncFunnelUplightInputs(fi);
 }
 
 /**
- * マーカーの現在の回転から照射方向を再計算し、SpotLightのtargetを更新する。
- * ギズモでマーカーを回転させた直後、および初期生成時に呼ぶ。
+ * （互換）以前はマーカーの回転から照射方向を決めていた。今は funnels[i].up から決める。
  */
 function updateFunnelUplightAim(marker) {
-    const spot = marker.userData.spot;
-    if (!spot || !spot.target) return;
-    const dir = marker.userData.aimDir.clone().applyEuler(marker.rotation);
-    spot.target.position.copy(marker.position).addScaledVector(dir, marker.userData.aimDistance);
+    if (marker && marker.userData && marker.userData.funnelIndex !== undefined) refreshFunnelUplight(marker.userData.funnelIndex, null);
 }
 
 /**
@@ -201,10 +339,13 @@ function updateFunnelUplights() {
     if (funnelUplights.length === 0) return;
     const nf = lightingNightFactor;
     const targetIntensity = funnelUplightEnabled ? nf : 0;
+    // 照明を焼き込んでいる間（40-light-bake.js）は、明るさだけ動かして灯り自体は消す
+    // （焼き込んだ明るさに、この明るさの割合が掛かる）
+    const baked = typeof lightBakeHides === 'function' && lightBakeHides('F');
     funnelUplights.forEach(fu => {
         [fu.spotL, fu.spotR].forEach(s => {
             s.intensity += (fu.baseIntensity * targetIntensity - s.intensity) * 0.08;
-            s.visible = s.intensity > 0.01;
+            s.visible = s.intensity > 0.01 && !baked;
         });
     });
 }
@@ -390,7 +531,8 @@ function updateDeckLightPool() {
             const tgt = deckLightTargets[i];
             if (tgt) tgt.position.copy(localPt).add(tgtDir);
             sp.intensity = 1.8 * nf * deckLightIntensityMult;
-            sp.visible = true;
+            // 照明を焼き込んでいる間は、全部の甲板灯の明かりが焼き込んであるので消す
+            sp.visible = !(typeof lightBakeHides === 'function' && lightBakeHides('D'));
         } else {
             sp.visible = false;
             sp.intensity = 0;
@@ -569,9 +711,15 @@ function updateSmokeSettings() {
     }
 }
 
+const _smokePush = { x: 0, y: 0, z: 0 };
 function animateSmoke(t, dt) {
     if (!globalSmokeGeo) return;
-    const active = smokeSettings.speedLinked ? Math.abs(physics.speed) > 0.3 : true;
+    // 機関に火が入っている間（テレグラフを STAND BY（機関用意）にしてから FINISHED WITH ENGINE（機関終了）まで）は、
+    // 止まっていても（STOP でも）煙突から煙を出し続ける
+    const sp = physics.telegraphAnswerSpecial || physics.telegraphSpecial;
+    if (sp === 'standby') physics.steamUp = true;
+    else if (physics.telegraphAnswerSpecial === 'fwe') physics.steamUp = false;
+    const active = (smokeSettings.speedLinked ? (Math.abs(physics.speed) > 0.3 || !!physics.steamUp) : true) && !(typeof subSurfaceFxOff === 'function' && subSurfaceFxOff());
     const spd = smokeSettings.speed;
 
     // Wind force
@@ -588,12 +736,18 @@ function animateSmoke(t, dt) {
         0.16, 1.15
     );
     globalSmokeMat.uniforms.lightFactor.value = lf;
-    // 水しぶき・泡も同じ明るさ係数で暗くする
-    if (wakeParticleMat) wakeParticleMat.uniforms.lightFactor.value = THREE.MathUtils.clamp(lf * 0.9, 0.05, 1.0);
-    if (bubbleMat) bubbleMat.uniforms.lightFactor.value = THREE.MathUtils.clamp(lf * 0.85, 0.05, 1.0);
+    // 水しぶき・泡も同じ明るさ係数で暗くする。さらに海面の泡の色（曇天・夜に暗くなる：16）を上限にして、
+    // 曇りや夜にしぶきだけが白く光って見えないようにする（岩のしぶき・浅瀬の白波・タグの排煙なども同じ値：52 / 44）
+    let fl = 1;
+    if (window._waterUniforms && window._waterUniforms.foamColor) { const c = window._waterUniforms.foamColor.value; fl = c.r * 0.3 + c.g * 0.5 + c.b * 0.2; }
+    window._fxLight = THREE.MathUtils.clamp(Math.min(lf * 0.9, fl), 0.04, 1.0);
+    if (wakeParticleMat) wakeParticleMat.uniforms.lightFactor.value = window._fxLight;
+    if (bubbleMat) bubbleMat.uniforms.lightFactor.value = THREE.MathUtils.clamp(Math.min(lf * 0.85, fl), 0.04, 1.0);
     // Scale puff size relative to ship size so small ships don't get oversized "moko" blobs
     globalSmokeMat.uniforms.sizeScale.value = THREE.MathUtils.clamp(physics.scale / 22.0, 0.18, 1.6);
+    if (globalSmokeMat.uniforms.uResK && typeof particleResK === 'function') globalSmokeMat.uniforms.uResK.value = particleResK();   // 画質で大きさが変わらないように（03）
 
+    const solidOn = typeof shipSolidPushOut === 'function' && window.shipSolid && shipSolid.G;
     // Update existing particles
     for(let i=0; i<perf.smokeCap; i++) {
         if (ageAttr.array[i] <= 1.0) {
@@ -608,6 +762,12 @@ function animateSmoke(t, dt) {
             posAttr.array[i*3]   += (smokeData[i].vel.x + wX + turbX) * dt;
             posAttr.array[i*3+1] += (smokeData[i].vel.y + spd * 1.7 + smokeData[i].rand * 1.1) * dt;
             posAttr.array[i*3+2] += (smokeData[i].vel.z + wZ + turbZ) * dt;
+            // 船体・上部構造・煙突・マストの中に入ったら、いちばん近い外へ押し出す（60-ship-solid.js。煙が船を突き抜けて見えないように。
+            // マストなどの細い物は左右に分かれて流れる：押し出した横の向きへ少し流す）
+            if (solidOn && shipSolidPushOut(posAttr.array[i*3], posAttr.array[i*3+1], posAttr.array[i*3+2], _smokePush)) {
+                posAttr.array[i*3] = _smokePush.x; posAttr.array[i*3+1] = _smokePush.y; posAttr.array[i*3+2] = _smokePush.z;
+                if (_smokePush.nx || _smokePush.nz) { const vv = smokeData[i].vel, vn = vv.x * _smokePush.nx + vv.z * _smokePush.nz; if (vn < 0.6) { vv.x += (0.6 - vn) * _smokePush.nx; vv.z += (0.6 - vn) * _smokePush.nz; } }
+            }
         }
     }
 
@@ -644,8 +804,8 @@ function animateSmoke(t, dt) {
 
             smokeData[i].rand = Math.random();
             const rotY = (physics.heading * Math.PI) / 180;
-            const shipVx = Math.sin(rotY) * physics.speed * 0.5;
-            const shipVz = Math.cos(rotY) * physics.speed * 0.5;
+            const shipVx = Math.sin(rotY) * physics.speed * 0.514444 * 0.5;     // 船の速さ（ノット → m/s）の半分
+            const shipVz = Math.cos(rotY) * physics.speed * 0.514444 * 0.5;
             smokeData[i].vel.set(shipVx, 0, shipVz);
 
             smokeIdx = (smokeIdx + 1) % perf.smokeCap;
@@ -659,11 +819,18 @@ function animateSmoke(t, dt) {
 }
 
 function animatePropellers(t, dt) {
-    const spd = physics.speed;
+    // スクリューの回転の速さは、船の速度ではなく機関の回転数から決める
+    // （32-engine-propeller.js）。以前は組み込みの推進器だけ「1フレームあたり」で
+    // 回していたため、フレームレートで回転の速さが変わっていた。
+    const spinRate = (typeof getPropSpinRate === 'function') ? getPropSpinRate() : physics.speed * 1.5;
     propMeshes.forEach(g => {
         const dir = g.userData.dir || 1;
         if (g.userData.isProp) {
-            g.rotation.z += spd * 0.15 * dir;
+            // 機関ごとの回転数（56-engines.js）
+            const id = 'prop:' + g.userData.propIndex + (g.userData.isMirror ? ':m' : '');
+            const sr = (typeof engineRpmFor === 'function') ? engineRpmFor(id) * Math.max(0.1, physics.maxSpeed || 1) * 1.5 * (1 + (window._propRacingIntensity || 0) * 0.6) : spinRate;
+            // （アジポッドはプロペラだけ回す。ポッドの向きは 58-maneuvering.js）
+            (g.userData.spinner || g).rotation.z += sr * dir * (dt || 0);   // GLBのスクリューと同じ速さ
         }
     });
 
@@ -678,8 +845,11 @@ function animatePropellers(t, dt) {
             // pivotOffset は親（shipGroup）ローカル座標系でのオフセット
             const pv = part.pivotOffset || new THREE.Vector3();
 
-            if (part.key === 'screw' || part.key === 'paddle') {
-                part.spin = (part.spin || 0) + spd * 1.5 * invert * (dt || 0);
+            if (part.key === 'screw' || part.key === 'paddle' || part.key === 'thruster') {
+                // 機関ごとの回転数（56-engines.js）。バウスラスターはスラスターの出力（58-maneuvering.js）
+                const sr = part.key === 'thruster' ? ((typeof maneuverThrusterSpin === 'function') ? maneuverThrusterSpin(part) : 0)
+                    : (typeof engineRpmFor === 'function') ? engineRpmFor('glb:' + part.id) * Math.max(0.1, physics.maxSpeed || 1) * 1.5 * (1 + (window._propRacingIntensity || 0) * 0.6) : spinRate;
+                part.spin = (part.spin || 0) + sr * invert * (dt || 0);
 
                 // 回転軸 (basePos + pivotOffset) を中心に回転させる。
                 // モデル自体の原点は basePos のまま変わらない。
@@ -691,6 +861,14 @@ function animatePropellers(t, dt) {
                 const pvRot = pv.clone().applyEuler(obj.rotation);  // 回転後のオフセット
                 obj.position.copy(part.basePos).add(pvBase).sub(pvRot);
 
+            } else if (part.key === 'azipod') {
+                // アジポッドの部品：いちばん近い機関のポッドの向きへ（58-maneuvering.js）。回す軸は既定で y（上下）
+                const az = ((typeof maneuverPodAzForPart === 'function') ? maneuverPodAzForPart(part) : 0) * invert;
+                obj.rotation.copy(part.baseRot);
+                obj.rotation[axis] = part.baseRot[axis] + az;
+                const pvBase = pv.clone().applyEuler(part.baseRot);
+                const pvRot = pv.clone().applyEuler(obj.rotation);
+                obj.position.copy(part.basePos).add(pvBase).sub(pvRot);
             } else if (part.key === 'rudder') {
                 const rudderRad = THREE.MathUtils.degToRad(physics.rudderAngle) * invert;
 

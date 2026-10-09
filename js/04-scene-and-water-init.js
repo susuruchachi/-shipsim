@@ -45,6 +45,13 @@ function init() {
     // レンダラー側で対数深度バッファを有効化し、水面用・パーティクル用カスタム
     // シェーダー側にも対応コード（USE_LOGDEPTHBUF分岐）を追加して精度を底上げする。
     renderer = new THREE.WebGLRenderer({ antialias: ENABLE_ANTIALIAS, powerPreference: 'high-performance', logarithmicDepthBuffer: true });
+    // 使っている GPU の名前（設定の「軽量化」に出す。外部 GPU を優先するよう powerPreference で頼んでいる）
+    try {
+        const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
+        window.gpuName = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+        document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('gpu-info'); if (el) el.textContent = window.gpuName || '—'; });
+        const el = document.getElementById('gpu-info'); if (el) el.textContent = window.gpuName || '—';
+    } catch (e) { /* ignore */ }
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, perf.pixelRatio));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -79,6 +86,12 @@ function init() {
     // shadowMapSize経由でapplyShadowQualityFromPerf()が管理する
     // （sunLight自体はこの少し下で生成されるため、有効化はそちらで行う）。
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // 影マップの描画は1フレームに1回だけにする。three.js は既定では
+    // renderer.render() を呼ぶたびに影を描き直すが、このアプリは1フレームに
+    // ブルーム抽出・本描画・水面反射と何度もシーンを描くため、太陽の影
+    // （2048px）などを毎フレーム2〜3回描き直していた。本描画の直前にだけ
+    // needsUpdate を立てる（17-main-loop.js / 12-bloom-and-deck-lighting-fx.js）。
+    renderer.shadowMap.autoUpdate = false;
     // RectAreaLight（エリアライト）のサポートを有効化
     if (THREE.RectAreaLightUniformsLib) THREE.RectAreaLightUniformsLib.init();
     container.appendChild(renderer.domElement);
@@ -121,8 +134,10 @@ function init() {
     sunLight.shadow.camera.near   = SHADOW_CAM_NEAR;
     sunLight.shadow.camera.far    = SHADOW_CAM_FAR;
     sunLight.shadow.mapSize.set(perf.shadowMapSize, perf.shadowMapSize);
-    sunLight.shadow.bias       = -0.0008;
-    sunLight.shadow.normalBias = 0.4;
+    // （影の地図の升目を細かくした分、ずらしも小さく：手すり・煙突の根元などの影が浮かないように。
+    //  影の範囲は船の大きさに合わせて 17-main-loop.js の updateSunShadowFollow で決め直す）
+    sunLight.shadow.bias       = -0.0005;
+    sunLight.shadow.normalBias = 0.15;
     sunLight.shadow.radius     = 3; // PCFSoftShadowMapの追加ソフト化
     sunLight.shadow.camera.updateProjectionMatrix();
     applyShadowQualityFromPerf(); // perf.shadowsEnabledに応じてON/OFFを反映
@@ -149,7 +164,7 @@ function init() {
     createWakeParticleSystem();
     loadEmbeddedOBJ();
     initDeckLightPool();  // 甲板照明ライトプール初期化
-    initBloomComposer();  // ブルームポストプロセス初期化
+    if (bloomEnabled) initBloomComposer();  // ブルームポストプロセス初期化（使わないときは作業用の画像も作らない。後でONにしたらそのとき作る）
 
     physics.cgWorldX = shipGroup.position.x;
     physics.cgWorldZ = shipGroup.position.z;
@@ -187,10 +202,18 @@ function init() {
 //  船周辺が細かく、遠方が粗い「同心矩形LODグリッド」をゼロから生成する。
 //
 //  【リング設計】
-//   Ring0: 半径   0 〜  r0  → innerSegs × innerSegs の均一グリッド（最高密度）
-//   Ring1: 半径  r0 〜  r1  → セル幅 r0 の2倍でタイル展開
-//   Ring2: 半径  r1 〜  r2  → セル幅 r0 の6倍
-//   Ring3: 半径  r2 〜  r3  → セル幅 r0 の18倍
+//   Ring0: 半径 0 〜 r0 → innerSegs × innerSegs の均一グリッド（最高密度）
+//   Ring k: 半径 r0·2^(k-1) 〜 r0·2^k → セル幅 Ring0 の 2^k 倍（外へ行くほど倍々に粗く）
+//   最後のリングは海面の端（約 1800）で止める。
+//
+//  以前は Ring1〜2 の外縁を r0 の 4倍・16倍にしていたため、大きい船では外縁が海面の端
+//  （1800）を大きく越え（オリンピックで約 2600）、そこを細かいセルで埋めていた。
+//  オリンピックで約 33万頂点、小さい船では 100万頂点を超え、頂点シェーダー（波・引き波
+//  32本・船体の型抜き）が本描画とブルーム抽出の 2回ずつ全頂点で走るので、
+//  「海面を消すと凄く軽くなる」原因の一つになっていた。
+//  倍々にすると、どのリングも画面上の見かけの細かさがほぼ同じになる（遠いほど
+//  小さく見えるぶん粗くてよい）ので、見た目を変えずにオリンピックで約 10万頂点に減る。
+//  セルの幅が隣のリングのちょうど 2倍なので、境目の頂点も 1つおきに揃う。
 //
 //  innerSegs を増やすほど Ring0 が細かくなる（遠方コストはほぼ変わらない）。
 //  waterMesh.position を毎フレーム船座標に追従させているため、
@@ -198,7 +221,8 @@ function init() {
 //  ワールド座標に変換する。（既存の wx = vx + waterMesh.position.x と同じ方式）
 // ─────────────────────────────────────────
 function createLodWaterGeometry(innerSegs) {
-    const IS = Math.max(8, Math.round(innerSegs)); // Ring0 の格子数（辺）
+    // Ring0 の格子数（辺）。4 の倍数にしておくと、外側のリングの境目の頂点がぴったり揃う
+    const IS = Math.max(8, Math.round(innerSegs / 4) * 4);
 
     // Ring0 の半幅: 船体スケールに応じて動的に決定。
     // physics.scale と hullProfile から現在の船の「見た目半長」を取得し、
@@ -215,25 +239,32 @@ function createLodWaterGeometry(innerSegs) {
     // IS セルを船体幅方向に細かく割り当てる。
     // ただし船体全長も Ring0 に収まる必要があるので halfLen*1.2 も考慮し大きい方を採用。
     // 最低15unit は確保（小型船でも破綻しない）。
-    const r0 = Math.max(15, Math.max(hullHalfBeam_ws * 3.0, hullHalfLen_ws * 1.2));
-
-    const r1 = r0  * 4.0;               // Ring1 外縁
-    const r2 = r1  * 4.0;               // Ring2 外縁
-    const r3 = 1800;                     // Ring3 外縁（海面の端）
-
+    const R_EDGE = 1800;                 // 海面の端（この先は 44-world-terrain.js の遠くの水面）
+    const r0 = Math.min(R_EDGE / 2, Math.max(15, Math.max(hullHalfBeam_ws * 3.0, hullHalfLen_ws * 1.2)));
     const cellW0 = (r0 * 2) / IS;        // Ring0 セル幅
-    const cellW1 = cellW0 * 2;           // Ring1 セル幅（2倍粗い）
-    const cellW2 = cellW0 * 6;           // Ring2 セル幅（6倍粗い）
-    const cellW3 = cellW0 * 18;          // Ring3 セル幅（18倍粗い）
+
+    // リングの組み立て（外縁はセル幅のちょうど整数倍にして、隣のリングと頂点を揃える）
+    const rings = [];
+    {
+        let inner = r0, cell = cellW0 * 2;
+        for (;;) {
+            // 外縁 = 内縁の 2倍（IS/4 セル）。それが端の近くまで届くなら、そのリングを端まで伸ばして終わる
+            // （次のリングが細い帯だけになるのを避ける）
+            const last = inner * 2 >= R_EDGE * 0.85;
+            const n = last ? Math.max(1, Math.round((R_EDGE - inner) / cell)) : Math.round(inner / cell);
+            const outer = inner + n * cell;
+            rings.push({ inner, outer, cell, n });
+            if (last) break;
+            inner = outer; cell *= 2;
+        }
+    }
+    const R = rings.length ? rings[rings.length - 1].outer : r0;   // 実際の海面の端（UV の基準）
 
     const positions = [];
-    const colors    = [];
     const uvs       = [];
-    const ringIds   = [];   // 各頂点のリング番号 (0=Ring0, 1=Ring1, 2=Ring2, 3=Ring3)
     const indices   = [];
 
     let vtxCount = 0;
-    let _currentRing = 0;  // addPatch呼び出し時にセットするリング番号
 
     // 矩形パッチ1枚を追加する内部ヘルパー
     // x0,z0: 左下隅（ローカル）  x1,z1: 右上隅（ローカル）  nX,nZ: 格子分割数
@@ -247,9 +278,7 @@ function createLodWaterGeometry(innerSegs) {
                 const px = x0 + xi * dx;
                 const pz = z0 + zi * dz;
                 positions.push(px, 0, pz);
-                colors.push(0.0, 0.08, 0.22);
-                uvs.push((px + r3) / (r3 * 2), (pz + r3) / (r3 * 2));
-                ringIds.push(_currentRing);
+                uvs.push((px + R) / (R * 2), (pz + R) / (R * 2));
                 vtxCount++;
             }
         }
@@ -265,48 +294,29 @@ function createLodWaterGeometry(innerSegs) {
     }
 
     // Ring0: 中央の高密度正方形（−r0〜+r0）
-    _currentRing = 0;
     addPatch(-r0, -r0, r0, r0, IS, IS);
 
-    // Ring1〜3: 中心正方形を囲むL字形を8方向パッチで構成
-    // 各リングは外縁まで埋める（角パッチ4枚 + 辺パッチ4枚）
-    function addRing(inner, outer, cellW, ringId) {
-        _currentRing = ringId;
-        const nSide = Math.max(1, Math.round((outer - inner) / cellW));
-
-        // 上辺・下辺（フルwidth）
-        const nTop = Math.max(1, Math.round(outer * 2 / cellW));
-        addPatch(-outer,  inner,  outer, outer, nTop, nSide); // 上
-        addPatch(-outer, -outer,  outer, -inner, nTop, nSide); // 下
-        // 左辺・右辺（inner〜inner の高さ）
-        const nLR = Math.max(1, Math.round(inner * 2 / cellW));
-        addPatch(-outer, -inner, -inner,  inner, nSide, nLR); // 左
-        addPatch( inner, -inner,  outer,  inner, nSide, nLR); // 右
+    // Ring1〜: 内側の正方形を囲む額縁を4枚のパッチで構成（上・下は角まで含む全幅、左・右はその間）
+    for (const g of rings) {
+        const { inner, outer, cell, n } = g;
+        const nTop = Math.max(1, Math.round(outer * 2 / cell));
+        addPatch(-outer,  inner,  outer, outer, nTop, n); // 上
+        addPatch(-outer, -outer,  outer, -inner, nTop, n); // 下
+        const nLR = Math.max(1, Math.round(inner * 2 / cell));
+        addPatch(-outer, -inner, -inner,  inner, n, nLR); // 左
+        addPatch( inner, -inner,  outer,  inner, n, nLR); // 右
     }
-
-    addRing(r0, r1, cellW1, 1);
-    addRing(r1, r2, cellW2, 2);
-    addRing(r2, r3, cellW3, 3);
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geo.setAttribute('color',    new THREE.Float32BufferAttribute(colors, 3));
     geo.setAttribute('uv',       new THREE.Float32BufferAttribute(uvs, 2));
-    // ringId は更新スキップ判定に使う（シェーダーには渡さない）
-    geo.setAttribute('ringId',   new THREE.Uint8BufferAttribute(new Uint8Array(ringIds), 1));
-    geo.setIndex(indices);
-    geo.computeVertexNormals();
-    // r0をuserDataに保存（updateWaterでのWAKE_R計算に使う）
+    // 法線・色は頂点シェーダーが自前で求める（属性は使わない）ので持たない
+    geo.setIndex(vtxCount > 65535 ? new THREE.Uint32BufferAttribute(indices, 1) : new THREE.Uint16BufferAttribute(indices, 1));
     geo.userData.r0 = r0;
-    // XZ座標をFlat32Arrayにキャッシュ（updateWaterでgetX/getZの低速アクセスを避ける）
-    const _xzCache = new Float32Array(vtxCount * 2);
-    for (let i = 0; i < vtxCount; i++) {
-        _xzCache[i * 2]     = positions[i * 3];      // x
-        _xzCache[i * 2 + 1] = positions[i * 3 + 2];  // z
-    }
-    geo.userData._xzCache = _xzCache;
+    // 頂点は y=0 の平面だが、波で上下するので境界球は少し厚めに（視錐台の外判定で消えないように）
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), R * Math.SQRT2 + 50);
 
-    console.log(`[LOD Water] innerSegs=${IS} r0=${r0.toFixed(0)} r1=${r1.toFixed(0)} r2=${r2.toFixed(0)} vtx=${vtxCount} tri=${indices.length/3}`);
+    console.log(`[LOD Water] innerSegs=${IS} r0=${r0.toFixed(0)} rings=${rings.map(g => g.outer.toFixed(0)).join('/')} vtx=${vtxCount} tri=${indices.length/3}`);
     return geo;
 }
 
@@ -390,6 +400,18 @@ function createWater() {
     }
 
     const waterUniforms = {
+        // ブルーム（光のにじみ）の抽出パスで、水面を黒く塗るとき 1。
+        // 以前は抽出パスの間だけ水面を別の黒いマテリアルに差し替えていたが、
+        // それだと波の形（頂点シェーダーで動かしている）が無くなって平らな
+        // 水面になり、波の陰に隠れている窓の光まで抽出され、海面から透けて
+        // にじんで見えていた。このシェーダーのまま黒く塗れば波で正しく隠れる。
+        uBloomDark: { value: 0.0 },
+        // 浅い海の海底（44-world-terrain.js が船のまわりの海底の色・深さを書き込む）
+        //  seabedTex：rgb＝海底の色、a＝深さ/200m。seabedRect：左下 x,z・一辺・使うか(1/0)
+        seabedTex:  { value: null },
+        seabedRect: { value: new THREE.Vector4(0, 0, 1, 0) },
+        // 浅瀬・岩礁・波打ち際の白い泡の強さ（波の高さから。17-main-loop.js の updateWater で）
+        shoalFoamK: { value: 0.0 },
         normalMap1: { value: wNorm1 },
         normalMap2: { value: wNorm2 },
         normalMap3: { value: wNorm3 },
@@ -415,6 +437,8 @@ function createWater() {
         deepColor: { value: new THREE.Color(0.008, 0.04, 0.14) },
         shallowColor: { value: new THREE.Color(0.02, 0.12, 0.32) },
         foamColor: { value: new THREE.Color(0.92, 0.97, 1.00) },
+        // 水面に映る空の色（水平線の近くの空。昼は空色・夕方は橙・夜は暗い紺：16-daynight-and-telegraph.js が毎フレーム決める）
+        skyReflColor: { value: new THREE.Color(0.30, 0.52, 0.82) },
         // 船明かり反射
         shipLightCount:       { value: 0 },
         shipLightPositions:   { value: waterShipLightPositions },
@@ -431,7 +455,12 @@ function createWater() {
     };
     // 毎フレーム glbLights からユニフォームを更新する関数（main-loopから呼ぶ）
     window._updateWaterShipLights = function() {
-        const lights = (window.glbLights || []).filter(l => l.visible && l.intensity > 0);
+        // エリアライトは glbLights に「シーンに居ないデータ保持役」として入って
+        // いるのでワールド座標を持たない。実際にシーンで光っている枠のライト
+        // （25-area-lights.js）を代わりに足す。
+        const lights = (window.glbLights || [])
+            .filter(l => (l.visible || (l.userData && l.userData.bakedHidden)) && l.intensity > 0 && !(l.userData && l.userData.isAreaLight))
+            .concat(typeof getAreaLightSceneLights === 'function' ? getAreaLightSceneLights() : []);
         const cnt = Math.min(lights.length, WATER_SHIP_LIGHT_MAX);
         waterUniforms.shipLightCount.value = cnt;
         const _wp = new THREE.Vector3();
@@ -457,8 +486,22 @@ function createWater() {
         wlPtCount: { value: 0 },
         wlPtsX:    { value: new Float32Array(MAX_WL_PTS) },
         wlPtsZ:    { value: new Float32Array(MAX_WL_PTS) },
+        // v165: 各輪郭点の「濡れ具合」(0=完全に離水〜1=しっかり沈んでいる)。
+        // 以前は離水した点をポリゴンから間引いていたが、そうすると輪郭の
+        // 点の並び自体が毎フレーム変わり、閉じる辺が船体を横切って水面上を
+        // 直線状に走る（＝泡が船体からはみ出す/内側に食い込む）原因になって
+        // いた。点は常に全部揃えたまま、この重みでフラグメント側の泡の
+        // 濃さを落とすことで、輪郭のトポロジーを壊さずに離水部分だけ
+        // 泡を消す。
+        wlWet:     { value: new Float32Array(MAX_WL_PTS) },
         hullBoundCenter: { value: new THREE.Vector2(0, 0) },
         hullBoundRadius: { value: 0.0 },
+        // v165: 喫水線の泡帯の幅。従来は1.1mの固定値で、小さい船では
+        // 船体から大きくはみ出し、大きい船では細すぎて見えなかった。
+        // 船体サイズに比例させる（updateHullWaterlinePolygonで毎フレーム更新）。
+        hullFoamWidth:   { value: 1.1 },
+        // 船の中に水面を出さない：喫水線の輪郭の内側で、縁からこの距離[m]より内側の水面を描かない（負なら描く）
+        hullHoleMargin:  { value: -1.0 },
     });
 
     // ── GPU波・引き波（Kelvin wake）計算用ユニフォーム ──
@@ -473,6 +516,20 @@ function createWater() {
         chopStrengthU:  { value: 1.0 },
         windDirU:       { value: (typeof physics !== 'undefined' && typeof physics.windDir === 'number') ? physics.windDir : 45 },
         windSpeedU:     { value: (typeof physics !== 'undefined' && typeof physics.windSpeed === 'number') ? physics.windSpeed : 5 },
+        // 外洋波の位相（02-utils-and-wave-physics.js の oceanWaveState と同じもの）。
+        // 位相 = K·(xz − 基準点) + φ。時刻や風向を式の中で直接使わないので、
+        // 風向・波長が変わっても波が飛んだり暴走したりしない。
+        waveK01U:       { value: new THREE.Vector4() },   // (K0x, K0z, K1x, K1z)
+        waveK23U:       { value: new THREE.Vector4() },   // (K2x, K2z, K3x, K3z)
+        wavePhaseU:     { value: new THREE.Vector4() },   // φ0..φ3
+        waveOriginU:    { value: new THREE.Vector2() },   // 基準点（ワールドXZ）
+        // 水面の細かい波紋テクスチャの流れ（風で流れた量を積み上げたもの）
+        detailOff1U:    { value: new THREE.Vector2() },
+        detailOff2U:    { value: new THREE.Vector2() },
+        detailOff3U:    { value: new THREE.Vector2() },
+        // 霧（scene.fog と同じ FogExp2 の式を自前で掛ける。17-main-loop.js の updateWater が毎フレーム反映）
+        waterFogColor:   { value: new THREE.Color(0, 0, 0) },
+        waterFogDensity: { value: 0.0 },
         physScaleU:     { value: 1.0 },
         hullHalfLenU:   { value: 6.0 },
         hullSliceCountU:{ value: 0 },
@@ -491,6 +548,7 @@ function createWater() {
         bowFullnessU:   { value: 1.0 },
         sternFullnessU: { value: 1.0 },
         wakeCount:      { value: 0 },
+        wakeBox:        { value: new THREE.Vector4(0, 0, -1, -1) },   // 引き波が届く範囲（x0, z0, x1, z1。17-main-loop.js）
         wakeXZTH:       { value: Array.from({ length: MAX_WAKE }, () => new THREE.Vector4()) },
         wakeSpeed:      { value: new Float32Array(MAX_WAKE) },
     });
@@ -654,358 +712,235 @@ function createWater() {
         const step = hull.length / n;
         const pxArr = waterUniforms.wlPtsX.value;
         const pzArr = waterUniforms.wlPtsZ.value;
+        const wetArr = waterUniforms.wlWet.value;
         for (let i = 0; i < n; i++) {
             const hi = Math.floor(i * step);
             pxArr[i] = hull[hi][0];
             pzArr[i] = hull[hi][1];
+            wetArr[i] = 1.0; // この経路（生メッシュ凸包・現在未使用）は離水判定を持たない
         }
         waterUniforms.wlPtCount.value = n;
     };
 
-    // ── 軽量版ウォーターラインポリゴン（hullProfileベース）──
-    // 上の window._updateWaterHullMask（生メッシュ三角形走査、現在未使用）と違い、
-    // 既にスキャン済みの hullProfile.slices（浮力計算でも使っている軽量データ、
-    // 数十点程度）からポリゴンを組み立てるだけなのでCPUコストはごくわずか。
-    // メッシュの粗さに関係なく実際の船体形状にピッタリ沿うため、
-    // フラグメントシェーダー側でこのポリゴンとの距離を使って
-    // 「船体に密着した波しぶき・泡」の帯を描画できる（水面メッシュの解像度に依存しない）。
+    // v166: 輪郭計算用の共有スクラッチ。毎フレーム呼ばれるのでアロケーションしない。
+    const _wlEnds = { k0:0, k1:0, f:0, sternAlong:0, bowAlong:0 };
+    const _wlSpan = { lo:0, hi:0, tt:0 };
+    const _wlHalf = MAX_WL_PTS >> 1;
+    const _wlStbd = { along: new Float64Array(_wlHalf), hw: new Float64Array(_wlHalf), wet: new Float64Array(_wlHalf) };
+    const _wlPort = { along: new Float64Array(_wlHalf), hw: new Float64Array(_wlHalf), wet: new Float64Array(_wlHalf) };
+
+    // ── ウォーターラインポリゴン（hullProfile.shape ベース）──
+    // v166: 船首・船尾形状の取得を作り直した（js/22-hull-shape.js 参照）。
     //
-    // 【傾き追従】静的な設計喫水形状をそのまま使うのではなく、各スライス・各舷ごとに
-    // 「現在のロール・ピッチ・上下動(ヒーブ)を踏まえたキール高さ」と「その場所の実際の
-    // 波高」からその場の没水深を求め、断面形状（β乗則、浮力計算と同じ式）に沿った
-    // 実喫水幅を計算する。これにより、傾いたり波に乗ったりして喫水が変わったときに、
-    // 沈んでいる側は設計喫水まで広がり、浮き上がっている側は中心線に向かって細る、
-    // というように実際の船体形状に沿ってウォーターラインが変形する。
+    // 【旧実装が船首尾を再現できなかった理由】
+    // 旧実装は「24等分スライスの半幅」＋「船首尾専用の実測タイポイント」
+    // ＋「先端手前を埋めるファインポイント」＋「タイポイントのalong位置プロファイル」
+    // …という別々のデータを繋ぎ合わせて1本の輪郭を組み立てていた。これらは
+    // それぞれ独立した近似・独立したフォールバックを持つため、
+    //   ・タイポイントが最後の通常スライスより内側に来て輪郭がねじれる
+    //   ・ファインポイントとスライスで幅の出所が違い、繋ぎ目で段差ができる
+    //   ・along格子が全高で固定なので、レーキした船首材やカウンタースターンの
+    //     「高さによって前後端が動く」挙動を原理的に表現できない
+    // といった破綻が船型ごとに現れた。Olympicはレーキ船首とカウンタースターンを
+    // 併せ持つため、その全部が同時に出る。
+    //
+    // 【新実装】
+    // hp.shape は高さレベルごとに「その高さ自身の前後端で正規化した半幅
+    // プロファイル」を持つ。輪郭は station を順に辿るだけで組み上がり、
+    // 前後端も高さに応じて補間で動くので、船首尾の特別扱いが一切要らない。
+    // 点の並び順・点数は毎フレーム固定なので、シェーダー側の距離場も安定する。
+    //
+    // 【傾き追従】各stationについて、その場所の実際の波高とロール・ピッチから
+    // 「船体ローカル座標系で見た今の水面の高さ」を求め、その高さでの輪郭を引く。
+    // ヒーブ・ロール・ピッチ・波のすべてが自動的に効く。
     window.updateHullWaterlinePolygon = function(t) {
         const hp = window.hullProfile;
-        if (!hp || !hp.ready || !hp.slices || hp.slices.length < 2) {
+        const shape = hp && hp.shape;
+        // 潜水艦が船体の上まで潜っていれば、水面に船体の形の穴を開けない（54-submarine.js）
+        if (!hp || !hp.ready || !shape || !shape.ready || (typeof subHullUnder === 'function' && subHullUnder())) {
             waterUniforms.wlPtCount.value = 0;
             waterUniforms.hullBoundRadius.value = 0;
+            waterUniforms.hullHoleMargin.value = -1;
+            if (window._hullWaterlineDyn) window._hullWaterlineDyn.ready = false;
             return;
         }
-        // MAX_WL_PTS(40点)のうち船首2点・船尾2点をscanHullProfile()が別途ごく狭い
-        // 窓で実測した「本当の先端幅」(hp.bowTipWidth/hp.sternTipWidth)専用に確保する。
-        // 従来は舷ごとの点をスライス中心（実際の先端より内側）までしか置いておらず、
-        // 右舷と左舷の最終点が先端手前でそのまま直線で結ばれるため、尖っているはずの
-        // 船首が「四角く」切れて見えるバグの原因だった。残りを左右の舷に均等配分する。
-        // v130: さらに、通常スライス最後尾〜先端の間を細かくカバーするため、
-        // hp.bowFinePoints/hp.sternFinePoints（片端あたりTIP_FINE_PTS点、18-hull-
-        // wake-physics.jsのTIP_FINE_POINTSと同じ値を維持）ぶんの枠も追加で確保する。
-        // N_SIDE自体は据え置き（14のまま）にしたいので、その分をMAX_WL_PTS側の
-        // 拡張（32→40）で吸収している。
-        const TIP_PTS = 2;
-        const TIP_FINE_PTS = 2; // 18-hull-wake-physics.js の TIP_FINE_POINTS と揃える
-        const N_SIDE = (MAX_WL_PTS - TIP_PTS * 2 - TIP_FINE_PTS * 2 * 2) / 2; // 片舷あたりの点数
-        const physScale = Math.max(0.25, (typeof physics !== 'undefined' && physics.scale) || 1);
+
+        // 片舷あたりの点数。MAX_WL_PTS(40)を左右で折半する。
+        // shape側は48station持っているが、シェーダーのuniform配列の都合で
+        // ここでは20点に間引く（コサイン配置のまま間引くので船首尾は密なまま）。
+        const N_SIDE = MAX_WL_PTS >> 1;
+
+        const physScale  = Math.max(0.25, (typeof physics !== 'undefined' && physics.scale) || 1);
         const headingRad = (typeof physics !== 'undefined') ? (physics.heading * Math.PI) / 180 : 0;
-        const totalRadForOrigin = (typeof _wakeAxisRad === 'function') ? _wakeAxisRad(headingRad) : headingRad;
-        // 注意: physics.cgWorldX/Zは「重心」のワールド座標。cgOffset.x/zが(0,0)でない
-        // 場合は船体スキャン座標系のローカル原点とズレるため、_hullOriginWorld()で
-        // 補正した船体原点を使わないと、このウォーターライン(泡の帯)ポリゴンが
-        // 実際の船体シルエットからズレて、船体に食い込んだり浮いたりして
-        // 「喫水線が暴れる」ように見える（他のエフェクト系と同じ理由の、より古いバグ）。
+        const totalRad   = (typeof _wakeAxisRad === 'function') ? _wakeAxisRad(headingRad) : headingRad;
+        // 重心(cgOffset)がローカル原点からズレていても輪郭が船体からズレないよう、
+        // 船体スキャン座標系の原点を求めてから along/perp をワールドへ載せる。
         let cx, cz;
         if (typeof _hullOriginWorld === 'function' && typeof physics !== 'undefined') {
-            const _o = _hullOriginWorld(physics.cgWorldX, physics.cgWorldZ, totalRadForOrigin, physScale);
+            const _o = _hullOriginWorld(physics.cgWorldX, physics.cgWorldZ, totalRad, physScale);
             cx = _o.x; cz = _o.z;
         } else {
             cx = (typeof physics !== 'undefined') ? physics.cgWorldX : 0;
             cz = (typeof physics !== 'undefined') ? physics.cgWorldZ : 0;
         }
-        const totalRad = totalRadForOrigin;
         const sinT = Math.sin(totalRad), cosT = Math.cos(totalRad);
         const tNow = (typeof t === 'number') ? t : ((typeof clock !== 'undefined') ? clock.getElapsedTime() : 0);
 
-        // 17/18番ファイルの浮力計算と同じ規約（船首尾方向の傾き=ピッチ、左右方向の
-        // 傾き=ロール）でキール高さをスライス・舷ごとに補正する。
         const roll  = (typeof physics !== 'undefined') ? physics.roll  : 0;
         const pitch = (typeof physics !== 'undefined') ? physics.pitch : 0;
         const shipY = (typeof physics !== 'undefined') ? physics.y     : 0;
         const waterlineYScaled = ((typeof physics !== 'undefined') ? physics.waterlineOffsetY : 0) * physScale;
-        const cosP = Math.cos(pitch), sinP = Math.sin(pitch), sinR = Math.sin(roll);
-        const beta = (typeof DISP_BETA === 'number') ? DISP_BETA : 0.55;
+        const sinP = Math.sin(pitch), cosP = Math.cos(pitch), sinR = Math.sin(roll);
 
-        const slices = hp.slices;
-        const sCount = slices.length;
-        const pxArr = waterUniforms.wlPtsX.value;
-        const pzArr = waterUniforms.wlPtsZ.value;
+        // 船体ローカル y=0 がワールドのどの高さにあるか。
+        // shipY(=喫水基準点のワールドY)から waterlineOffsetY のスケール分を戻す。
+        const originY = shipY - waterlineYScaled;
+
+        // 【局所水面高さの導出】
+        //   keelYSide  = originY + localY*physScale - alongW*sinP + sign*hwW*sinR*cosP
+        // を localY について解くと、そのstationで水面に相当するローカルYは
+        //   localWaterY = (waveY - originY + alongW*sinP - sign*hwW*sinR*cosP) / physScale
+        // となる。旧実装はここにスライスごとのdraftを噛ませていたが、式の上では
+        // 完全に相殺する項であり、しかもメッシュによっては実測に失敗して
+        // 極端な値（実測: 組み込みモデルで0.165）になることがあった。
+        // 相殺する項は最初から書かない方が安全で、かつ速い。
+        const localWaterYAt = (alongW, hwW, sign, waveY) =>
+            (waveY - originY + alongW * sinP - sign * hwW * sinR * cosP) / physScale;
+
+        const pxArr  = waterUniforms.wlPtsX.value;
+        const pzArr  = waterUniforms.wlPtsZ.value;
+        const wetArr = waterUniforms.wlWet.value;
         let n = 0;
 
-        // v19: 高さ別実測プロファイル(sl.heightProfile)からの補間サンプラー。
-        // profileは高さ昇順の{y, hw}配列。
-        // 【方向の確認】localYは「この舷・このスライスにとって、今この瞬間の
-        // 水面が静的スキャン座標系でどの高さに相当するか」（呼び出し元emitPoint
-        // 参照）。depthLocalが増える＝沈む方向にlocalYも増えるので、
-        //   localY <= profile[0].y  → 計測範囲の下端より下 → その断面が完全に
-        //     水面から浮き上がって出ている（emitPoint内の旧β乗則フォールバック
-        //     でいう depthLocal<=0 と同じ状況）
-        //   localY >= profile[N-1].y → 計測範囲の上端より上 → 設計喫水よりずっと
-        //     深く沈み込んでいる
-        // （直前のコメントは この上下限の対応が逆になっていた誤り）。
-        //
-        // v128-fix: 旧実装はどちらの範囲外でも最寄り端の値で頭打ちしていたが、
-        // バルバスバウ／カウンタースターン／アトランティックバウ等、断面の実測
-        // 範囲が船体全体の高さレンジ（HEIGHT_LEVELSの元になる範囲）よりかなり
-        // 狭い場所（先端近傍など）では、null埋め補間により profile[0].hw が
-        // 「実際にはこの断面が存在しない高さ」までゼロでない幅で埋まっている
-        // ことがある。従来はこれをそのまま返していたため、ピッチでその断面が
-        // 完全に浮き上がって出ても喫水線の泡の幅が0まで縮まらず、水面に
-        // 貼り付いたような直線状の泡が残るバグになっていた（船尾が浮き上がった
-        // ときに顕著）。profile[0].hwから0へ、直近2レベル分の間隔でテーパーさせ、
-        // それより下は0で頭打ちにする（emitPoint側のβ乗則フォールバックが
-        // 完全浮上時にhwEff=0にするのと同じ挙動に揃える）。
-        // 上端側（設計喫水よりずっと深い側）は、通常の波でも比較的到達し
-        // やすく、なおかつ最大喫水として頭打ちにする挙動自体はβ乗則
-        // フォールバックとも一致するため、今回は変更していない。
-        function sampleHeightProfile(profile, localY) {
-            const N = profile.length;
-            if (N === 0) return 0;
-            if (localY <= profile[0].y) {
-                const margin = (N >= 2) ? Math.max(profile[1].y - profile[0].y, 1e-6) : 1e-6;
-                const t = Math.max(0, Math.min(1, 1 - (profile[0].y - localY) / margin));
-                return profile[0].hw * t;
+        // 共有スクラッチ（毎フレーム呼ばれるのでアロケーションしない）
+        const ends = _wlEnds, span = _wlSpan;
+
+        // 設計喫水での輪郭を初期推定に使う
+        hullShapeEndsAtY(shape, shape.designWaterlineY, ends);
+        const refStern = ends.sternAlong, refBow = ends.bowAlong;
+
+        // 1station分を解く。u は輪郭上の正規化位置（0=船尾端, 1=船首端）。
+        // alongW/hwW は互いに依存する（ロール項とレーキ）ので数回反復して収束させる。
+        const solveStation = (u, sign) => {
+            // 初期推定は設計喫水の輪郭。endsは共有スクラッチなので、前のstationの
+            // 状態を引きずらないよう毎回ここで設計喫水に戻してから始める。
+            hullShapeEndsAtY(shape, shape.designWaterlineY, ends);
+            let alongLocal = refStern + (refBow - refStern) * u;
+            let hwLocal = hullShapeHwAtU(shape, ends.k0, ends.k1, ends.f, u, span);
+
+            // 波高サンプルは1回だけ。getWaveHeight(...,true)は引き波の履歴を
+            // 走査するのでこの関数の中で最も重く、station数×2舷ぶん毎フレーム
+            // 呼ばれる。水面形状は船体スケールに対して十分緩やかなので、
+            // 仮位置での1サンプルで実用上の精度が出る（旧実装も同じ判断）。
+            // 一方、along/半幅/高さレベルの相互依存（レーキとロール）は
+            // 波高を固定したまま数回反復すれば十分収束する。
+            const alongW0 = alongLocal * physScale;
+            const hwW0 = hwLocal * physScale;
+            const waveY = (typeof getWaveHeight === 'function')
+                ? getWaveHeight(cx + sinT * alongW0 + cosT * sign * hwW0,
+                                cz + cosT * alongW0 - sinT * sign * hwW0, tNow, true)
+                : 0;
+
+            let localWaterY = shape.designWaterlineY;
+            for (let it = 0; it < 3; it++) {
+                localWaterY = localWaterYAt(alongLocal * physScale, hwLocal * physScale, sign, waveY);
+                hullShapeEndsAtY(shape, localWaterY, ends);
+                alongLocal = ends.sternAlong + (ends.bowAlong - ends.sternAlong) * u;
+                hwLocal = hullShapeHwAtU(shape, ends.k0, ends.k1, ends.f, u, span);
             }
-            if (localY >= profile[N - 1].y) return profile[N - 1].hw;
-            for (let i = 0; i < N - 1; i++) {
-                const a = profile[i], b = profile[i + 1];
-                if (localY <= b.y) {
-                    const t = (b.y - a.y) > 1e-9 ? (localY - a.y) / (b.y - a.y) : 0;
-                    return a.hw + (b.hw - a.hw) * t;
-                }
+            // 濡れ具合。輪郭の上の点は定義上すべて水と接しているので、
+            // 消すべきなのは「その断面がキールより上に出た＝空中にある」場合だけ。
+            let wet = hullShapeWetness(shape, localWaterY);
+            // 水面が甲板（船体本体の上）より上：その断面は水をかぶっている。喫水線（泡帯・水面の穴）を真ん中へ縮める
+            //（船底が水から出たときに消えるのと同じように。甲板の上に水が見える）
+            //（泡帯・泡は、甲板が水に入ったらすぐ消す。以前は船体の高さの 8% 沈むまで細く残り、沈んだ船首の上に白い筋が伸びていた）
+            if (Number.isFinite(hp.deckY) && hp.hullHeight > 0 && localWaterY > hp.deckY) {
+                const k = Math.max(0, 1 - (localWaterY - hp.deckY) / (hp.hullHeight * 0.02));
+                hwLocal *= k; wet = 0;
             }
-            return profile[N - 1].hw;
-        }
-
-        // v130: 先端along位置用サンプラー（幅のsampleHeightProfileと同じ補間
-        // 方式）。profileは高さ昇順の{y, along}配列（scanTipAlongProfile参照）。
-        // 幅と違い「0に収束させる」意味を持たないため、範囲外は単純に両端で
-        // 頭打ちにする（下端側＝ほぼ離水した状態は、どの道この後hwEffが0近くに
-        // なりcommitPointで点ごと除外されるため、along値自体はここで多少
-        // ズレても最終的な見た目に影響しない）。
-        function sampleAlongProfile(profile, localY, fallbackAlong) {
-            if (!profile || profile.length === 0) return fallbackAlong;
-            const N = profile.length;
-            if (localY <= profile[0].y) return profile[0].along;
-            if (localY >= profile[N - 1].y) return profile[N - 1].along;
-            for (let i = 0; i < N - 1; i++) {
-                const a = profile[i], b = profile[i + 1];
-                if (localY <= b.y) {
-                    const t = (b.y - a.y) > 1e-9 ? (localY - a.y) / (b.y - a.y) : 0;
-                    return a.along + (b.along - a.along) * t;
-                }
-            }
-            return profile[N - 1].along;
-        }
-
-        // alongW: ワールドスケール済みの船首尾方向オフセット。hwLocal/draftRefは
-        // ローカル(スケール前)の値（scanHullProfileのslice.halfWidth/draftと同じ単位）。
-        // このスライス・この舷のキール高さ(ヒーブ・ピッチ・ロール込み)から
-        // 実際の没水深に応じたテーパー済み半幅を求め、ワールド座標点として書き込む。
-        // v19: heightProfileが渡された場合、「その瞬間の水面と船体外形の実際の
-        // 交線」を再現するため、水面高さをスキャン時と同じローカルY座標系に逆
-        // 変換して heightProfile を直接補間する（スクリュー軸が姿勢によって
-        // 実際に水面と交わればその幅が、マスト等の計測範囲外の高さでは常に幅0が
-        // 得られる）。heightProfileが無い場合（船首尾先端点）は従来のβ乗則近似
-        // を使う。
-        // v129-fix: 以前はここでpxArr/pzArrに直接書き込んでいたが、離水判定を
-        // 挟めるように「計算だけして返す」形に変更した（実際に配列へ書き込むかは
-        // 呼び出し側のcommitPointが決める）。
-        const emitPoint = (alongW, hwLocal, draftRef, sign, heightProfile) => {
-            const hwFullW = hwLocal * physScale;
-            const baseKeelY = shipY - waterlineYScaled + (hp.designWaterlineY - draftRef) * physScale;
-            const keelYSide = baseKeelY - alongW * sinP + sign * hwFullW * sinR * cosP;
-
-            // 設計喫水幅(hwFullW)時点での仮位置で実際の波高をサンプルする
-            // （水面形状は緩やかなので、この仮位置での近似で十分）。
-            const px0 = cx + sinT * alongW + cosT * sign * hwFullW;
-            const pz0 = cz + cosT * alongW - sinT * sign * hwFullW;
-            const waveY = (typeof getWaveHeight === 'function') ? getWaveHeight(px0, pz0, tNow, true) : 0;
-
-            let hwEff;
-            if (heightProfile) {
-                const localRef = hp.designWaterlineY - draftRef;
-                const localWaterY = localRef + (waveY - keelYSide) / physScale;
-                hwEff = sampleHeightProfile(heightProfile, localWaterY);
-            } else {
-                const depthLocal = (waveY - keelYSide) / physScale;
-                if (depthLocal <= 0) hwEff = 0; // 完全に水面から出ている → 中心線に収束
-                else if (draftRef <= 0.0001 || depthLocal >= draftRef) hwEff = hwLocal; // 設計喫水以上沈んでいる → 最大幅で頭打ち
-                else hwEff = hwLocal * Math.pow(depthLocal / draftRef, beta);
-            }
-            const hwEffW = hwEff * physScale;
-
-            return {
-                px: cx + sinT * alongW + cosT * sign * hwEffW,
-                pz: cz + cosT * alongW - sinT * sign * hwEffW,
-                hwEffW,
-                hwFullW
-            };
+            return { alongLocal, hwLocal, wet };
         };
 
-        // v129-fix: 離水して中心線に収束した点（hwEffW≒0）を並びに含めると、
-        // それ自体がシェーダー側distToHullEdgeの言う「辺」になってしまい、
-        // 船体が実際に浮き上がって消えているのに、そこから全長基準で固定
-        // された船首尾タイポイントまでの間、水面に貼り付いた直線状の泡が
-        // 残り続ける不具合になっていた（バルバスバウ／カウンタースターン／
-        // アトランティックバウのように先端が全長側に大きく張り出す船型
-        // ほど、この区間が長くなり目立つ）。
-        // 対策として、ほぼ離水した点はポリゴンに一切含めない。これにより、
-        // その舷の輪郭は「実際に濡れている最後の点」で打ち切られ、閉じる
-        // 辺（配列の最後の点→最初の点）が、離水した区間を挟んで反対の舷の
-        // 対応する点へと直接結ばれる――結果として全長側のタイポイントまで
-        // 伸びる代わりに、今まさに濡れている範囲の際でおおよそ船幅ぶんの
-        // 短い辺になる（＝その瞬間の海面と船体の交差にほぼ沿う）。
-        // 「ほぼ離水」かどうかはその点自身の設計喫水幅(hwFullW)に対する比率
-        // で判定するため、先端付近など元々幅が細い断面を誤って離水中と判定
-        // することはない。wlPtCountが3未満になった場合はシェーダー側の
-        // ガード（wlPtCount>=3）でhullEdgeFoam自体が描画されなくなるが、
-        // それは「濡れている断面がほぼ無い」状況なので妥当な挙動。
-        const NEARLY_VANISHED_FRAC = 0.03;
-        const commitPoint = (pt) => {
-            const thresh = Math.max(pt.hwFullW, 1e-6) * NEARLY_VANISHED_FRAC;
-            if (pt.hwEffW < thresh) return; // ほぼ離水した断面はポリゴンに含めない
-            pxArr[n] = pt.px;
-            pzArr[n] = pt.pz;
+        // パーティクル側（18-hull-wake-physics.js）と共有する実喫水線テーブル
+        const wlDyn = window._hullWaterlineDyn || (window._hullWaterlineDyn = {
+            ready: false, time: -1, n: 0,
+            alongNorm: new Float64Array(N_SIDE),
+            hwStbd: new Float64Array(N_SIDE), hwPort: new Float64Array(N_SIDE),
+            wetStbd: new Float64Array(N_SIDE), wetPort: new Float64Array(N_SIDE),
+        });
+        if (wlDyn.alongNorm.length !== N_SIDE) {
+            wlDyn.alongNorm = new Float64Array(N_SIDE);
+            wlDyn.hwStbd  = new Float64Array(N_SIDE); wlDyn.hwPort  = new Float64Array(N_SIDE);
+            wlDyn.wetStbd = new Float64Array(N_SIDE); wlDyn.wetPort = new Float64Array(N_SIDE);
+        }
+        wlDyn.n = N_SIDE;
+
+        // 左右それぞれ解く。u はコサイン配置（shape内のstation配置と同じ考え方で、
+        // 船首尾を密に取る）。
+        const uOf = (i) => 0.5 * (1 - Math.cos(Math.PI * i / (N_SIDE - 1)));
+        const stbd = _wlStbd, port = _wlPort;
+        for (let i = 0; i < N_SIDE; i++) {
+            const u = uOf(i);
+            const rs = solveStation(u, 1);
+            const rp = solveStation(u, -1);
+            stbd.along[i] = rs.alongLocal; stbd.hw[i] = rs.hwLocal; stbd.wet[i] = rs.wet;
+            port.along[i] = rp.alongLocal; port.hw[i] = rp.hwLocal; port.wet[i] = rp.wet;
+        }
+
+        // along方向の単調性を保証する。各stationが自分の局所水面高さで輪郭を引くため、
+        // 強いピッチや波で稀に前後が入れ替わることがあり、そのまま多角形にすると
+        // 自己交差してシェーダーの距離場が破綻する（旧実装で船首がV字に割れた症状と
+        // 同じ原因）。ここで潰しておけば、以降の処理は順序を信頼してよい。
+        for (let i = 1; i < N_SIDE; i++) {
+            if (stbd.along[i] < stbd.along[i-1]) stbd.along[i] = stbd.along[i-1];
+            if (port.along[i] < port.along[i-1]) port.along[i] = port.along[i-1];
+        }
+
+        // 共有テーブルへ（alongNormはhalfLen基準。パーティクル側の規約に合わせる）
+        const halfLen = Math.max(hp.halfLen, 1e-6);
+        for (let i = 0; i < N_SIDE; i++) {
+            wlDyn.alongNorm[i] = ((stbd.along[i] + port.along[i]) * 0.5) / halfLen;
+            wlDyn.hwStbd[i] = stbd.hw[i]; wlDyn.wetStbd[i] = stbd.wet[i];
+            wlDyn.hwPort[i] = port.hw[i]; wlDyn.wetPort[i] = port.wet[i];
+        }
+
+        // ポリゴンを一周させる: 右舷を船尾→船首、左舷を船首→船尾。
+        // 点数・並び順は毎フレーム同一（N_SIDE*2点）なので、離水した区間も
+        // 点を間引かずwet=0で消す（v165で確立した方針をそのまま踏襲）。
+        const emit = (alongLocal, hwLocal, wet, sign) => {
+            if (n >= MAX_WL_PTS) return;
+            const alongW = alongLocal * physScale;
+            const hwW = hwLocal * physScale;
+            pxArr[n]  = cx + sinT * alongW + cosT * sign * hwW;
+            pzArr[n]  = cz + cosT * alongW - sinT * sign * hwW;
+            wetArr[n] = wet;
             n++;
         };
-
-        // sign=+1: 右舷側（船尾→船首の順）, sign=-1: 左舷側（船首→船尾の逆順で一周を閉じる）
-        const emitSide = (sign, reverse) => {
-            for (let k = 0; k < N_SIDE; k++) {
-                const i = reverse ? (N_SIDE - 1 - k) : k;
-                const idx = Math.min(sCount - 1, Math.round(i * (sCount - 1) / (N_SIDE - 1)));
-                const sl = slices[idx];
-                const alongW = sl.alongNorm * hp.halfLen * physScale;
-                commitPoint(emitPoint(alongW, sl.halfWidth, sl.draft, sign, sl.heightProfile));
-            }
-        };
-
-        // v130: 通常スライスの最後尾〜実際の先端の間を追加でスキャンした
-        // hp.bowFinePoints/hp.sternFinePoints（18-hull-wake-physics.jsのscanFinePoints
-        // 参照）を、その舷の輪郭に沿って差し込む。outward=trueは通常スライス側→
-        // 先端側の順（外向きに歩く区間）、falseは先端側→通常スライス側の順
-        // （先端で折り返して内向きに戻る区間）。
-        const emitFinePoints = (pts, draftRef, sign, outward) => {
-            if (!pts || pts.length === 0) return;
-            const ordered = outward ? pts : pts.slice().reverse();
-            for (const pt of ordered) {
-                const alongW = pt.alongNorm * hp.halfLen * physScale;
-                commitPoint(emitPoint(alongW, pt.width, draftRef, sign, pt.heightProfile));
-            }
-        };
-
-        const bowDraftRef   = slices[sCount - 1].draft;
-        const sternDraftRef = slices[0].draft;
-
-        // v130: 先端(タイポイント)のalong位置を、固定値ではなく現在の没水深に
-        // 応じて動的に解決する（hp.bowTipAlongProfile/sternTipAlongProfile、
-        // 18-hull-wake-physics.jsのscanTipAlongProfile参照）。
-        // along位置自体がkeelYSide経由でalongWに依存する（ピッチでの傾き分）
-        // ため、固定along基準でざっくり今の没水高さを見積もり、その高さで
-        // alongProfileをサンプリングして実際のalong位置を求める。
-        // v130-fix: 当初は1回のサンプリングだけで済ませていたが、実測で
-        // 「かなり沈み込まないと張り出しが反映されない上に幅も微妙にズレる」
-        // 不具合が発覚。これは、真のtip位置が固定along基準（nominal）から
-        // 大きくズレる形状（レイクがきつい船首/オーバーハングした船尾）では、
-        // 最初の1回の没水高さ見積もり自体がまだズレたnominal位置を使って
-        // 計算されるため、局所的な沈み込みを過小評価してしまい、本来もっと
-        // 早く効くはずの張り出しが出るまでに余計な沈み込みが必要になり、
-        // かつその過小評価されたalongWをemitPoint側の幅サンプリングにも
-        // そのまま渡してしまうため幅も連動してズレる、という連鎖が原因。
-        // 対策：直前の反復で求めたalong位置を使って没水高さを再計算し直す、
-        // という反復を数回行い自己無撞着な値に収束させる（水面形状自体は
-        // 緩やかなので数回で十分収束する）。
-        const resolveTipAlongW = (tipAlongNorm, draftRef, alongProfile) => {
-            const nominalAlongW = tipAlongNorm * hp.halfLen * physScale;
-            if (!alongProfile || alongProfile.length === 0) return nominalAlongW;
-            let alongW = nominalAlongW;
-            for (let iter = 0; iter < 4; iter++) {
-                const baseKeelY = shipY - waterlineYScaled + (hp.designWaterlineY - draftRef) * physScale;
-                const keelYNom  = baseKeelY - alongW * sinP; // タイポイントは中心線上なのでロール項は無し
-                const pxN = cx + sinT * alongW;
-                const pzN = cz + cosT * alongW;
-                const waveYNom = (typeof getWaveHeight === 'function') ? getWaveHeight(pxN, pzN, tNow, true) : 0;
-                const localRef = hp.designWaterlineY - draftRef;
-                const localWaterY = localRef + (waveYNom - keelYNom) / physScale;
-                const alongLocal = sampleAlongProfile(alongProfile, localWaterY, tipAlongNorm * hp.halfLen);
-                const newAlongW = alongLocal * physScale;
-                if (Math.abs(newAlongW - alongW) < 0.01) { alongW = newAlongW; break; }
-                alongW = newAlongW;
-            }
-            return alongW;
-        };
-
-
-        emitSide(1, false);  // 右舷側: 船尾 → 船首
-        emitFinePoints(hp.bowFinePoints, bowDraftRef, 1, true); // 右舷側、先端に向けて外向き
-
-        // ── 船首先端（実測タイポイント）──
-        // hp.bowTipWidthはscanHullProfileがごく狭い窓で求めた「本当の船首最先端」の
-        // 幅。スライス中心の粗い値より正確にテーパーし、四角く切れる問題を解消する。
-        // v14: hp.halfLen（AABB最先端＝バウスプリットや甲板張り出し等、喫水線より
-        // 上の突出部にも引っ張られる）ではなく、喫水線以下の頂点だけで再計測した
-        // hp.bowTipAlongNorm を使う。船首が実際の喫水よりかなり前に飛び出る問題の修正。
-        // v110-fix: 以前はここだけheightProfileを渡しておらず、常に古いβ乗則近似
-        // にフォールバックしていた（通常スライスをv109/v110で交差ベースに置き換えて
-        // も、まさに船首の一番先っぽの点だけ改善の恩恵を受けられず、水面追従も
-        // できていなかった）。hp.bowTipHeightProfile（先端位置での交差ベース
-        // heightProfile、scanHullProfileで通常スライスと同じロジックにより算出）
-        // を渡すことで統一する。
-        const bowTipAlongNorm = (typeof hp.bowTipAlongNorm === 'number') ? hp.bowTipAlongNorm : 1.0;
-        const bowAlongW   = resolveTipAlongW(bowTipAlongNorm, bowDraftRef, hp.bowTipAlongProfile);
-        commitPoint(emitPoint(bowAlongW, hp.bowTipWidth || 0, bowDraftRef, 1, hp.bowTipHeightProfile));
-        commitPoint(emitPoint(bowAlongW, hp.bowTipWidth || 0, bowDraftRef, -1, hp.bowTipHeightProfile));
-
-        emitFinePoints(hp.bowFinePoints, bowDraftRef, -1, false); // 左舷側、先端から内向きに戻る
-        emitSide(-1, true);  // 左舷側: 船首 → 船尾（ポリゴンが一周するように逆順）
-        emitFinePoints(hp.sternFinePoints, sternDraftRef, -1, true); // 左舷側、先端に向けて外向き
-
-        // ── 船尾先端（実測タイポイント）──
-        // 巡洋艦型など先端が尖っていない船尾では hp.sternTipWidth も実測でそれなりの
-        // 幅になるため、丸みのある船尾を無理やり尖らせてしまうことはない。
-        // v14: 船首と同様、喫水線以下の頂点だけで再計測した hp.sternTipAlongNorm
-        // （常に負値）を使う。v110-fix: 船首と同様にheightProfileを渡す。
-        const sternTipAlongNorm = (typeof hp.sternTipAlongNorm === 'number') ? hp.sternTipAlongNorm : -1.0;
-        const sternAlongW   = resolveTipAlongW(sternTipAlongNorm, sternDraftRef, hp.sternTipAlongProfile);
-        commitPoint(emitPoint(sternAlongW, hp.sternTipWidth || 0, sternDraftRef, -1, hp.sternTipHeightProfile));
-        commitPoint(emitPoint(sternAlongW, hp.sternTipWidth || 0, sternDraftRef, 1, hp.sternTipHeightProfile));
-
-        // v133-debug: モバイルではdevtoolsが使いにくいため、アドレスバーに
-        // javascript:alert(JSON.stringify(window.__wlDebug)) と入力すれば
-        // 現在のtipプロファイルの有無・along値のズレを直接確認できるように
-        // 診断用スナップショットを毎フレーム公開する。挙動には一切影響しない。
-        window.__wlDebug = {
-            bowProfileLen:   (hp.bowTipAlongProfile   && hp.bowTipAlongProfile.length)   || 0,
-            sternProfileLen: (hp.sternTipAlongProfile && hp.sternTipAlongProfile.length) || 0,
-            bowNominal:   +(bowTipAlongNorm   * hp.halfLen * physScale).toFixed(2),
-            bowResolved:  +bowAlongW.toFixed(2),
-            sternNominal: +(sternTipAlongNorm * hp.halfLen * physScale).toFixed(2),
-            sternResolved:+sternAlongW.toFixed(2),
-        };
-        // v134-fix: モバイルChromeはアドレスバーに javascript: を打っても
-        // ストリップされて実行できないことがあるため、URL経由のalert()を
-        // やめて画面に直接常時表示するオーバーレイに変更。初回だけ生成し、
-        // 以降は中身のテキストを毎フレーム書き換えるだけ。
-        if (!window.__wlDebugEl) {
-            const el = document.createElement('div');
-            el.id = 'wlDebugOverlay';
-            el.style.cssText = 'position:fixed;left:4px;bottom:4px;z-index:99999;'
-                + 'background:rgba(0,0,0,0.75);color:#0f0;font:11px monospace;'
-                + 'padding:6px 8px;border-radius:4px;white-space:pre;pointer-events:none;';
-            document.body.appendChild(el);
-            window.__wlDebugEl = el;
-        }
-        window.__wlDebugEl.textContent =
-            `bowProfileLen: ${window.__wlDebug.bowProfileLen}  sternProfileLen: ${window.__wlDebug.sternProfileLen}\n` +
-            `bowNominal: ${window.__wlDebug.bowNominal}  bowResolved: ${window.__wlDebug.bowResolved}\n` +
-            `sternNominal: ${window.__wlDebug.sternNominal}  sternResolved: ${window.__wlDebug.sternResolved}`;
-
-        emitFinePoints(hp.sternFinePoints, sternDraftRef, 1, false); // 右舷側、先端から内向きに戻る（最初の点へ閉じる）
-
+        for (let i = 0; i < N_SIDE; i++) emit(stbd.along[i], stbd.hw[i], stbd.wet[i], 1);
+        for (let i = N_SIDE - 1; i >= 0; i--) emit(port.along[i], port.hw[i], port.wet[i], -1);
 
         waterUniforms.wlPtCount.value = n;
         waterUniforms.hullBoundCenter.value.set(cx, cz);
         waterUniforms.hullBoundRadius.value = hp.halfLen * physScale * 1.6 + 5.0;
+        // 泡帯の幅は船体サイズ追従（係数0.037は全長60m級で従来の固定値1.1mになる値）
+        waterUniforms.hullFoamWidth.value = Math.min(2.4, Math.max(0.4, hp.halfLen * physScale * 0.037));
+        // 船の中の水面を消すときの、縁からの余裕（輪郭の点の間の弦は船体の内側を通るので小さくてよい）
+        waterUniforms.hullHoleMargin.value = 0.12;
+
+        // 診断用（画面には出さない。コンソールで window.__wlDebug を見る）
+        window.__wlDebug = {
+            wlPtCount: n,
+            stations: N_SIDE,
+            // 今フレームで実際に使われた輪郭の前後端（右舷の船尾側/船首側station）
+            sternAlong: +stbd.along[0].toFixed(3),
+            bowAlong:   +stbd.along[N_SIDE - 1].toFixed(3),
+            // 比較用の設計喫水での前後端
+            designStern: +refStern.toFixed(3),
+            designBow:   +refBow.toFixed(3),
+        };
+
+        wlDyn.time = tNow;
+        wlDyn.ready = true;
     };
 
     // ── SWE displacement map 用の uniform を追加 ──
@@ -1047,7 +982,7 @@ function createWater() {
         polygonOffset: true,
         polygonOffsetFactor: 1,
         polygonOffsetUnits: 1,
-        defines: { USE_COLOR: '', WATER_SHIP_LIGHT_MAX: WATER_SHIP_LIGHT_MAX, MAX_WAKE: MAX_WAKE },
+        defines: { USE_COLOR: '', WATER_SHIP_LIGHT_MAX: WATER_SHIP_LIGHT_MAX, MAX_WAKE: MAX_WAKE, MAX_WL_PTS: MAX_WL_PTS },
         vertexShader: `
             uniform sampler2D sweMap;
             uniform bool      sweEnabled;
@@ -1061,6 +996,10 @@ function createWater() {
             uniform float     chopStrengthU;
             uniform float     windDirU;
             uniform float     windSpeedU;
+            uniform vec4      waveK01U;
+            uniform vec4      waveK23U;
+            uniform vec4      wavePhaseU;
+            uniform vec2      waveOriginU;
             uniform float     physScaleU;
             uniform float     hullHalfLenU;
             uniform int       hullSliceCountU;
@@ -1075,6 +1014,8 @@ function createWater() {
             uniform float     bowFullnessU;
             uniform float     sternFullnessU;
             uniform int       wakeCount;
+            uniform vec4      wakeBox;
+            uniform float     uBloomDark;   // ブルーム抽出パス（黒く塗るだけ）では引き波・法線の計算を省く
             uniform vec4      wakeXZTH[MAX_WAKE];   // x, z, t, headingRad
             uniform float     wakeSpeed[MAX_WAKE];
             // 【反射方式修正】反射カメラ視点への投影行列（ワールド座標→反射RTのテクスチャ座標）
@@ -1102,10 +1043,17 @@ function createWater() {
             // 拡張自体が「extension is not supported」となり、gl_FragDepthEXTが未定義
             // identifierとしてシェーダーのコンパイル/リンクごと失敗 → 海面が丸ごと
             // 消える不具合の直接の原因だった）。
-            // Three.js側のUSE_LOGDEPTHBUF_EXTは無視し、常にEXT不使用の経路
-            // （gl_Position.zを直接エンコードするだけの、拡張が要らない安全な方式）を使う。
+            // v0.03.015.007: 頂点だけで奥行きを決める方式は、三角形の中を直線で補間するので、
+            // 大きな三角形ほど本当の奥行きからずれる。船・地形（標準の材質）は画素ごとに奥行きを
+            // 書くので、水際で船体や地形が透けたり隠れたりしていた。three.js が USE_LOGDEPTHBUF_EXT を
+            // 付けるとき（WebGL2 なら gl_FragDepth が必ず使える。標準の材質も同じ条件で使っている）は、
+            // 標準の材質と同じく画素ごとに書く。#extension は書かない（three.js に任せる）。
             #ifdef USE_LOGDEPTHBUF
-                uniform float logDepthBufFC;
+                #ifdef USE_LOGDEPTHBUF_EXT
+                    varying float vFragDepthW;
+                #else
+                    uniform float logDepthBufFC;
+                #endif
             #endif
             bool isPerspectiveMatrix(mat4 m) { return m[2][3] == -1.0; }
 
@@ -1115,42 +1063,33 @@ function createWater() {
             // 自動的に引き上げる」カップリングをここでも適用し、見た目と物理の
             // 急峻さ(波形勾配)を一致させる。
             vec2 oceanWaveHC(vec2 xz, float t, float h, float wIn) {
-                float autoWidthMin = h * 0.0782; // ≒ 0.005214/(1/15)
-                float w = max(wIn, autoWidthMin);
-
-                // ── v95: 風向・風速を波形に反映（CPU側 getWaveCrestAndHeight と対で維持）──
-                // ①向き: 位相計算に使うxzを風向の分だけ回転させ、うねり・チョップの
-                //   進行方向を風向スライダーに追従させる。
-                // ②シャープさ: crestだけ風速に応じて指数(crestPow)を上げてピークを
-                //   鋭く・狭くする。heightは変えないので浮力に使う波高は変わらない。
-                float windRad = radians(windDirU);
-                float wCos = cos(windRad), wSin = sin(windRad);
-                vec2 rxz = vec2(xz.x * wCos - xz.y * wSin, xz.x * wSin + xz.y * wCos);
+                // 位相は CPU 側（updateOceanWaveState）が積み上げた K・φ・基準点から作る。
+                // 以前は風向で原点まわりに回した座標 × 波数 + time·ω を直接計算して
+                // いたため、風向・波長が変わると原点からの距離に比例して波が飛んだ
+                // （船が原点から遠いほど、波が急に猛スピードで流れて見えた）。
+                // t・wIn は互換のために残しているが使わない（CPU側で反映済み）。
+                vec2 d = xz - waveOriginU;
                 float windSharpen = min(1.6, windSpeedU / 18.0);
                 float crestPow = 2.0 + windSharpen;
 
-                float k1 = 0.018 / w;
-                float p1 = rxz.x * k1 + rxz.y * (k1 * 0.6) + t * 0.38;
+                float p1 = dot(waveK01U.xy, d) + wavePhaseU.x;
                 float s1 = sin(p1); float s1m = max(s1, 0.0);
                 float ww1 = (s1m * s1m) * 2.0 - 0.6;
                 float c1 = pow(s1m, crestPow);
 
-                float k2 = 0.026 / w;
-                float p2 = -rxz.x * k2 + rxz.y * (k2 * 0.8) + t * 0.52;
+                float p2 = dot(waveK01U.zw, d) + wavePhaseU.y;
                 float s2 = sin(p2); float s2m = max(s2, 0.0);
                 float ww2 = (s2m * s2m) * 2.0 - 0.7;
                 float c2 = pow(s2m, crestPow);
 
                 // うねり成分（最も波長が長い）
-                float k3 = 0.009 / w;
-                float p3 = rxz.y * k3 + t * 0.22;
+                float p3 = dot(waveK23U.xy, d) + wavePhaseU.z;
                 float s3 = sin(p3);
                 float ww3 = s3;
                 float c3 = s3 > 0.0 ? s3 * s3 : 0.0;
 
                 // チョップ成分（最も波長が短い）
-                float k4 = 0.072 / w;
-                float p4 = rxz.x * (k4 * 0.7) + rxz.y * k4 - t * 0.95;
+                float p4 = dot(waveK23U.zw, d) + wavePhaseU.w;
                 float s4 = sin(p4);
                 float ww4 = s4 * 0.5;
                 float c4 = s4 > 0.0 ? pow(s4, crestPow) : 0.0;
@@ -1250,30 +1189,28 @@ function createWater() {
                 float sinH = sin(ph.w);
                 float cosH = cos(ph.w);
 
-                // v104: 楕円近似(半幅一定)だと船首の絞り込み形状を再現できず、
-                // 先端付近で波が船体内側まで入り込んでしまっていた。
-                // 喫水線輪郭の砕け波(bow spray)と同じ実データ(hullWidthsU)を使い、
-                // その場所ごとの実際の半幅で判定するよう変更。
-                // 中心線（船首方位ベクトル）に対する観測点の横距離・前後位置を求め、
-                // 船体が実際に存在する前後範囲内でだけ、その位置での実喫水線半幅より
-                // 内側の波の寄与を滑らかにゼロへ絞る。
-                // これを全域に適用すると、船首点そのもの（V字の頂点、中心線上）まで
-                // マスクされてしまい、肝心の「めくり上げの始点」が消えてしまうため、
-                // 船体の前後範囲の外ではマスクをかけない。
-                // 右舷方向ベクトル = 船首方向(sinH, cosH)を90°回転した(cosH, -sinH)
-                float lateralDist = abs(dxp * cosH - dzp * sinH);
-                float alongDist   = dxp * sinH + dzp * cosH; // 船首方向への射影（船首側+、船尾側-）
-                float alongNorm   = clamp(alongDist / max(0.01, hullHalfLenU), -1.0, 1.0);
-                float hullW       = hullHalfWidthAt(alongNorm);
-                float withinHullLen = 1.0 - smoothstep(hullHalfLenU * 0.98, hullHalfLenU * 1.08, abs(alongDist));
-                // v124: 0.9〜1.3では際の遷移帯が広く、船体のすぐ内側でもマスクが
-                // 完全に0にならず、波が薄く透けて見える原因になっていた
-                // (v121/v122で振幅を上げ、v123で船首波を持続的に立たせたことで
-                // この薄い透け残りが目立つようになった)。withinHullLenと同じ
-                // 0.98〜1.08の狭い帯に絞り、実喫水線のすぐ内側は確実に0にする。
-                float lateralMask = smoothstep(hullW * 0.98, hullW * 1.08, lateralDist);
-                float hullMask = mix(1.0, lateralMask, withinHullLen);
+                // ── 軽い判定を先に（重さ対策）──
+                // 以前は、波源ごとに船体の半幅の探索（24回のループ）などの重い計算を
+                // 先に行ってから「その点が波の輪の中か」を調べていた。海面の頂点ごとに
+                // 最大32個の波源について毎回これを行うため、船が動いて航跡の履歴が
+                // たまるほど重くなっていた（バックグラウンドから戻った直後は履歴が
+                // 空なので軽く、走るうちに重くなる）。
+                // 波が立つのは、波源から「波の輪」（半径 waveSpeed·dt、幅 ±1.5波長）の
+                // 中だけなので、まずそれを調べ、外なら何もせず返す。船体の半幅による
+                // 絞り込みは、実際に波が立つ点で、かつ船体の前後の範囲内のときだけ行う。
+                float waveSpeed = (3.0 + absSpeed * 0.2) * scaleRatio;
+                float waveRadius = waveSpeed * dt;
+                float pitchWavelenScale = clamp(1.8 / sqrt(max(0.05, pitchOmegaU)), 0.5, 4.0);
+                float waveLenBase = (5.0 + absSpeed * 0.3) * scaleRatio * pitchWavelenScale;
+                {
+                    float bandMax = waveLenBase * sqrt(max(bowFullnessU, sternFullnessU)) * 1.5;
+                    float dp = sqrt(dxp * dxp + dzp * dzp);
+                    // 船首・船尾の波源は中心から±L。どちらの輪にも入らなければ寄与なし
+                    if (dp + L < waveRadius - bandMax || dp - L > waveRadius + bandMax) return vec2(0.0);
+                }
 
+                float sumH = 0.0;      // 船体による絞り込み前の高さ
+                float sumFoam = 0.0;
                 for (int s = 0; s < 2; s++) {
                     float sx, sz;
                     bool isBow;
@@ -1288,17 +1225,12 @@ function createWater() {
                     if (d < 0.1) continue;
 
                     float fullness  = isBow ? bowFullnessU : sternFullnessU;
-                    float waveSpeed = (3.0 + absSpeed * 0.2) * scaleRatio;
-                    float waveRadius = waveSpeed * dt;
                     float distanceToWaveFront = d - waveRadius;
                     float absDistToWaveFront = abs(distanceToWaveFront);
                     // v105: ケルビン波が波打つ周期は、船がピッチ(縦揺れ)する周期に由来する
                     // という考えに基づき、船のピッチ自然角周波数(pitchOmegaU)で波長を
-                    // スケールする。ωが小さい(=大型・重い船でピッチがゆっくり)ほど
-                    // 波長が長くなる。1.8は中型船的な基準角周波数の目安値。
-                    float pitchWavelenScale = clamp(1.8 / sqrt(max(0.05, pitchOmegaU)), 0.5, 4.0);
-                    float waveLength = (5.0 + absSpeed * 0.3) * scaleRatio * sqrt(fullness) * pitchWavelenScale;
-
+                    // スケールする（pitchWavelenScale、上で計算）。
+                    float waveLength = waveLenBase * sqrt(fullness);
                     if (absDistToWaveFront < waveLength * 1.5) {
                         // v122: 「今の倍くらい」の要望でv121の値からさらに2倍(0.033→0.066, 0.024→0.048)
                         float ampFactor = isBow ? 0.066 : 0.048;
@@ -1344,16 +1276,46 @@ function createWater() {
                                     hh = amp * sin(phase) * angleEnvelope;
                                 }
 
-                                wakeY += hh * hullMask;
+                                sumH += hh;
 
                                 if (hh > 0.02 && absDistToWaveFront < waveLength * 0.5) {
-                                    wakeFoam += (hh / waveLength) * angleEnvelope * (19.0 + absSpeed * 0.6) * hullMask;
+                                    sumFoam += (hh / waveLength) * angleEnvelope * (19.0 + absSpeed * 0.6);
                                 }
                             }
                         }
                     }
                 }
-                return vec2(wakeY, wakeFoam);
+
+                // 波が立たない点では、船体による絞り込みも要らない
+                if (sumH == 0.0 && sumFoam == 0.0) return vec2(0.0);
+
+                // v104: 楕円近似(半幅一定)だと船首の絞り込み形状を再現できず、
+                // 先端付近で波が船体内側まで入り込んでしまっていた。
+                // 喫水線輪郭の砕け波(bow spray)と同じ実データ(hullWidthsU)を使い、
+                // その場所ごとの実際の半幅で判定するよう変更。
+                // 中心線（船首方位ベクトル）に対する観測点の横距離・前後位置を求め、
+                // 船体が実際に存在する前後範囲内でだけ、その位置での実喫水線半幅より
+                // 内側の波の寄与を滑らかにゼロへ絞る。
+                // これを全域に適用すると、船首点そのもの（V字の頂点、中心線上）まで
+                // マスクされてしまい、肝心の「めくり上げの始点」が消えてしまうため、
+                // 船体の前後範囲の外ではマスクをかけない。
+                // 右舷方向ベクトル = 船首方向(sinH, cosH)を90°回転した(cosH, -sinH)
+                float alongDist   = dxp * sinH + dzp * cosH; // 船首方向への射影（船首側+、船尾側-）
+                float withinHullLen = 1.0 - smoothstep(hullHalfLenU * 0.98, hullHalfLenU * 1.08, abs(alongDist));
+                // 船体の前後の範囲外では絞り込み不要（半幅の探索もしない）
+                if (withinHullLen <= 0.0) return vec2(sumH, sumFoam);
+                float lateralDist = abs(dxp * cosH - dzp * sinH);
+                float alongNorm   = clamp(alongDist / max(0.01, hullHalfLenU), -1.0, 1.0);
+                float hullW       = hullHalfWidthAt(alongNorm);
+                // v124: 0.9〜1.3では際の遷移帯が広く、船体のすぐ内側でもマスクが
+                // 完全に0にならず、波が薄く透けて見える原因になっていた
+                // (v121/v122で振幅を上げ、v123で船首波を持続的に立たせたことで
+                // この薄い透け残りが目立つようになった)。withinHullLenと同じ
+                // 0.98〜1.08の狭い帯に絞り、実喫水線のすぐ内側は確実に0にする。
+                float lateralMask = smoothstep(hullW * 0.98, hullW * 1.08, lateralDist);
+                float hullMask = mix(1.0, lateralMask, withinHullLen);
+
+                return vec2(sumH * hullMask, sumFoam * hullMask);
             }
 
             vec2 wakeHF(vec2 xz, float t) {
@@ -1460,12 +1422,17 @@ function createWater() {
                         sweH = s.r * sweScale;
                         vSWEFoam = clamp(length(s.gb) * 0.12 - 0.1, 0.0, 1.0);
                     }
-                } else {
+                } else if (uBloomDark < 0.5) {
                     // SWEが無効な場合のみ解析的な引き波（Kelvin wake）を加算。
+                    // （ブルーム抽出パスでは省く：窓の光を隠すのは大きなうねりで、
+                    //  引き波の高さの差は見分けがつかないため）
                     // ここがいわゆる「引き波系」で、軽量化しても見た目の正確さを保つ部分。
-                    vec2 wk = wakeHF(wp.xz, time);
-                    oceanH += wk.x;
-                    foam = max(foam, wk.y);
+                    // 引き波が届く範囲の外の頂点（大半）は、32 本の波源を調べること自体をしない
+                    if (wp.x >= wakeBox.x && wp.x <= wakeBox.z && wp.z >= wakeBox.y && wp.z <= wakeBox.w) {
+                        vec2 wk = wakeHF(wp.xz, time);
+                        oceanH += wk.x;
+                        foam = max(foam, wk.y);
+                    }
                 }
 
                 wp.y += oceanH + sweH;
@@ -1483,11 +1450,16 @@ function createWater() {
                 vReflectUv = textureMatrix * wp;
 
                 // 法線: 大きいうねりの傾きを有限差分で近似（メッシュ解像度に依存しない見た目の滑らかさ）
-                float eps = 0.6;
-                float hX = oceanWaveHC(wp.xz + vec2(eps, 0.0), time, h, w).x - oceanH;
-                float hZ = oceanWaveHC(wp.xz + vec2(0.0, eps), time, h, w).x - oceanH;
-                vec3 approxNormal = normalize(vec3(-hX / eps, 1.0, -hZ / eps));
-                vNormal   = normalize(normalMatrix * approxNormal);
+                // （ブルーム抽出パスは黒く塗るだけなので法線は要らない）
+                if (uBloomDark < 0.5) {
+                    float eps = 0.6;
+                    float hX = oceanWaveHC(wp.xz + vec2(eps, 0.0), time, h, w).x - oceanH;
+                    float hZ = oceanWaveHC(wp.xz + vec2(0.0, eps), time, h, w).x - oceanH;
+                    vec3 approxNormal = normalize(vec3(-hX / eps, 1.0, -hZ / eps));
+                    vNormal   = normalize(normalMatrix * approxNormal);
+                } else {
+                    vNormal = vec3(0.0, 1.0, 0.0);
+                }
 
                 gl_Position = projectionMatrix * viewMatrix * wp;
                 vScreenPos  = gl_Position;
@@ -1496,10 +1468,14 @@ function createWater() {
                 // vScreenPosには通常の投影値を保持させたいのでここ（main末尾）で適用する。
                 // v153-fix3: EXT_frag_depthに依存しない経路のみを使う（上記コメント参照）。
                 #ifdef USE_LOGDEPTHBUF
+                    #ifdef USE_LOGDEPTHBUF_EXT
+                        vFragDepthW = 1.0 + gl_Position.w;
+                    #else
                     if (isPerspectiveMatrix(projectionMatrix)) {
                         gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
                         gl_Position.z *= gl_Position.w;
                     }
+                    #endif
                 #endif
             }
         `,
@@ -1513,11 +1489,17 @@ function createWater() {
             uniform float     time;
             uniform float     windDirU;
             uniform float     windSpeedU;
+            uniform vec2      detailOff1U;
+            uniform vec2      detailOff2U;
+            uniform vec2      detailOff3U;
+            uniform vec3      waterFogColor;
+            uniform float     waterFogDensity;
             uniform vec3      sunDir;
             uniform vec3      sunColor;
             uniform vec3      deepColor;
             uniform vec3      shallowColor;
             uniform vec3      foamColor;
+            uniform vec3      skyReflColor;
             // 船明かり反射
             uniform int       shipLightCount;
             uniform vec3      shipLightPositions[WATER_SHIP_LIGHT_MAX];
@@ -1526,6 +1508,10 @@ function createWater() {
             // 船体反射テクスチャ
             uniform sampler2D reflectionTex;
             uniform float     reflectionStrength;
+            uniform float     uBloomDark;
+            uniform sampler2D seabedTex;
+            uniform vec4      seabedRect;
+            uniform float     shoalFoamK;
             // 太陽シャドウ（v83: 自前サンプリング。Three.js標準のreceiveShadowは
             // 完全自前シェーダーには自動適用されないため、手動で判定する）
             uniform sampler2D sunShadowMap;
@@ -1541,23 +1527,31 @@ function createWater() {
             varying float vSWEFoam;
             // ── 船体マスクuniform（ウォーターラインポリゴン方式）──
             uniform int   wlPtCount;
-            uniform float wlPtsX[40];
-            uniform float wlPtsZ[40];
+            uniform float wlPtsX[MAX_WL_PTS];
+            uniform float wlPtsZ[MAX_WL_PTS];
+            uniform float wlWet[MAX_WL_PTS];
             uniform vec2  hullBoundCenter;
             uniform float hullBoundRadius;
+            uniform float hullFoamWidth;
+            uniform float hullHoleMargin;
 
             // ── 対数深度バッファ対応（頂点シェーダー側のUSE_LOGDEPTHBUFブロックとペア）──
             // v153-fix3: EXT_frag_depthに依存しない経路のみを使う。
             #ifdef USE_LOGDEPTHBUF
                 uniform float logDepthBufFC;
+                #ifdef USE_LOGDEPTHBUF_EXT
+                    varying float vFragDepthW;
+                #endif
             #endif
 
             // 点pがウォーターラインポリゴン内かを射線交差法で判定（現状未使用、将来用に保持）
+            // v165-fix: ループ上限が32のままだった。MAX_WL_PTSはv130で32→40に
+            // 拡張済みなので、33点目以降が判定から丸ごと抜け落ちていた。
             bool pointInPolygon(vec2 p, int n) {
                 bool allRight = true;
                 bool allLeft  = true;
                 vec2 prev = vec2(wlPtsX[0], wlPtsZ[0]);
-                for (int i = 1; i < 32; i++) {
+                for (int i = 1; i <= MAX_WL_PTS; i++) {
                     if (i > n) break;
                     vec2 curr = (i < n) ? vec2(wlPtsX[i], wlPtsZ[i]) : vec2(wlPtsX[0], wlPtsZ[0]);
                     vec2 edge = curr - prev;
@@ -1574,21 +1568,45 @@ function createWater() {
             // 点pから船体ウォーターライン輪郭（折れ線）までの最短距離。
             // hullProfileから作った実際の船体形状ポリゴンを使うため、
             // 水面メッシュの解像度に関係なく船体にピッタリ沿った帯を描ける。
-            float distToHullEdge(vec2 p, int n) {
+            //
+            // v165-fix【喫水線の泡が船体に沿わない不具合の本丸・その2】
+            //  ・ループ上限が i < 32 のままで、CPU側がv130で40点まで詰める
+            //    ようになった輪郭の33点目以降（＝船尾のファインポイントと
+            //    船尾先端タイポイント）が完全に無視されていた。しかも
+            //    i < n が成立し続けるので輪郭を閉じる最後の辺も引かれず、
+            //    船尾側だけ泡帯が途切れる／船首側の点との間で辺が張られず
+            //    形が崩れる、という状態だった。上限をMAX_WL_PTSに揃え、
+            //    閉じる辺を必ず1回通るよう i <= MAX_WL_PTS にする。
+            //  ・最近傍の辺の上で wlWet を線形補間して返す。CPU側が
+            //    離水した点を間引く代わりにこの重みを渡すようになったので、
+            //    輪郭の形は保ったまま離水区間の泡だけを消せる。
+            // insideOut：p が輪郭の内側なら 1（偶奇の交差判定。船尾のくぼみなど凹んだ所でも正しい）
+            float distToHullEdge(vec2 p, int n, out float wetOut, out float insideOut) {
+                wetOut = 0.0;
+                insideOut = 0.0;
                 if (n < 3) return 1.0e6;
                 float minD = 1.0e6;
-                vec2 prev = vec2(wlPtsX[0], wlPtsZ[0]);
-                for (int i = 1; i < 32; i++) {
+                vec2  prev  = vec2(wlPtsX[0], wlPtsZ[0]);
+                float prevW = wlWet[0];
+                for (int i = 1; i <= MAX_WL_PTS; i++) {
                     if (i > n) break;
-                    vec2 curr = (i < n) ? vec2(wlPtsX[i], wlPtsZ[i]) : vec2(wlPtsX[0], wlPtsZ[0]);
+                    bool  closing = (i >= n);
+                    vec2  curr  = closing ? vec2(wlPtsX[0], wlPtsZ[0]) : vec2(wlPtsX[i], wlPtsZ[i]);
+                    float currW = closing ? wlWet[0] : wlWet[i];
                     vec2 e = curr - prev;
                     vec2 w = p - prev;
                     float denom = max(dot(e, e), 1.0e-6);
                     float t = clamp(dot(w, e) / denom, 0.0, 1.0);
                     vec2 proj = prev + e * t;
-                    minD = min(minD, distance(p, proj));
-                    prev = curr;
-                    if (i == n) break;
+                    float d = distance(p, proj);
+                    if (d < minD) {
+                        minD   = d;
+                        wetOut = mix(prevW, currW, t);
+                    }
+                    if ((prev.y > p.y) != (curr.y > p.y) && p.x < prev.x + (p.y - prev.y) * e.x / e.y) insideOut = 1.0 - insideOut;
+                    prev  = curr;
+                    prevW = currW;
+                    if (closing) break;
                 }
                 return minD;
             }
@@ -1637,6 +1655,12 @@ function createWater() {
             vec3 shipLightContribution(vec3 worldPos, vec3 viewDir, vec3 n, vec3 lPos, vec3 lColor, float lInt) {
                 // ライトが水面より上にある場合のみ反射（水中は除外）
                 if (lPos.y < 0.0) return vec3(0.0);
+                // 遠くて届かない灯りは、反射の計算（べき乗など）をせずに返す。
+                // 画面の海面の全画素×最大16灯ぶん毎回計算していたので、これだけで軽くなる。
+                vec3  toL    = lPos - worldPos;
+                float dist2  = dot(toL, toL);
+                float atten0 = 1.0 / (dist2 * 0.004 + 1.0);
+                if (atten0 * lInt < 0.0015) return vec3(0.0);
                 // ライトを水面に鏡像（y反転）
                 vec3 mirrorPos = vec3(lPos.x, -lPos.y, lPos.z);
                 vec3 toMirror  = normalize(mirrorPos - worldPos);
@@ -1654,6 +1678,20 @@ function createWater() {
             }
 
             void main() {
+                // 画素ごとの対数深度（標準の材質と同じ式）。水面は 0.02% 奥へ（船体の水面下と際どいときに船体が勝つように。
+                // 画素ごとに奥行きを書くと polygonOffset は効かないので、その代わり）
+                #if defined( USE_LOGDEPTHBUF ) && defined( USE_LOGDEPTHBUF_EXT )
+                    gl_FragDepthEXT = log2(vFragDepthW * 1.0002) * logDepthBufFC * 0.5;
+                #endif
+                // 船の喫水線の輪郭の近くだけ、輪郭までの距離・内側かを求める（泡帯と、船の中の水面を消すのに使う）
+                float hullEdgeD = 1.0e6, hullEdgeWet = 0.0, hullInside = 0.0;
+                if (wlPtCount >= 3 && distance(vWorldPos.xz, hullBoundCenter) < hullBoundRadius)
+                    hullEdgeD = distToHullEdge(vWorldPos.xz, wlPtCount, hullEdgeWet, hullInside);
+                // 船の中（喫水線の輪郭の内側）には水面を描かない。船内や開いた甲板から海面が見えないように。
+                // 甲板が水に入った所は、輪郭が真ん中へ縮むので（updateHullWaterlinePolygon）、甲板の上には水が見える
+                if (hullHoleMargin >= 0.0 && hullInside > 0.5 && hullEdgeD > hullHoleMargin) discard;
+                // ブルーム抽出パス：波の形のまま黒く塗るだけ（重い計算は飛ばす）
+                if (uBloomDark > 0.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
                 // v153-fix3: 対数深度は頂点シェーダー側でgl_Position.zに直接エンコード
                 // 済み（EXT_frag_depthを使わない経路）。フラグメント側で追加の
                 // 書き込みは不要になった。
@@ -1688,25 +1726,21 @@ function createWater() {
                 float parallaxLen = length(parallaxDir);
                 if (parallaxLen > 4.0) parallaxDir = parallaxDir / parallaxLen * 4.0;
                 // ── v95: テクスチャ上の細かい波紋(法線マップ)の向き・流れる速さを風に連動 ──
-                // windVec: 船の進行方向と同じsin/cos規約（0度=+Z方向）の風向ベクトル。
-                // uv1は風向そのまま（メインの風波）、uv2はそこから約131°回した向き
-                // （元のクロスするうねり感を保ちつつ、主方向は風に追従させる）。
-                // 風速が強いほどスクロール速度も上げ、水面の細波が「風で流れている」
-                // ように見せる。
-                float windRadF = radians(windDirU);
-                vec2 windVec = vec2(sin(windRadF), cos(windRadF));
+                // uv1は風向そのまま（メインの風波）、uv2はそこから約131°回した向き、
+                // uv3は約47°回した向きに流れる。風速が強いほど速く流れ、水面の細波が
+                // 「風で流れている」ように見える。
                 float wSpdNorm = clamp(windSpeedU / 20.0, 0.0, 1.5);
-                vec2 uv1 = worldXZ + windVec * time * (0.010 + wSpdNorm * 0.010);
-                float xa = 2.29; // ≒131度: uv2をずらす角度（cos,sin併用で回転）
-                vec2 windVec2 = vec2(windVec.x * cos(xa) - windVec.y * sin(xa), windVec.x * sin(xa) + windVec.y * cos(xa));
-                vec2 uv2 = worldXZ * 1.85 - windVec2 * time * (0.008 + wSpdNorm * 0.009);
+                // 流れた量（風向×速さを時間で積み上げたもの）は CPU 側（17-main-loop.js の
+                // updateWater）で計算して detailOff*U で受け取る。以前は
+                // 「風向ベクトル×time×速さ」をここで直接計算していたため、風向・風速が
+                // 変わると経過時間の分だけ模様が一気にずれて、細波が暴走して見えた。
+                vec2 uv1 = worldXZ + detailOff1U;
+                vec2 uv2 = worldXZ * 1.85 + detailOff2U;
                 // v162: 「大きめの波」用の第3レイヤー。uv1/uv2よりUVスケールを縮小
                 // （＝1テクセルが世界座標でより広い範囲をカバーする＝模様が大きく見える）し、
                 // スクロールも遅くして、細波よりゆったりしたうねりとして流れさせる。
                 // 向きはuv1とも違う角度(約47°)に振って、3枚が同じ方向に重ならないようにする。
-                float xb = 0.82; // ≒47度
-                vec2 windVec3 = vec2(windVec.x * cos(xb) - windVec.y * sin(xb), windVec.x * sin(xb) + windVec.y * cos(xb));
-                vec2 uv3 = worldXZ * 0.42 + windVec3 * time * (0.005 + wSpdNorm * 0.004);
+                vec2 uv3 = worldXZ * 0.42 + detailOff3U;
                 // v163: 各UVで一度ハイトマップ(normalMapのBチャンネル)を読み、視線方向に
                 // ズラしたUVを最終サンプリング座標として使う。オフセット量はテクスチャの
                 // UVスケールに対して相対的に効くよう、各レイヤーのUV空間のスケールに
@@ -1742,9 +1776,10 @@ function createWater() {
                 // 水面メッシュ自体は粗くても、実際の船体形状（hullProfile由来）との
                 // 距離をフラグメント単位（ピクセル単位）で評価するため、輪郭はガタつかない。
                 float hullEdgeFoam = 0.0;
-                if (wlPtCount >= 3 && distance(vWorldPos.xz, hullBoundCenter) < hullBoundRadius) {
-                    float dEdge = distToHullEdge(vWorldPos.xz, wlPtCount);
-                    hullEdgeFoam = 1.0 - smoothstep(0.0, 1.1, dEdge);
+                if (hullEdgeD < 1.0e5) {
+                    // v165: 帯の幅は船体サイズ追従(hullFoamWidth)。edgeWetで、
+                    // 今まさに離水している区間の泡だけを滑らかに消す。
+                    hullEdgeFoam = (1.0 - smoothstep(0.0, hullFoamWidth, hullEdgeD)) * hullEdgeWet;
                 }
 
                 float baseFoam = vColor.r;
@@ -1771,6 +1806,34 @@ function createWater() {
 
                 float depth = vColor.g;
                 vec3 waterBase = mix(deepColor, shallowColor, depth);
+                // ── とても浅い所（8m 未満）だけ、水の色が少し明るい砂色寄りになる ──
+                // 以前は深さ 200m まで海底の絵（砂・岩・海草のまだら）が透けて見えていたが、透けすぎで模様も
+                // 不自然だったので、模様は使わず深さだけで、ごく薄く色を変える。
+                float shoalFoam = 0.0;
+                if (seabedRect.w > 0.5) {
+                    vec2 suv = (vWorldPos.xz - seabedRect.xy) / seabedRect.z;
+                    if (suv.x > 0.001 && suv.y > 0.001 && suv.x < 0.999 && suv.y < 0.999) {
+                        float sd = texture2D(seabedTex, suv).a * 200.0;
+                        float vis = pow(clamp(1.0 - sd / 8.0, 0.0, 1.0), 2.0) * 0.22;
+                        vis *= smoothstep(0.0, 0.18, min(min(suv.x, suv.y), min(1.0 - suv.x, 1.0 - suv.y)));
+                        vis *= smoothstep(0.0, 0.15, min(min(vUv.x, vUv.y), min(1.0 - vUv.x, 1.0 - vUv.y)));
+                        float lum = dot(shallowColor, vec3(0.3, 0.5, 0.2));
+                        waterBase = mix(waterBase, vec3(0.62, 0.60, 0.48) * lum * 3.0, vis);
+                        // 浅瀬・岩礁・波打ち際（深さ 6m より浅い所）は、波が砕けて白く泡立つ。
+                        // 波の山（vColor.g）が来ると強く、谷でも少し泡が残る。まだらに粒立たせる
+                        if (shoalFoamK > 0.001) {
+                            // （浅い所一帯が真っ白にならないよう、ごく浅い帯だけ・波の山のときだけ、薄くまだらに）
+                            float shoal = 1.0 - smoothstep(0.3, 2.5, sd);
+                            if (shoal > 0.0) {
+                                float crestS = smoothstep(0.55, 0.9, vColor.g);
+                                float blot = hash21(floor(vWorldPos.xz * 0.45)) * 0.45 + hash21(floor(vWorldPos.xz * 1.7 + vec2(3.0, 9.0))) * 0.35 + hash21(floor(vWorldPos.xz * 6.0)) * 0.2;
+                                float sf = shoal * shoalFoamK * 0.45 * crestS * crestS * smoothstep(0.5, 0.75, blot + 0.2 * crestS);
+                                shoalFoam = max(shoalFoam, sf * smoothstep(0.0, 0.15, min(min(vUv.x, vUv.y), min(1.0 - vUv.x, 1.0 - vUv.y))));
+                            }
+                        }
+                    }
+                }
+                foam = max(foam, clamp(shoalFoam, 0.0, 0.9));
                 // v162: 「凹凸の深さ高さが出てる感じがしない」への対応その2。
                 // specular(下)は太陽の映り込みが鋭い点として光る成分で、凹凸の
                 // "形"そのものを陰影として見せる役割はscatterが担っている
@@ -1793,7 +1856,7 @@ function createWater() {
                 float fresnel = pow(1.0 - max(0.0, dot(n, viewDir)), 4.0);
                 // v120: deepColor/shallowColorをv45の色合いに戻したのに合わせて、
                 // 際(フレネル)の空色もv45の値に戻す。
-                vec3 skyRefl = vec3(0.30, 0.52, 0.82);
+                vec3 skyRefl = skyReflColor;
                 waterBase = mix(waterBase, skyRefl, fresnel * 0.38);
 
                 // ── 船明かりの鏡面反射 ──
@@ -1845,6 +1908,26 @@ function createWater() {
 
                 vec3 finalColor = mix(waterBase + specular + shipRefl, foamColor, foam);
                 finalColor      = mix(finalColor, reflColor, reflMix);
+                // 波の水面の端（±1.8km の四角）の 400m ほどは、その外の遠くの水面（44-world-terrain.js）と同じ色の式へ
+                // 少しずつ寄せる。細かい波模様の水面と平らな水面の境目が、四角い線になって見えないように。
+                {
+                    float edgeUv = min(min(vUv.x, vUv.y), min(1.0 - vUv.x, 1.0 - vUv.y));
+                    float toFar = 1.0 - smoothstep(0.0, 0.11, edgeUv);
+                    if (toFar > 0.0) {
+                        vec3 nf = vec3(0.0, 1.0, 0.0);
+                        float frF = pow(1.0 - max(0.0, dot(nf, viewDir)), 4.0);
+                        vec3 farCol = mix(mix(deepColor, shallowColor, 0.6), skyReflColor, 0.12 + frF * 0.5);
+                        farCol += sunColor * pow(max(0.0, dot(nf, normalize(sunDir + viewDir))), 60.0) * 0.6;
+                        finalColor = mix(finalColor, farCol, toFar);
+                    }
+                }
+                // 霧：船や空と同じ FogExp2 の式。以前は水面だけ霧を受けず、霧の中でも
+                // 海だけ水平線までくっきり見えていた。
+                {
+                    float fd = length(vWorldPos - cameraPosition) * waterFogDensity;
+                    float fogF = 1.0 - exp(-fd * fd);
+                    finalColor = mix(finalColor, waterFogColor, clamp(fogF, 0.0, 1.0));
+                }
                 gl_FragColor = vec4(finalColor, 1.0);
                 // v83: このシェーダーは完全自前のためThree.jsの標準チャンクを何も
                 // includeしていない。船体(MeshStandardMaterial)は自動でトーン
@@ -1897,6 +1980,13 @@ function loadEmbeddedOBJ() {
         const fallbackGroup = new THREE.Group();
         createTitanicModel(fallbackGroup);
         setCustomModel(fallbackGroup);
+        window.currentModelSource = null;
+    }
+    // 同梱モデル（アプリと一緒に置いてある ship_model.*）は保存領域へ複製せず、
+    // 「同梱モデル」という参照だけを船の設定に残す（27-model-store.js）。
+    // 同梱モデルを差し替えたとき、古い複製のほうが優先されてしまわないように。
+    function markEmbedded(c, buf) {
+        window.currentModelSource = { id: null, name: c.name, type: c.type, size: buf.byteLength, embedded: true };
     }
 
     function tryNext(index) {
@@ -1917,6 +2007,7 @@ function loadEmbeddedOBJ() {
                         modelOffset.ry = -90.0; syncModelOffsetUI();
                         applyGltfEmissiveStrengthExt(gltf.scene, gltf.parser && gltf.parser.json);
                         setCustomModel(gltf.scene);
+                        markEmbedded(c, buf);
                         statusText.innerText = 'Loaded: ' + c.name;
                     }, function(err) { tryNext(index + 1); });
                 } else {
@@ -1926,13 +2017,22 @@ function loadEmbeddedOBJ() {
                     if (!modelHasMesh(obj)) { tryNext(index + 1); return; }
                     modelOffset.ry = -90.0; syncModelOffsetUI();
                     setCustomModel(obj);
+                    markEmbedded(c, buf);
                     statusText.innerText = 'Loaded: ' + c.name;
                 }
             })
             .catch(function() { tryNext(index + 1); });
     }
 
-    tryNext(0);
+    // 前回使っていたモデルが保存されていれば、それを優先して読み込む
+    // （27-model-store.js）。無ければ従来どおり同梱モデルを探す。
+    if (typeof restoreAutosavedModel === 'function') {
+        restoreAutosavedModel()
+            .then((ok) => { if (!ok) tryNext(0); })
+            .catch(() => tryNext(0));
+    } else {
+        tryNext(0);
+    }
 }
 
 // 回転ギズモを X/Y/Z の単軸回転のみに制限する。

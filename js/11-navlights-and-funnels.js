@@ -11,8 +11,19 @@ const NAV_LIGHT_REGS = {
     sideArcMax: 112.5,
     sideArcMin: 90,
     mastHalfArc: 90,         // capped by SpotLight engine limit (true reg ~112.5)
-    sternHalfArc: 67.5       // true reg: 135 deg total, centered dead astern
+    sternHalfArc: 67.5,      // true reg: 135 deg total, centered dead astern
+    mastArc: 225,            // マスト灯の見える範囲：真正面から両舷正横後 22.5° まで
+    cutoff: 2                // 範囲の外 1〜3° で見えなくなる（附属書 I）
 };
+// 見る人から見て、灯が見える割合（範囲の中は 1、外 cutoff 度で 0）
+function navLightArcVis(arc, dx, dz) {
+    if (!arc || arc.half >= 180) return 1;
+    const l = Math.hypot(dx, dz);
+    if (l < 1e-6) return 1;
+    const c = Math.max(-1, Math.min(1, (dx * arc.x + dz * arc.z) / l));
+    const off = Math.acos(c) * 180 / Math.PI - arc.half;
+    return off <= 0 ? 1 : Math.max(0, 1 - off / NAV_LIGHT_REGS.cutoff);
+}
 
 // Direction (unit vector, XZ-plane) for a sidelight's visibility cone bisector.
 // Bow = +Z. signX = +1 for the light mounted on the +X side, -1 for -X side.
@@ -39,7 +50,13 @@ function makeNavLightObj(color, intensity, angle, sphereRadius) {
     g.userData.spot = spot;
     g.userData.glow = glow;
     g.userData.sphere = sphere;
+    g.userData.baseColor = color.clone();
     return g;
+}
+// 灯の見える範囲（海上衝突予防法）：dir は範囲の真ん中の向き（船の中の XZ：船首が +Z）、half はその左右の角度[度]
+function setNavLightArc(lg, dx, dz, half) {
+    const l = Math.hypot(dx, dz) || 1;
+    lg.userData.arc = { x: dx / l, z: dz / l, half };
 }
 
 function updateNavLights3D() {
@@ -77,6 +94,7 @@ function updateNavLights3D() {
     {
         const dir = sideLightDir(1, sideHalfArcRad);
         port.userData.spot.target.position.set(sideX + dir.x * 3, sideY, sideZ + dir.z * 3);
+        setNavLightArc(port, dir.x, dir.z, sideHalfArcDeg);     // 真正面から左舷正横後 22.5° まで
     }
     shipGroup.add(port); navLightMeshes.port = port;
 
@@ -85,38 +103,55 @@ function updateNavLights3D() {
     {
         const dir = sideLightDir(-1, sideHalfArcRad);
         stbd.userData.spot.target.position.set(-sideX + dir.x * 3, sideY, sideZ + dir.z * 3);
+        setNavLightArc(stbd, dir.x, dir.z, sideHalfArcDeg);     // 真正面から右舷正横後 22.5° まで
     }
     shipGroup.add(stbd); navLightMeshes.stbd = stbd;
 
     const fore = makeNavLightObj(NAV_COLORS.mast, mastI, NAV_LIGHT_REGS.mastHalfArc, sphereR);
     fore.position.set(spVal('mast-fore-x'), spVal('mast-fore-y'), spVal('mast-fore-z'));
     fore.userData.spot.target.position.set(spVal('mast-fore-x'), spVal('mast-fore-y') - 3, spVal('mast-fore-z') + 10);
+    setNavLightArc(fore, 0, 1, NAV_LIGHT_REGS.mastArc / 2);       // 真正面から両舷正横後 22.5° まで（225°）
     shipGroup.add(fore); navLightMeshes.mastFore = fore;
 
     const aft = makeNavLightObj(NAV_COLORS.mast, mastI * 0.7, NAV_LIGHT_REGS.mastHalfArc, sphereR);
     aft.position.set(spVal('mast-aft-x'), spVal('mast-aft-y'), spVal('mast-aft-z'));
     aft.userData.spot.target.position.set(spVal('mast-aft-x'), spVal('mast-aft-y') - 3, spVal('mast-aft-z') + 10);
+    setNavLightArc(aft, 0, 1, NAV_LIGHT_REGS.mastArc / 2);
     shipGroup.add(aft); navLightMeshes.mastAft = aft;
 
     const stern = makeNavLightObj(NAV_COLORS.stern, 1.0, NAV_LIGHT_REGS.sternHalfArc, sphereR);
     stern.position.set(spVal('sternlight-x'), spVal('sternlight-y'), spVal('sternlight-z'));
     stern.userData.spot.target.position.set(spVal('sternlight-x'), spVal('sternlight-y') - 1, spVal('sternlight-z') - 5);
+    setNavLightArc(stern, 0, -1, NAV_LIGHT_REGS.sternHalfArc);   // 真後ろを中心に 135°
     shipGroup.add(stern); navLightMeshes.stern = stern;
 }
 
+const _nlCam = new THREE.Vector3();
 function updateNavLightsVisibility() {
     const isNight = physics.dayProgress > 0.78 || physics.dayProgress < 0.22;
+    // カメラの位置（船の中の座標）：灯ごとに、法規の範囲の中から見ているか
+    let camOK = false;
+    if (isNight && navLightsEnabled && typeof camera !== 'undefined' && camera && shipGroup) {
+        shipGroup.updateMatrixWorld();
+        _nlCam.copy(camera.position); shipGroup.worldToLocal(_nlCam);
+        camOK = Number.isFinite(_nlCam.x);
+    }
     Object.values(navLightMeshes).forEach(lg => {
         if (!lg) return;
         lg.visible = navLightsEnabled;
         if (lg.userData.spot) lg.userData.spot.visible = navLightsEnabled && isNight;
+        // 範囲の外からは、灯のレンズは点いていない（暗い）ように見える
+        const f = camOK ? navLightArcVis(lg.userData.arc, _nlCam.x - lg.position.x, _nlCam.z - lg.position.z) : 1;
         if (lg.userData.sphere) {
+            const m = lg.userData.sphere.material;
             lg.userData.sphere.visible = true;
-            lg.userData.sphere.material.opacity = isNight ? 1.0 : 0.25;
-            lg.userData.sphere.material.transparent = !isNight;
+            m.opacity = isNight ? 1.0 : 0.25;
+            m.transparent = !isNight;
+            if (lg.userData.baseColor) m.color.copy(lg.userData.baseColor).multiplyScalar(isNight ? 0.08 + 0.92 * f : 1);
         }
         if (lg.userData.glow) {
-            lg.userData.glow.visible = navLightsEnabled && isNight;
+            lg.userData.glow.visible = navLightsEnabled && isNight && f > 0.01;
+            lg.userData.glow.material.opacity = 0.35 * f;
         }
     });
 }
@@ -132,9 +167,26 @@ function removeFunnel(i) {
     renderFunnelList();
     buildFunnelMeshes();
 }
+// 煙突照明の付け根・傾きを数値で変える（左右対称）
+function setFunnelUplightParam(i, key, v) {
+    const f = funnels[i]; if (!f) return;
+    const P = funnelUplightParams(f);
+    const n = parseFloat(v);
+    if (!Number.isFinite(n)) return;
+    P[key] = key === 'side' ? Math.max(0, n) : n;
+    delete f.upRotL; delete f.upRotR;
+    refreshFunnelUplight(i, null);
+}
+// ギズモで動かしたとき、数値欄も合わせる
+function syncFunnelUplightInputs(i) {
+    const P = funnelUplightParams(funnels[i]);
+    ['side', 'h', 'fz', 'tiltIn', 'tiltFore'].forEach(k => { const el = $(`funnel-up-${k}-${i}`); if (el && document.activeElement !== el) el.value = P[k]; });
+}
+window.setFunnelUplightParam = setFunnelUplightParam;
+window.syncFunnelUplightInputs = syncFunnelUplightInputs;
 function copyFunnel(i) {
     const src = funnels[i];
-    funnels.push({ x: src.x, y: src.y, z: src.z, rx: src.rx, ry: src.ry });
+    funnels.push({ x: src.x, y: src.y, z: src.z, rx: src.rx, ry: src.ry, up: src.up ? Object.assign({}, src.up) : undefined });
     renderFunnelList();
     buildFunnelMeshes();
 }
@@ -144,6 +196,7 @@ function renderFunnelList() {
     const sym = $('funnel-symmetry') && $('funnel-symmetry').checked;
     list.innerHTML = '';
     funnels.forEach((f, i) => {
+        const up = funnelUplightParams(f);
         const card = document.createElement('div');
         card.className = 'sp-item-card';
         card.innerHTML = `
@@ -151,8 +204,6 @@ function renderFunnelList() {
                 <span class="sp-item-title">
                     <span class="smoke-preview" style="animation-delay:${i*0.4}s"></span>煙突 #${i+1}${sym && f.x !== 0 ? ' (対称)' : ''}
                     <button class="sp-gizmo-btn" id="gizmo-funnel-${i}" onclick="toggleGizmo('funnel', ${i})">📍 ギズモ</button>
-                    <button class="sp-gizmo-btn" id="gizmo-funnel-uplight-${i}_L" onclick="toggleGizmo('funnel_uplight','${i}_L','rotate')">💡L 角度</button>
-                    <button class="sp-gizmo-btn" id="gizmo-funnel-uplight-${i}_R" onclick="toggleGizmo('funnel_uplight','${i}_R','rotate')">💡R 角度</button>
                     <button class="sp-gizmo-btn" onclick="copyFunnel(${i})">⧉ コピー</button>
                 </span>
                 <button class="sp-remove-btn" onclick="removeFunnel(${i})">✕</button>
@@ -175,6 +226,23 @@ function renderFunnelList() {
                 <span class="sp-label" style="min-width:0;">高さ:</span>
                 <input type="number" class="sp-num-input" value="${f.ry}" step="0.1" min="0.2" max="6"
                     oninput="funnels[${i}].ry=parseFloat(this.value)||1.2;buildFunnelMeshes();">
+            </div>
+            <div style="font-size:10px;color:#ffcc66;margin-top:6px;">💡 煙突照明（付け根は煙突の中心に対して左右対称）</div>
+            <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+                <span class="sp-label" style="min-width:0;">左右の間隔:</span>
+                <input type="number" id="funnel-up-side-${i}" class="sp-num-input" value="${up.side}" step="0.05" min="0" oninput="setFunnelUplightParam(${i},'side',this.value)">
+                <span class="sp-label" style="min-width:0;">高さ:</span>
+                <input type="number" id="funnel-up-h-${i}" class="sp-num-input" value="${up.h}" step="0.05" oninput="setFunnelUplightParam(${i},'h',this.value)">
+                <span class="sp-label" style="min-width:0;">前後:</span>
+                <input type="number" id="funnel-up-fz-${i}" class="sp-num-input" value="${up.fz}" step="0.05" oninput="setFunnelUplightParam(${i},'fz',this.value)">
+            </div>
+            <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+                <span class="sp-label" style="min-width:0;">傾き 内向き°:</span>
+                <input type="number" id="funnel-up-tiltIn-${i}" class="sp-num-input" value="${up.tiltIn}" step="1" min="-90" max="90" oninput="setFunnelUplightParam(${i},'tiltIn',this.value)">
+                <span class="sp-label" style="min-width:0;">前後°:</span>
+                <input type="number" id="funnel-up-tiltFore-${i}" class="sp-num-input" value="${up.tiltFore}" step="1" min="-90" max="90" oninput="setFunnelUplightParam(${i},'tiltFore',this.value)">
+                <button class="sp-gizmo-btn" id="gizmo-funnel-uplight-${i}_L-translate" onclick="toggleGizmo('funnel_uplight','${i}_L','translate')">💡 移動</button>
+                <button class="sp-gizmo-btn" id="gizmo-funnel-uplight-${i}_L-rotate" onclick="toggleGizmo('funnel_uplight','${i}_L','rotate')">💡 傾き</button>
             </div>`;
         list.appendChild(card);
     });
@@ -241,7 +309,7 @@ function buildFunnelMeshes() {
         const side = String(oldIndex).split('_')[1];
         const target = entry ? (side === 'L' ? entry.markerL : entry.markerR) : null;
         if (target) {
-            transformControl.setMode('rotate');
+            transformControl.setMode(currentGizmoMode || 'rotate');
             transformControl.attach(target);
             currentGizmoTarget = target;
         } else {

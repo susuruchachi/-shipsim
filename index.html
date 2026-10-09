@@ -2,29 +2,30 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" id="meta-viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#0a1a2a">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
     <title>3D Relaxing Ship Simulator v2.15</title>
     <link rel="stylesheet" href="css/style.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/MTLLoader.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/lights/RectAreaLightUniformsLib.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/helpers/RectAreaLightHelper.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/MTLLoader.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/lights/RectAreaLightUniformsLib.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/helpers/RectAreaLightHelper.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js" crossorigin="anonymous"></script>
 </head>
 <body>
 
@@ -35,18 +36,45 @@
 <button id="camera-mode-toggle" onclick="cycleCameraMode()">📷 視点: 通常</button>
 <button id="viewpoint-toggle" onclick="toggleViewpointMenu()">🔭 見張り台</button>
 <button id="screenshot-toggle" onclick="captureScreenshot()">📷 スクショ</button>
+<button id="worldmap-toggle" onclick="toggleWorldMap()">🗺 地図</button>
 <div id="viewpoint-menu"></div>
 
-<div id="ui-container">
-    <div style="font-weight: bold; border-bottom: 1px solid #ffffff; padding-bottom: 4px; margin-bottom: 10px; text-align: center; font-size: 14px; color: #00ffcc;">=== TELEMETRY ===</div>
-    <div id="ui-telegraph">Telegraph: STOP</div>
-    <div id="ui-speed">Speed    : 0.0 kn</div>
-    <div id="ui-rudder">Rudder   : 0.0°</div>
-    <div id="ui-heading">Heading  : 0°</div>
-    <div id="ui-time">Time     : 12:00</div>
-    <div id="ui-roll" style="color: #aaddff;">Roll     : 0.0°</div>
-    <div id="ui-pitch" style="color: #aaddff;">Pitch    : 0.0°</div>
+<!-- 船の状態（右上に常に表示。見出しを押すとたためる） -->
+<div id="telemetry-panel">
+    <div id="telemetry-head" onclick="toggleTelemetry()">TELEMETRY <span id="telemetry-fold">▾</span></div>
+    <div id="telemetry-body">
+        <div id="ui-telegraph">Telegraph: STOP</div>
+        <div id="ui-engine">Screw    : STOP</div>
+        <div id="ui-speed">Speed    : 0.0 kn</div>
+        <div id="ui-rudder">Rudder   : 0.0°</div>
+        <div id="ui-heading">Heading  : 0°</div>
+        <div id="ui-time">Time     : 12:00</div>
+        <div id="ui-roll" style="color: #aaddff;">Roll     : 0.0°</div>
+        <div id="ui-pitch" style="color: #aaddff;">Pitch    : 0.0°</div>
+        <div class="telemetry-sep"></div>
+        <div id="ui-weather" style="color:#ffe9a8;">Weather  : —</div>
+        <div id="ui-wind" style="color:#ffe9a8;">Wind     : —</div>
+        <div id="ui-pos" style="color:#c9f0ff;">Position : —</div>
+        <div id="ui-port" style="color:#c9f0ff;display:none;">Port     : —</div>
+    </div>
+</div>
 
+<div id="ui-container">
+    <!-- 無敵モード（64-damage.js）：座礁・衝突で船体が傷つかない（自分の船・他の船とも） -->
+    <div class="interactive-ui" style="margin-bottom:10px;">
+        <button type="button" id="invincible-btn" onclick="invincibleToggle()" aria-pressed="false" style="width:100%;padding:8px;background:rgba(255,255,255,0.15);color:#ffffff;border:1px solid #ffcc33;border-radius:4px;font-weight:bold;cursor:pointer;">🛡 無敵モード：OFF</button>
+        <div style="font-size:10px;color:#9fb8c8;margin-top:4px;line-height:1.4;">座礁・衝突で船体が傷つきません（自分の船・他の船とも）。魚雷・砲弾は当たります</div>
+    </div>
+    <!-- アプリとしてインストール（31-pwa-install.js。インストールできるときだけ表示） -->
+    <div id="pwa-install-box" style="display:none;margin-bottom:10px;">
+        <button id="pwa-install-btn" type="button" style="width:100%;padding:8px;background:#00ffcc;color:#0a1932;border:none;border-radius:4px;font-weight:bold;cursor:pointer;">📲 アプリとしてインストール</button>
+        <div id="pwa-install-note" style="font-size:10px;color:#9fb8c8;margin-top:4px;line-height:1.4;"></div>
+    </div>
+    <!-- Android アプリ（APK）。Android のブラウザで開いたときだけ表示（31-pwa-install.js） -->
+    <div id="apk-download-box" style="display:none;margin-bottom:10px;">
+        <a id="apk-download-link" href="shipsim-android.apk" download="ShipSim.apk" style="display:block;box-sizing:border-box;width:100%;padding:8px;background:#7ee39a;color:#0a1932;border-radius:4px;font-weight:bold;text-align:center;text-decoration:none;">🤖 Androidアプリ（APK）をダウンロード</a>
+        <div style="font-size:10px;color:#9fb8c8;margin-top:4px;line-height:1.4;">全画面で、遊んでいる間は画面が消えません。端末の「ゲーム」として扱われます（ゲームエンハンサー等）。中身はこのページと同じで、自動で最新になります。入れるときに「提供元不明のアプリ」の許可が必要です。</div>
+    </div>
     <div class="section-title">ENVIRONMENT & TIME</div>
     
     <div class="interactive-ui">
@@ -65,11 +93,12 @@
     <div class="interactive-ui" style="margin-bottom:8px;">
         <div class="param-row" style="margin-bottom:4px;">
             <label style="color:#ffcc44; font-weight:bold; font-size:11px;">Time Speed (時間速度):</label>
-            <span id="time-speed-label" style="color:#ffcc44; font-size:11px; min-width:40px; text-align:right;">×96</span>
+            <span id="time-speed-label" style="color:#ffcc44; font-size:11px; min-width:40px; text-align:right;">×1 等速</span>
         </div>
-        <input type="range" id="time-speed-slider" min="0" max="4" step="1" value="2" class="param-slider" style="accent-color:#ffcc44;">
+        <input type="range" id="time-speed-slider" min="0" max="6" step="1" value="0" class="param-slider" style="accent-color:#ffcc44;">
+        <div style="font-size:10px; color:#888; margin-top:3px;">時刻も、船の動き（加速・旋回・揺れ）・他の船・浸水も、すべてこの速さで進みます</div>
         <div style="display:flex; gap:4px; margin-top:4px;">
-            <button type="button" id="time-freeze-btn" class="adjust-btn" style="width:100%; font-size:10px; padding:3px 0;">⏸ 固定</button>
+            <button type="button" id="time-freeze-btn" class="adjust-btn" style="width:100%; font-size:10px; padding:3px 0;">⏸ 時刻を固定</button>
         </div>
     </div>
 
@@ -83,6 +112,11 @@
             </div>
         </div>
         <input type="range" id="phase-slider" min="0.0" max="1.0" step="0.05" value="0.5" class="param-slider" style="accent-color: #aaddff;">
+        <div class="param-row" style="margin-top:6px;">
+            <label style="color:#aaddff; font-weight:bold;">Date (日付):</label>
+            <input type="date" id="date-input" min="1800-01-01" style="background:#0a1932;color:#aaddff;border:1px solid #446688;border-radius:4px;padding:2px 6px;font-family:inherit;font-size:12px;">
+        </div>
+        <div id="moon-age" style="font-size:11px;color:#8fb8d8;text-align:right;"></div>
     </div>
 
     <div class="section-title">NAVIGATION LIGHTS</div>
@@ -150,6 +184,37 @@
         <input type="range" id="draft-slider" min="-4.0" max="4.0" step="0.05" value="0.00" class="param-slider" style="accent-color: #ffaa66;">
     </div>
 
+    <div class="interactive-ui" id="weather-panel">
+        <div class="param-row">
+            <label style="color:#9fd8ff; font-weight:bold;">🌦 天候</label>
+            <span id="weather-readout" style="font-family:monospace;font-size:11px;color:#8fb8d8;"></span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0;">
+            <label style="font-size:11.5px;color:#cfe3f2;display:flex;align-items:center;gap:4px;cursor:pointer;">
+                <input type="checkbox" id="weather-enabled" checked style="width:auto;margin:0;">天候で風・波を制御
+            </label>
+            <label style="font-size:11.5px;color:#cfe3f2;display:flex;align-items:center;gap:4px;cursor:pointer;">
+                <input type="checkbox" id="weather-auto" checked style="width:auto;margin:0;">自動で移り変わる
+            </label>
+        </div>
+        <div id="weather-presets" style="display:flex;gap:4px;flex-wrap:wrap;"></div>
+        <!-- 手動で細かく決める（動かすと「カスタム」になり、自動変化は止まる） -->
+        <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;font-size:11px;color:#cfe3f2;">
+            <div style="display:flex;justify-content:space-between;"><span>風力</span><span id="weather-bf-val" style="font-family:monospace;color:#8fb8d8;"></span></div>
+            <input type="range" id="weather-bf" min="0" max="12" step="0.5" value="5" class="param-slider" style="accent-color:#7fc4ff;">
+            <div style="display:flex;justify-content:space-between;"><span>雲量</span><span id="weather-cloud-val" style="font-family:monospace;color:#8fb8d8;"></span></div>
+            <input type="range" id="weather-cloud" min="0" max="100" step="1" value="45" class="param-slider" style="accent-color:#b8c7d4;">
+            <div style="display:flex;justify-content:space-between;"><span>雨</span><span id="weather-rain-val" style="font-family:monospace;color:#8fb8d8;"></span></div>
+            <input type="range" id="weather-rain" min="0" max="100" step="1" value="0" class="param-slider" style="accent-color:#7fa8d8;">
+            <div style="display:flex;justify-content:space-between;"><span>霧</span><span id="weather-fog-val" style="font-family:monospace;color:#8fb8d8;"></span></div>
+            <input type="range" id="weather-fog" min="0" max="100" step="1" value="0" class="param-slider" style="accent-color:#c8d2da;">
+            <div style="display:flex;justify-content:space-between;"><span>風向</span><span id="weather-dir-val" style="font-family:monospace;color:#8fb8d8;"></span></div>
+            <input type="range" id="weather-dir" min="0" max="355" step="5" value="45" class="param-slider" style="accent-color:#aaddff;">
+            <button type="button" id="weather-apply-now" class="adjust-btn" style="margin-top:4px;width:100%;height:auto;font-size:11px;font-weight:normal;padding:5px 6px;">⚡ すぐ反映（うねりも含めて一気に切り替え）</button>
+            <button type="button" id="aurora-btn" class="adjust-btn" onclick="auroraToggle()" style="margin-top:4px;width:100%;height:auto;font-size:11px;font-weight:normal;padding:5px 6px;">🌌 オーロラを出す（夜に見えます）</button>
+        </div>
+    </div>
+
     <div class="interactive-ui">
         <div class="param-row">
             <label style="color:#ffcc00; font-weight:bold;">Wave Height (波高):</label>
@@ -210,19 +275,6 @@
         <input type="range" id="turnrad-slider" min="1.0" max="30.0" step="0.5" value="5.0" class="param-slider" style="accent-color: #00ffcc;">
     </div>
 
-    <div class="interactive-ui">
-        <div class="param-row">
-            <label style="color:#ff9933; font-weight:bold;">⏩ Sim Speed (物理早送り倍率):</label>
-            <div class="param-inputs">
-                <button type="button" class="adjust-btn" id="physspeed-dec">-</button>
-                <input type="number" id="physspeed-num" min="1.0" max="20.0" step="0.5" value="1.0" class="param-num-input" style="color:#ff9933;">
-                <button type="button" class="adjust-btn" id="physspeed-inc">+</button>
-            </div>
-        </div>
-        <input type="range" id="physspeed-slider" min="1.0" max="20.0" step="0.5" value="1.0" class="param-slider" style="accent-color: #ff9933;">
-        <div style="font-size:10px; color:#888; margin-top:3px;">加速・慣性・旋回の時間軸を早める（質量感はそのまま）</div>
-    </div>
-
     <div class="section-title">3D MODEL IMPORT</div>
     <div class="interactive-ui" style="margin-bottom: 10px;">
         <input type="file" id="model-loader" accept=".gltf,.glb,.obj,.mtl" style="display: none;">
@@ -248,21 +300,29 @@
 <div class="control-btn" id="btn-slower">▼</div>
 <div class="control-btn" id="btn-left">◀</div>
 <div class="control-btn" id="btn-right">▶</div>
+<canvas id="telegraph-widget" class="bridge-widget" aria-label="テレグラフ"></canvas>
+<canvas id="wheel-widget" class="bridge-widget" aria-label="舵輪"></canvas>
+<div class="control-btn" id="btn-horn" title="汽笛（押している間・Hキー）">📯</div>
 
 <div id="settings-panel">
   <div id="settings-header">
-    <h1>⚙ 船体設定パネル</h1>
+    <h1>⚙ 船体設定パネル <span id="app-version" style="font-size:10px;color:#789;font-weight:normal;"></span></h1>
     <button id="settings-close" onclick="toggleSettings()">✕ 閉じる</button>
   </div>
   <div id="settings-tabs">
     <button class="settings-tab active" data-tab="pivot" onclick="switchTab('pivot')">📐 基本/Pivot</button>
-    <button class="settings-tab" data-tab="propulsion" onclick="switchTab('propulsion')">⚙ 推進器</button>
+    <button class="settings-tab" data-tab="propulsion" onclick="switchTab('propulsion');renderEngineSettings();renderManeuverSettings()">⚙ 推進器</button>
     <button class="settings-tab" data-tab="rudder" onclick="switchTab('rudder')">🔧 舵</button>
     <button class="settings-tab" data-tab="navlights" onclick="switchTab('navlights')">💡 航行灯</button>
     <button class="settings-tab" data-tab="lighting" onclick="switchTab('lighting')">☀ 照明</button>
     <button class="settings-tab" data-tab="funnels" onclick="switchTab('funnels')">🏭 煙突</button>
     <button class="settings-tab" data-tab="decklight" onclick="switchTab('decklight')">🔆 甲板照明</button>
     <button class="settings-tab" data-tab="viewpoint" onclick="switchTab('viewpoint')">🔭 視点</button>
+    <button class="settings-tab" data-tab="sound" onclick="switchTab('sound');renderSoundPanel()">🔊 音</button>
+    <button class="settings-tab" data-tab="bridge" onclick="switchTab('bridge');renderBridgePanel()">🎛 操舵・テレグラフ</button>
+    <button class="settings-tab" data-tab="mooring" onclick="switchTab('mooring');renderMooringPanel()">⚓ 係船</button>
+    <button class="settings-tab" data-tab="bulkheads" onclick="switchTab('bulkheads');renderWTPanel()">🧱 水密区画</button>
+    <button class="settings-tab" data-tab="submarine" onclick="switchTab('submarine');renderSubSettings()">🚢 船種</button>
     <button class="settings-tab" data-tab="save" onclick="switchTab('save')">💾 保存</button>
     <button class="settings-tab" data-tab="perf" onclick="switchTab('perf')">⚡ 軽量化</button>
   </div>
@@ -302,6 +362,11 @@
             <button class="sp-btn" id="sternfull-inc">+</button>
             <input type="range" id="sternfull-slider" class="sp-slider" style="accent-color:#ff99cc;" min="0.3" max="2.0" step="0.05" value="1.00">
         </div>
+        <div class="sp-row"><span class="sp-label accent" style="color:#7fe0a0;">喫水 (Draft) m</span>
+            <input type="number" id="shipdraft-num" class="sp-num-input" style="color:#7fe0a0;" min="0" max="40" step="0.1" value="0" oninput="setShipDraft(this.value)">
+            <span id="draft-auto" style="font-size:10px;color:#888;margin-left:6px;">0 ＝ 模型から自動</span>
+        </div>
+        <div style="font-size:10px;color:#888;margin:2px 0 0;">座礁の判定に使う、いちばん深い所（キール）の喫水です。船首・船尾は船体の形に合わせて浅くなります。0 のときは模型の形から自動で決めます。船ごとに保存されます。操作パネルの「Draft (吃水深)」レバーで船を沈めた・浮かせた分は、この値に足して座礁・水深の余裕・自動航行・離着岸の判定に使います。</div>
       </div>
 
       <div class="sp-section">
@@ -415,16 +480,22 @@
       <div class="sp-section">
         <div class="sp-section-title">推進器リスト</div>
         <div class="sp-propulsion-list" id="prop-list"></div>
-        <button class="sp-add-btn" onclick="addPropulsor()">＋ 追加</button>
+        <div class="sp-row" style="gap:4px;flex-wrap:wrap">
+          <button class="sp-add-btn" onclick="addPropulsor()">＋ 追加</button>
+          <button class="sp-add-btn" onclick="maneuverAddThruster(0.86);var e=document.getElementById('mnv-settings');if(e)e.scrollIntoView({block:'start'})" title="船首を横へ押すトンネルの中のスクリュー（設定は下の「サイドスラスター」で）">＋ バウスラスター</button>
+        </div>
       </div>
       <div class="sp-section">
-        <div class="sp-section-title">モデル内パーツ (スクリュー・外輪)</div>
+        <div class="sp-section-title">モデル内パーツ (スクリュー・外輪・バウスラスター)</div>
         <div style="font-size:10px;color:#888;margin-bottom:6px;">
-          読み込んだモデルの中から、名前に "Screw"・"Paddle" などを含むパーツを検出し、個別に回転軸・回転方向を設定できます。<br>
+          読み込んだモデルの中から、名前に "Screw"・"Paddle"・"Thruster"（スラスター）などを含むパーツを検出し、個別に回転軸・回転方向を設定できます。<br>
+          見分け方が違うときは「種類」でスクリュー・外輪・バウスラスターを切り替え、使わない部品は「機能停止」にしてください。<br>
           船速に応じて自動でアニメーションします。逆方向に動く場合は「反転」ボタンを押してください。
         </div>
         <div class="sp-funnel-list" id="glb-propulsion-parts-list"></div>
       </div>
+      <div class="sp-section" id="engine-settings"></div>
+      <div class="sp-section" id="mnv-settings"></div>
     </div>
 
     <div class="settings-page" id="tab-rudder">
@@ -605,6 +676,12 @@
           <span class="sp-label">露出 (Exposure):</span>
           <input type="range" id="light-exposure" class="sp-slider" min="0.3" max="2.5" step="0.05" value="1.1" oninput="updateLightingSettings()">
           <input type="number" id="light-exposure-num" class="sp-num-input" min="0.3" max="2.5" step="0.05" value="1.1" oninput="updateLightingSettings()">
+        </div>
+        <div class="sp-row">
+          <label style="display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer;">
+            <input type="checkbox" id="light-auto-exposure" checked onchange="setAutoExposureEnabled(this.checked)">
+            自動露出（見ている明るさに目が慣れるように、露出をゆっくり合わせる）
+          </label>
         </div>
         <div class="sp-row">
           <span class="sp-label">霧の濃さ:</span>
@@ -791,6 +868,18 @@
           <span class="sp-label" style="min-width:0;">船名:</span>
           <input type="text" id="ship-name-input" placeholder="船名を入力" style="flex:1;background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:6px 8px;font-family:inherit;font-size:12px;">
         </div>
+        <div class="sp-row">
+          <span class="sp-label" style="min-width:0;">会社・組織:</span>
+          <input type="text" id="ship-company" list="ship-company-list" placeholder="例：ホワイト・スター・ライン" oninput="shipInfoChanged()" style="flex:1;min-width:0;background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:6px 8px;font-family:inherit;font-size:12px;">
+          <datalist id="ship-company-list"></datalist>
+        </div>
+        <div class="sp-row" style="gap:6px;">
+          <span class="sp-label" style="min-width:0;">就航:</span>
+          <input type="number" id="ship-year-from" min="1800" max="2100" step="1" placeholder="年" oninput="shipInfoChanged()" style="width:72px;background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:6px 6px;font-family:inherit;font-size:12px;">
+          <span class="sp-label" style="min-width:0;">引退:</span>
+          <input type="number" id="ship-year-to" min="1800" max="2100" step="1" placeholder="年" oninput="shipInfoChanged()" style="width:72px;background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:6px 6px;font-family:inherit;font-size:12px;">
+        </div>
+        <div style="font-size:10px;color:#888;margin:-2px 0 6px;">他の船（🚢）に同じ会社の船があれば、その会社の船として同じ航路・埠頭を回ります。乗っている船の就航〜引退の年と重なる船だけが、他の船として出ます（年が空いている船は、いつでも出ます。引退が空いていれば今も現役）。</div>
         <div class="sp-row" style="gap:8px;">
           <button class="sp-add-btn" style="flex:1;" onclick="saveShipConfig()">💾 この船名で保存</button>
         </div>
@@ -805,6 +894,7 @@
         <div class="sp-section-title">ファイルに保存 / 読み込み (複数デバイス用)</div>
         <div style="font-size:10px;color:#888;margin-bottom:6px;">
           設定をファイル(.json)として書き出し、他のデバイスで読み込むことができます。
+          （.jsonにはモデル本体は入りません。モデルごと移すときは下のZIPを使ってください）
         </div>
         <div class="sp-row" style="gap:8px;">
           <button class="sp-add-btn" style="flex:1;" onclick="exportShipConfigFile()">⬇ ファイルに保存 (.json)</button>
@@ -812,6 +902,23 @@
         </div>
         <input type="file" id="ship-file-input" accept=".json,application/json" style="display:none;" onchange="importShipConfigFile(event)">
         <div id="ship-file-status" style="font-size:10px;color:#888;margin-top:4px;"></div>
+      </div>
+
+      <div class="sp-section">
+        <div class="sp-section-title">まとめて保存 / 読み込み (ZIP)</div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">
+          保存済みの船（一覧で「📦 ZIPに入れる」にチェックした船）を、設定とモデルごと1つのZIPに書き出します。
+          バックアップや、別の端末への引っ越しに使えます。重いモデルが多いときは、船を分けて書き出すと軽くなります。
+        </div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="ship-zip-models" checked> モデルも入れる（外すと設定だけの小さなZIP）</label>
+        </div>
+        <div class="sp-row" style="gap:8px;">
+          <button class="sp-add-btn" id="ship-zip-export-btn" style="flex:1;" onclick="exportAllShipsZip()">📦 ZIPで保存</button>
+          <button class="sp-add-btn" style="flex:1;" onclick="$('ship-zip-input').click()">📂 ZIPから読み込み</button>
+        </div>
+        <input type="file" id="ship-zip-input" accept=".zip,application/zip" style="display:none;" onchange="importShipsZip(event)">
+        <div id="ship-archive-status" style="font-size:10px;color:#888;margin-top:4px;"></div>
       </div>
     </div>
 
@@ -936,7 +1043,239 @@
       </div>
     </div>
 
+    <div class="settings-page" id="tab-mooring">
+      <div class="sp-section">
+        <div class="sp-section-title">⚓ 係船設備（ビット・ボラード・クリート）</div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">
+          もやい綱やタグボートの索を取る金物です。種類を選んで置き、📍ギズモか数字で位置を決めます。「左右対称」なら反対舷にも同じものが付きます。<br>
+          ⬇「甲板に載せる」で、その位置の真下の甲板にぴったり載せます。大きさは実寸（1＝標準）で、向きは上から見た角度です。
+        </div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+          <button class="sp-gizmo-btn" onclick="mooringAutoLayout()">✨ おすすめの配置</button>
+          <button class="sp-gizmo-btn" onclick="mooringClear()">🗑 すべて消す</button>
+        </div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+          <label class="sp-toggle"><input type="checkbox" class="moor-show" checked onchange="shipMooring.show=this.checked"> 設定画面の外（航海中）でも金物を表示する</label>
+        </div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">
+          タグボートが索を取って引くのは、クリートと「タグの索を直接かける」を選んだビット・ボラードだけです（押すのは舷側のどこでも）。
+        </div>
+        <div class="sp-funnel-list" id="moor-list"></div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+          <button class="sp-gizmo-btn" onclick="mooringAdd('bitt')">＋ ビット（双係柱）</button>
+          <button class="sp-gizmo-btn" onclick="mooringAdd('bollard')">＋ ボラード（単柱）</button>
+          <button class="sp-gizmo-btn" onclick="mooringAdd('cleat')">＋ クリート</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-page" id="tab-bulkheads">
+      <div class="sp-section" id="wt-settings"></div>
+    </div>
+
+    <div class="settings-page" id="tab-submarine">
+      <div class="sp-section" id="sub-settings"></div>
+    </div>
+
+    <div class="settings-page" id="tab-sound">
+      <div class="sp-section">
+        <div class="sp-section-title">🔊 音量（この端末の設定）</div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="audio-enabled" checked onchange="setAudioSetting('enabled', this.checked)"> 音を出す</label>
+        </div>
+        <div class="sp-row"><span class="sp-label">全体:</span>
+          <input type="range" id="audio-master" class="sp-slider" min="0" max="1.5" step="0.05" value="0.8" oninput="setAudioSetting('master', this.value)"></div>
+        <div class="sp-row"><span class="sp-label">汽笛:</span>
+          <input type="range" id="audio-horn" class="sp-slider" min="0" max="1.5" step="0.05" value="1" oninput="setAudioSetting('horn', this.value)"></div>
+        <div class="sp-row"><span class="sp-label">機関:</span>
+          <input type="range" id="audio-engine" class="sp-slider" min="0" max="1.5" step="0.05" value="0.7" oninput="setAudioSetting('engine', this.value)"></div>
+        <div class="sp-row"><span class="sp-label">ベル等:</span>
+          <input type="range" id="audio-bridge" class="sp-slider" min="0" max="1.5" step="0.05" value="0.8" oninput="setAudioSetting('bridge', this.value)"></div>
+        <div class="sp-row"><span class="sp-label">環境音:</span>
+          <input type="range" id="audio-env" class="sp-slider" min="0" max="1.5" step="0.05" value="0.7" oninput="setAudioSetting('env', this.value)"></div>
+        <div style="font-size:10px;color:#888;margin-top:4px;">
+          環境音：風・波・船首の波切り・航跡・雨（船内では屋根を打つ音）・雷鳴・波の打ち込み。<br>
+          船内ではこもって聞こえ、水中では全体がこもります。<br>
+          iPhone/iPad は画面に一度触れてから鳴り始めます（消音スイッチがONだと鳴らないことがあります）。
+        </div>
+      </div>
+      <div class="sp-section">
+        <div class="sp-section-title">📯 汽笛・ホーン（数の制限なし）</div>
+        <div class="sp-funnel-list" id="horn-list"></div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+          <select id="horn-add-type" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;">
+            <option value="steam_single">蒸気汽笛（単音）</option>
+            <option value="steam_chime">蒸気汽笛（チャイム・和音／客船）</option>
+            <option value="steam_organ">蒸気汽笛（オルガン管・太く低い）</option>
+            <option value="steam_bell">蒸気汽笛（ベル型・明るく高め）</option>
+            <option value="tyfon">タイフォン（Tyfon・空気式ホーン）</option>
+            <option value="airhorn">エアホーン（トランペット・和音／現代船）</option>
+            <option value="diaphone">ダイアフォン（霧笛・うなり付き）</option>
+            <option value="nautophone">ノートフォン（電磁式霧笛）</option>
+            <option value="electric">電気ホーン（振動板式）</option>
+            <option value="siren">サイレン（モーター式）</option>
+            <option value="bell">号鐘（船鐘）</option>
+            <option value="gong">ゴング（霧中号鐘・船尾）</option>
+          </select>
+          <button class="sp-add-btn" onclick="hornAdd()">＋ 汽笛を追加</button>
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:4px;">
+          位置(X/Y/Z)は煙突と同じ船の座標です。音はその場所から聞こえます（遠いほど小さく・まろやかに、音が届くまで遅れます）。<br>
+          画面の 📯 ボタン・Hキーで「📯ボタン・操船信号用」にチェックした汽笛をまとめて、Gキーで「霧中信号用（霧笛）」の汽笛をまとめて、1〜9キーで番号の汽笛を鳴らせます（押している間）。
+        </div>
+      </div>
+      <div class="sp-section">
+        <div class="sp-section-title">🚩 汽笛信号</div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+          <button class="sp-gizmo-btn" onclick="playHornSignal('L')">長音1回（出港・注意）</button>
+          <button class="sp-gizmo-btn" onclick="playHornSignal('S')">短音1回（右転）</button>
+          <button class="sp-gizmo-btn" onclick="playHornSignal('SS')">短音2回（左転）</button>
+          <button class="sp-gizmo-btn" onclick="playHornSignal('SSS')">短音3回（後進）</button>
+          <button class="sp-gizmo-btn" onclick="playHornSignal('SSSSS')">短音5回（警告）</button>
+          <button class="sp-gizmo-btn" onclick="playHornSignal('LLL')">長音3回（汽笛の挨拶）</button>
+          <button class="sp-gizmo-btn" onclick="playHornSignal('L','fog')">霧中信号（霧笛・長音1回）</button>
+          <button class="sp-gizmo-btn" onclick="playHornSignal('LL','fog')">霧中信号（停止中・長音2回）</button>
+          <button class="sp-remove-btn" onclick="stopHornSignal()">■ 止める</button>
+        </div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="horn-auto-fog" onchange="setHornAuto('fog', this.checked)"> 霧の中で自動の霧中信号（2分ごと・航行中は長音1回、停止中は長音2回）</label>
+        </div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="horn-auto-astern" onchange="setHornAuto('astern', this.checked)"> 前進中に後進をかけたら短音3回</label>
+        </div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="horn-auto-turn" checked onchange="setHornAuto('turn', this.checked)"> 他の船の近く（3km）で針路を変えたら、右へ短音1回・左へ短音2回</label>
+        </div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="horn-auto-warn" checked onchange="setHornAuto('warn', this.checked)"> 進路が重なってきた船がよけないときは、警告の短音5回</label>
+        </div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="horn-echo" checked onchange="setHornEcho(this.checked)"> 陸の近くでは汽笛がこだまする（世界を航海するモード）</label>
+        </div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">出港の汽笛:</span>
+          <select id="horn-auto-depart" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;" onchange="setHornAuto('depart', this.value)"></select>
+          <span style="font-size:10px;color:#888;">スタンバイのあと、初めて前進にしたとき</span>
+        </div>
+      </div>
+      <div class="sp-section">
+        <div class="sp-section-title">⚙ 機関音</div>
+        <div id="engine-list"></div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+          <select id="engine-add-type" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;"></select>
+          <button class="sp-add-btn" type="button" onclick="engineAdd()">＋ 機関音を足す</button>
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:4px;">
+          音はスクリューの回転数に合わせて変わります（加速・逆転中は力強く）。船内にいると大きく聞こえます。<br>
+          機関音はいくつでも置けます（例：左右のレシプロと中央のタービン）。「⧉ 複製」「⇆ 反対舷に複製」でコピーできます。<br>
+          「機関」でスクリューごとの機関（推進器タブ）を選ぶと、名前・形式はその機関と同じになり、その機関の回転で鳴ります（独立操作で左右を逆に回すと、音も別々に）。推進器タブで機関の「種類」を決めると、機関ごとの音に自動で分かれます。
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-page" id="tab-bridge">
+      <div class="sp-section">
+        <div class="sp-section-title">🎛 テレグラフ（機関指令）</div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">デザイン:</span>
+          <select id="bridge-telegraph" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;" onchange="setBridgeOption('telegraph', this.value)"></select>
+        </div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">盤面の色:</span>
+          <select id="bridge-tg-theme" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;" onchange="setBridgeOption('tgTheme', this.value)"></select>
+        </div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="bridge-tg-lit" checked onchange="setBridgeOption('tgLit', this.checked)"> 暗くなったら盤面を光らせる（夜の船橋の照明）</label>
+        </div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">ベルの音:</span>
+          <select id="bridge-bell" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;" onchange="setBridgeOption('bell', this.value); telegraphBell(bridgeUI.telegraph, false, 2)"></select>
+        </div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="bridge-wait-answer" checked onchange="setBridgeOption('waitAnswer', this.checked)"> 機関室の応答（ベル）を待ってから機関が動く</label>
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:4px;">
+          ハンドル・針をドラッグするか、文字の所をタップして指令します。一気に倒すと一段ずつ切り替わります。<br>
+          キーボード：W/S 一段ずつ・X 停止・Q スタンバイ・E 機関終了。<br>
+          指令するとベルが鳴り、少しして機関室が応答のベルを鳴らし、赤い応答の針が追いつきます。
+        </div>
+      </div>
+      <div class="sp-section">
+        <div class="sp-section-title">☸ 舵輪</div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">デザイン:</span>
+          <select id="bridge-wheel" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;" onchange="setBridgeOption('wheel', this.value)"></select>
+        </div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">古典的な舵輪の回す量:</span>
+          <select id="bridge-wheel-turns" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;" onchange="setBridgeOption('wheelTurns', this.value)"></select>
+        </div>
+        <div class="sp-row" style="gap:6px;"><span class="sp-label" style="min-width:0;">彫り込む文字:</span>
+          <input type="text" id="bridge-wheel-text" value="BROWN&#39;S PATENT TELEMOTOR ROSEBANK IRONWORKS EDINBURGH" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:12px;flex:1;min-width:0;" oninput="setBridgeOption('wheelText', this.value)">
+        </div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="bridge-wheel-bell" checked onchange="setBridgeOption('wheelBell', this.checked)"> 古典的な舵輪（1周で舵1°のとき）：1周ごとにベルを鳴らす</label>
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:4px;">
+          舵輪は指で回した角度のまま止まります（手を離しても戻りません）。中心をダブルタップ（キーボードは C）で舵中央。A/Dキーでも回せます。<br>
+          古典的な舵輪は、本物の大型船と同じ「1周で舵1°（いっぱいまで35周）」と、以前の軽い「1周半で舵いっぱい（ハンドル型と同じくらいの効き）」から選べます。1周で舵1°のときは1周ごとにベルが鳴ります（上のチェックで消せます）。<br>
+          上の舵角計の白い針が実際の舵、黄色の針が舵輪の指示です。<br>
+          古典的な舵輪では、縁の真鍮の帯に「彫り込む文字」がくり返し刻まれます。
+        </div>
+      </div>
+    </div>
+
     <div class="settings-page" id="tab-perf">
+      <div class="sp-section">
+        <div class="sp-section-title">🖥 使っているGPU</div>
+        <div id="gpu-info" style="font-size:11px;color:#9cd;margin-bottom:4px;">—</div>
+        <div style="font-size:10px;color:#888;margin-bottom:8px;">高性能なGPU（外部GPU）を優先するよう頼んでいます。内蔵GPUになっている場合は、Windows の「設定 → ディスプレイ → グラフィック」でブラウザーを「高パフォーマンス」に、Mac は省電力の自動切替を切ってください。</div>
+      </div>
+      <div class="sp-section">
+        <div class="sp-section-title">💡 照明の焼き込み（この端末の設定）</div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="bake-enabled" checked onchange="setLightBakeEnabled(this.checked)"> 船の灯りを焼き込んで軽くする（夜がとても軽くなる）</label>
+        </div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">細かさ:</span>
+          <select id="bake-detail" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;" onchange="setLightBakeDetail(this.value)">
+            <option value="fine">細かい（約0.6m・きれい）</option>
+            <option value="normal" selected>ふつう（約1m）</option>
+            <option value="coarse">粗い（約1.6m・軽い）</option>
+          </select>
+          <button class="sp-add-btn" type="button" onclick="rebakeLights()">今すぐ焼き直す</button>
+        </div>
+        <div id="bake-status" style="font-size:10px;color:#9fb8c8;margin:2px 0 4px;"></div>
+        <div style="font-size:10px;color:#888;">
+          窓・灯具・エリアライト・煙突の照明・甲板灯が船を照らす明るさを、船ごとに一度だけ計算して端末に保存します。
+          全部の灯りが影付きで照らし（壁を抜けません）、毎フレームの計算はほとんど無くなります。<br>
+          灯りを動かしたり明るさを変えたりすると、少し待ってから自動で焼き直します（数秒〜数十秒。その間は前の結果のまま）。
+          昼夜・明るさのスライダー・煙突照明のオン/オフは、焼き直さずにすぐ反映されます。<br>
+          細かさを下げたときは、船を読み込み直すと反映されます。
+        </div>
+      </div>
+      <div class="sp-section">
+        <div class="sp-section-title">🖼 テクスチャの最大サイズ（この端末の設定）</div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;"><span class="sp-label" style="min-width:0;">最大:</span>
+          <select id="tex-max-size" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;" onchange="setTextureMaxSize(this.value)">
+            <option value="auto" selected>自動（おすすめ）</option>
+            <option value="1024">1024px（とても軽い）</option>
+            <option value="2048">2048px</option>
+            <option value="4096">4096px</option>
+            <option value="none">制限なし</option>
+          </select>
+        </div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
+          <button class="sp-add-btn" onclick="reloadModelTextures()">🔄 テクスチャを読み込み直す</button>
+          <span id="tex-reload-status" style="font-size:10px;color:#aef;"></span>
+        </div>
+        <div style="font-size:10px;color:#888;">
+          大きなテクスチャがたくさんあるモデルは、メモリが足りなくなって船体が真っ黒になることがあります。
+          「自動」では、モデルの中の画像の大きさを調べて、この端末に収まるように縮めて読み込みます
+          （iPad・スマホは最大2048px、合計もおさえる）。読み込めなかった画像は、小さくしてやり直します。<br>
+          変えたときは、モデルを読み込み直すと反映されます。
+        </div>
+      </div>
+      <div class="sp-section">
+        <div class="sp-section-title">🎬 スクショと一緒に動画も保存（この端末の設定）</div>
+        <div class="sp-row">
+          <label class="sp-toggle"><input type="checkbox" id="clip-enabled" checked onchange="setClipEnabled(this.checked)"> スクショを撮ったら、直前の約5〜10秒の動画（音付き）も保存する</label>
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:4px;">裏でずっと録画しているので、端末が温まりやすくなります。重いと感じたらOFFにしてください。</div>
+      </div>
       <div class="sp-section">
         <div class="sp-section-title">グラフィック品質</div>
         <div class="sp-row">
@@ -951,6 +1290,20 @@
         </div>
         <div style="font-size:10px;color:#888;margin-top:6px;">
           煙パーティクル数・航跡の長さ・画面解像度を一括調整します（海面の重さには影響しません）。
+        </div>
+        <div class="sp-row" style="margin-top:8px;">
+          <span class="sp-label">描画の上限:</span>
+          <select id="perf-fps-cap" style="flex:1;background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;" onchange="setFpsCap(this.value)">
+            <option value="60" selected>60fps（推奨）</option>
+            <option value="30">30fps（省電力・発熱を抑える）</option>
+            <option value="0">制限なし</option>
+          </select>
+        </div>
+        <div class="sp-row">
+          <label style="display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer;">
+            <input type="checkbox" id="perf-auto-res" checked onchange="setAutoResolution(this.checked)">
+            重くなったら解像度を自動で少し下げる（発熱で遅くなっても滑らかさを保つ）
+          </label>
         </div>
       </div>
 
@@ -981,8 +1334,9 @@
       </div>
     </div>
 
-  </div></div><div id="instructions">PC: [W/S] Telegraph | [A/D] Rudder<br>Drag/Swipe to rotate camera | Right-Drag/2-Fingers to pan</div>
+  </div></div><div id="instructions">PC: [W/S] Telegraph | [X] Stop | [Q] Stand by | [E] F.W.E. | [A/D] Rudder | [C] Midships | [H] Horn | [G] Fog horn<br>Drag/Swipe to rotate camera | Right-Drag/2-Fingers to pan</div>
 
+<script src="js/00-version.js"></script>
 <script src="js/01-state-and-config.js"></script>
 <script src="js/02-utils-and-wave-physics.js"></script>
 <script src="js/03-particle-systems.js"></script>
@@ -1000,9 +1354,55 @@
 <script src="js/15-arealight-script-generator.js"></script>
 <script src="js/16-daynight-and-telegraph.js"></script>
 <script src="js/20-viewpoint-camera.js"></script>
+<script src="js/23-underwater.js"></script>
+<script src="js/24-weather.js"></script>
+<script src="js/25-area-lights.js"></script>
+<script src="js/26-glow-emitters.js"></script>
+<script src="js/27-model-store.js"></script>
+<script src="js/28-ship-archive.js"></script>
+<script src="js/29-weather-fx.js"></script>
+<script src="js/30-auto-exposure.js"></script>
+<script src="js/31-pwa-install.js"></script>
+<script src="js/32-engine-propeller.js"></script>
+<script src="js/33-performance.js"></script>
+<script src="js/34-shelter.js"></script>
+<script src="js/35-audio-engine.js"></script>
+<script src="js/36-horns.js"></script>
+<script src="js/37-bridge-controls.js"></script>
+<script src="js/38-clip-recorder.js"></script>
+<script src="js/39-android-app.js"></script>
+<script src="js/40-light-bake.js"></script>
+<script src="js/41-no-zoom.js"></script>
+<script src="js/42-texture-guard.js"></script>
+<script src="js/43-world.js"></script>
+<script src="js/44-world-terrain.js"></script>
+<script src="js/45-horn-echo.js"></script>
+<script src="js/46-mooring.js"></script>
+<script src="js/47-tugboats.js"></script>
+<script src="js/48-minimap.js"></script>
+<script src="js/49-autopilot.js"></script>
+<script src="js/50-harbor-auto.js"></script>
+<script src="js/51-harbor-detail.js"></script>
+<script src="js/52-puffs.js"></script>
+<script src="js/53-landmarks.js"></script>
+<script src="js/54-submarine.js"></script>
+<script src="js/55-ship-types.js"></script>
+<script src="js/56-engines.js"></script>
+<script src="js/57-lighthouses.js"></script>
+<script src="js/58-maneuvering.js"></script>
+<script src="js/59-traffic.js"></script>
+<script src="js/60-ship-solid.js"></script>
+<script src="js/61-ship-ao.js"></script>
+<script src="js/62-watertight.js"></script>
+<script src="js/63-flooding.js"></script>
+<script src="js/64-damage.js"></script>
+<script src="js/65-ship-hits.js"></script>
+<script src="js/66-sights.js"></script>
+<script src="js/67-sea-lanes.js"></script>
 <script src="js/17-main-loop.js"></script>
 <script src="js/18-hull-wake-physics.js"></script>
 <script src="js/19-swe-fluid.js"></script>
 <script src="js/21-bow-stern-effects.js"></script>
+<script src="js/22-hull-shape.js"></script>
 </body>
 </html>

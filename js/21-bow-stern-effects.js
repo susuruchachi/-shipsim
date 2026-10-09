@@ -23,8 +23,26 @@ const BOW_TIP_SAMPLE_COUNT = 3;
 const SLAM_RATIO_THRESHOLD = 0.5;
 // スラミング発火のクールダウン[秒]。連続発火を防ぎ「一発の衝撃」として見せる。
 const SLAM_COOLDOWN = 0.35;
-// スラミング発生時の瞬間的な速度低下（暫定値。実装後に体感で調整する）
-const SLAM_SPEED_DAMP = 0.985;
+// ── 波による減速（スラミング・船首抵抗）の大きさ ──────────────────────
+// 以前はスラミング1回ごとに速度を 1.5%×質量係数 ずつ掛け算で削っていたが、
+// 判定の待ち時間(SLAM_COOLDOWN)が0.35秒なので、大きなうねりで船首が沈み込む間は
+// 船首・船尾それぞれ0.35秒おきに発火し、数十秒で何ノットも落ちていた。
+// 実船の目安（大型客船で、荒天なら1〜2割、時化で2割強の速度低下。中程度の
+// 海ではほとんど落ちない）に合わせるため、次の2つで大きさを決める。
+//
+// (1) スラミングによる減速は SLAM_SPEED_LOSS_INTERVAL 秒に1回まで（船首・船尾共通）。
+//     水しぶき等の演出用の判定は従来どおり SLAM_COOLDOWN ごとに出る。
+//     1回の減速量は「スラミングだけでつり合ったときの速度低下が
+//     SLAM_SPEED_LOSS_EQ 程度になる」ように、推進の立ち上がりの速さから逆算する
+//     （重い船ほど1回の減速は小さく、軽い船ほど大きい＝運動量の考え方と同じ向き）。
+const SLAM_SPEED_LOSS_INTERVAL = 4.0;   // 秒
+const SLAM_SPEED_LOSS_EQ = 0.04;        // 強いスラミングが続いたときの速度低下の目安（4%）
+// (2) 船首抵抗による減速の上限を、海況（有義波高 ÷ 船の長さ）で決める。
+//     上限 = BOW_DRAG_LOSS_MAX × (Hs / (BOW_DRAG_REF_HS_RATIO × 船長))^1.5
+//     290mの客船だと、ビューフォート5（Hs≒2m）で約1%、8（≒5.5m）で約6%、
+//     11（≒11.5m）で約18%。小さい船ほど同じ波でも大きく減速する。
+const BOW_DRAG_LOSS_MAX = 0.25;
+const BOW_DRAG_REF_HS_RATIO = 0.05;
 
 // ─────────────────────────────────────────
 //  estimateBowShapeFactors()
@@ -133,9 +151,19 @@ function computeBowSubmergedVolume(cgWorldX, cgWorldZ, rotY, pitchAngle, shipY, 
 //  “超過分” に対して働くべきものなので、drag計算にはこちらの基準値を使い、
 //  computeBowForces側で excess = max(0, volBow - volBowDesign) を取って使う。
 // ─────────────────────────────────────────
+// （設計喫水での値なので、船の形・喫水・大きさが変わらない限り同じ。物理の刻みごとに計算し直していた）
+const _bowDV = { key: '', v: 0 };
 function computeBowDesignVolume(physScale, len) {
     const hp = window.hullProfile;
     if (!hp || !hp.ready || hp.slices.length < 2) return 0;
+    const key = physScale + '|' + len + '|' + physics.waterlineOffsetY + '|' + physics.draftOffset + '|' + hp.designWaterlineY + '|' + hp.slices.length;
+    if (_bowDV.key === key && _bowDV.slices === hp.slices) return _bowDV.v;
+    _bowDV.key = key; _bowDV.slices = hp.slices;
+    _bowDV.v = _computeBowDesignVolume(physScale, len);
+    return _bowDV.v;
+}
+function _computeBowDesignVolume(physScale, len) {
+    const hp = window.hullProfile;
 
     const slices = hp.slices;
     const n = slices.length;
@@ -303,15 +331,18 @@ function _lerpEfficiencyCurve(depthRatio) {
 //  propulsors[] 全基の没水深さから平均推力効率(0〜1)を算出する。
 //  1基も定義されていない場合は 1.0（従来通りペナルティ無し）を返す。
 // ─────────────────────────────────────────
+const _propEffV = new THREE.Vector3();
 function getPropellerEfficiency(t, physScale) {
     if (typeof propulsors === 'undefined' || !propulsors || propulsors.length === 0 || !shipGroup) {
         return { efficiency: 1.0, racingIntensity: 0.0 };
     }
-    shipGroup.updateMatrixWorld(true);
+    // 船そのものの行列だけ（以前は物理の刻みのたびに、船の部品すべての行列を強制的に計算し直していた）
+    shipGroup.updateWorldMatrix(false, false);
 
     let sumEff = 0, count = 0;
+    const worldPos = _propEffV;
     for (const p of propulsors) {
-        const worldPos = new THREE.Vector3(p.x, p.y, p.z).applyMatrix4(shipGroup.matrixWorld);
+        worldPos.set(p.x, p.y, p.z).applyMatrix4(shipGroup.matrixWorld);
         const waveY = getWaveHeight(worldPos.x, worldPos.z, t, true);
         const depth = waveY - worldPos.y; // 正=没水、負=露出（プロペラが波面より上）
 
@@ -370,9 +401,19 @@ function computeSternSubmergedVolume(cgWorldX, cgWorldZ, rotY, pitchAngle, shipY
 //  computeBowDesignVolume()と同じ方式で、船尾域(alongNorm <= STERN_ALONG_THRESHOLD)の
 //  設計喫水における没水体積[m³]を返す（船尾スラミングの無次元化基準用）。
 // ─────────────────────────────────────────
+// （設計喫水での値なので、船の形・喫水・大きさが変わらない限り同じ。物理の刻みごとに計算し直していた）
+const _sternDV = { key: '', v: 0 };
 function computeSternDesignVolume(physScale, len) {
     const hp = window.hullProfile;
     if (!hp || !hp.ready || hp.slices.length < 2) return 0;
+    const key = physScale + '|' + len + '|' + physics.waterlineOffsetY + '|' + physics.draftOffset + '|' + hp.designWaterlineY + '|' + hp.slices.length;
+    if (_sternDV.key === key && _sternDV.slices === hp.slices) return _sternDV.v;
+    _sternDV.key = key; _sternDV.slices = hp.slices;
+    _sternDV.v = _computeSternDesignVolume(physScale, len);
+    return _sternDV.v;
+}
+function _computeSternDesignVolume(physScale, len) {
+    const hp = window.hullProfile;
 
     const slices = hp.slices;
     const n = slices.length;
@@ -490,52 +531,42 @@ function computeHogSagAmount(cgWorldX, cgWorldZ, rotY, physScale, len, t, subDt)
     return smoothed;
 }
 
-// ─────────────────────────────────────────
-//  _updateBowSternDebugHud()
-//  Stage4の係数調整用の簡易デバッグ表示。画面右上に小さく数値を出すだけ。
-//  スマホの実機テストで「効き具合を勘で判断する」のを減らすためのもの。
-//  不要になったらこの関数ごと削除するか、main-loop.js側の呼び出しを消せばよい。
-// ─────────────────────────────────────────
-let _bowSternDebugHudEl = null;
-function _updateBowSternDebugHud(vals) {
-    if (!_bowSternDebugHudEl) {
-        _bowSternDebugHudEl = document.createElement('div');
-        _bowSternDebugHudEl.style.cssText =
-            'position:fixed; top:6px; right:6px; z-index:99999; ' +
-            'background:rgba(0,0,0,0.55); color:#7fffb0; font:11px monospace; ' +
-            'padding:4px 8px; border-radius:4px; pointer-events:none; white-space:pre;';
-        document.body.appendChild(_bowSternDebugHudEl);
-    }
-    _bowSternDebugHudEl.textContent =
-        `volBow: ${vals.volBow.toFixed(2)} m³\n` +
-        `volBowDesign: ${vals.bowVolBaseline.toFixed(2)} m³\n` +
-        `bowExcessVol(raw): ${(vals.rawBowExcessVol || 0).toFixed(2)} m³\n` +
-        `bowExcessBaseline: ${(vals.bowExcessBaseline || 0).toFixed(2)} m³\n` +
-        `bowExcessVol: ${vals.bowExcessVol.toFixed(2)} m³\n` +
-        `bowSlamRatio: ${vals.bowSlamRatio.toFixed(2)} (spray>1.0)\n` +
-        `  └ 直近3秒ピーク: ${(vals.bowSlamRatioPeak3s || 0).toFixed(2)}\n` +
-        `speed: ${(vals.speed || 0).toFixed(2)} / target ${(vals.targetSpeed || 0).toFixed(2)}\n` +
-        `slamCount(累計): ${vals.slamCount || 0}`;
-}
 
 // ─────────────────────────────────────────
-//  _trackBowSlamRatioPeak(currentRatio, t)
-//  「今は静かなのに大きな水しぶきが見える」という報告の原因切り分け用。
-//  直近3秒間でbowSlamRatioが実際どこまで跳ね上がっていたかを追跡する
-//  （継続スプレー系はライブ値を直接見ているので、一瞬だけ閾値を超えて
-//  すぐ戻っても、その一瞬に出たパーティクルは寿命の間ずっと画面に残る。
-//  現在値が穏やかでも直近ピークが高ければ、それが原因である可能性が高いと
-//  判断できる）。
+//  estimateSignificantWaveHeight(cx, cz, t)
+//  船のまわりの実際の水面（外洋波）から有義波高 Hs ≒ 4σ を見積もる。
+//  波高スライダー・うねり・チョップ・天候のどれで決まった海でも、実際に
+//  出ている波そのものから測るので一貫する。1秒に1回だけ計算してキャッシュする。
 // ─────────────────────────────────────────
-let _bowSlamRatioHistory = [];
-function _trackBowSlamRatioPeak(currentRatio, t) {
-    _bowSlamRatioHistory.push({ t, r: currentRatio });
-    while (_bowSlamRatioHistory.length > 0 && t - _bowSlamRatioHistory[0].t > 3.0) {
-        _bowSlamRatioHistory.shift();
+let _hsCache = { t: -1e9, hs: 0 };
+function estimateSignificantWaveHeight(cx, cz, t) {
+    if (Math.abs(t - _hsCache.t) < 1.0) return _hsCache.hs;
+    if (typeof getWaveCrestAndHeight !== 'function') return 0;
+    // 最も長い成分（うねり）の1波長ほどの範囲を、少しずつ時刻もずらして標本化する
+    const S = (typeof oceanWaveState !== 'undefined') ? oceanWaveState : null;
+    let kMin = Infinity;
+    if (S) for (let i = 0; i < 4; i++) {
+        const k = Math.hypot(S.K[i * 2], S.K[i * 2 + 1]);
+        if (k > 1e-6) kMin = Math.min(kMin, k);
     }
-    let peak = currentRatio;
-    for (let i = 0; i < _bowSlamRatioHistory.length; i++) {
-        if (_bowSlamRatioHistory[i].r > peak) peak = _bowSlamRatioHistory[i].r;
+    const span = Number.isFinite(kMin) ? (2 * Math.PI / kMin) : 200;
+    let sum = 0, sum2 = 0, n = 0;
+    for (let i = 0; i < 8; i++) {
+        for (let j = 0; j < 8; j++) {
+            const x = cx + (i / 7 - 0.5) * span * 1.13;
+            const z = cz + (j / 7 - 0.5) * span * 0.87;
+            const h = getWaveCrestAndHeight(x, z, t + (i * 8 + j) * 0.37).height;
+            sum += h; sum2 += h * h; n++;
+        }
     }
-    return peak;
+    const mean = sum / n;
+    const sigma = Math.sqrt(Math.max(0, sum2 / n - mean * mean));
+    _hsCache = { t, hs: 4 * sigma };
+    return _hsCache.hs;
+}
+
+// 海況から、船首抵抗で失ってよい速度の割合の上限（0〜BOW_DRAG_LOSS_MAX）
+function bowDragLossCap(hs, shipLength) {
+    const ref = Math.max(1, BOW_DRAG_REF_HS_RATIO * shipLength);
+    return Math.min(BOW_DRAG_LOSS_MAX, BOW_DRAG_LOSS_MAX * Math.pow(Math.max(0, hs) / ref, 1.5));
 }

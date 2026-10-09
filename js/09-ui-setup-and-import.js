@@ -1,3 +1,50 @@
+// GLB/glTF をバイト列から読み込んで表示する。ファイル選択からも、
+// 保存してあったモデルの復元（27-model-store.js）からも、この1本を通す。
+function loadGltfBuffer(buffer, name) {
+    return new Promise((resolve, reject) => {
+        const statusText = $('import-status');
+        modelOffset.ry = -90.0; syncModelOffsetUI();
+        pendingMTLMaterials = null; pendingMTLText = null; pendingOBJText = null;
+        const view = new DataView(buffer);
+        const isBinary = buffer.byteLength > 4 && view.getUint32(0, true) === 0x46546C67;
+        const manager = new THREE.LoadingManager();
+        manager.setURLModifier((url) => resolveTextureAlias(url) || url);
+        const loader = new THREE.GLTFLoader(manager);
+        const success = (gltf) => {
+            applyGltfEmissiveStrengthExt(gltf.scene, gltf.parser && gltf.parser.json);
+            // テクスチャを読み込み直すとき（42-texture-guard.js）のために、画像 → GLB の中の画像の番号を覚えておく
+            if (typeof texRememberGltf === 'function') texRememberGltf(gltf, isBinary);
+            setCustomModel(gltf.scene);
+            if (statusText) statusText.innerText = 'Loaded: ' + name;
+            window.lastLoadedModelName = name;
+            // Blenderのワット単位 → Three.js向けに自動スケーリング
+            glbLights.forEach((light) => {
+                if (light.isRectAreaLight) {
+                    // カスタムプロパティ経由は生成時に変換済み、
+                    // KHR_lights_punctual経由のRectAreaLightはないが念のため
+                    if (!light.userData.isAreaLight && light.intensity > 50) {
+                        light.intensity *= 0.02;
+                    }
+                } else if (light.isPointLight || light.isSpotLight) {
+                    if (light.intensity > 100) { light.intensity *= 0.001; }
+                } else if (light.isDirectionalLight) {
+                    if (light.intensity > 10) { light.intensity *= 0.1; }
+                }
+                light.userData.baseIntensity = light.intensity;
+            });
+            glbLightMaster = 1.0;
+            updateGlbLightsUI();
+            resolve(gltf);
+        };
+        const fail = (err) => {
+            if (statusText) statusText.innerText = 'Error: ' + name + ' を読み込めませんでした';
+            reject(err || new Error('glTF parse failed'));
+        };
+        if (isBinary) loader.parse(buffer, './', success, fail);
+        else loader.parse(new TextDecoder('utf-8').decode(buffer), './', success, fail);
+    });
+}
+
 function setupModelImport() {
     installTextureAliasResolver();
     setupTextureFolderLoader();
@@ -10,45 +57,25 @@ function setupModelImport() {
         statusText.innerText = 'Loading: ' + file.name + '...';
 
         if (ext === 'gltf' || ext === 'glb') {
-            modelOffset.ry = -90.0; syncModelOffsetUI();
-            pendingMTLMaterials = null; pendingMTLText = null; pendingOBJText = null;
             reader.onload = (ev) => {
-                const view = new DataView(ev.target.result);
-                let isBinary = ev.target.result.byteLength > 4 && view.getUint32(0, true) === 0x46546C67;
-                const manager = new THREE.LoadingManager();
-                manager.setURLModifier((url) => resolveTextureAlias(url) || url);
-                const loader = new THREE.GLTFLoader(manager);
-                const success = (gltf) => {
-                    applyGltfEmissiveStrengthExt(gltf.scene, gltf.parser && gltf.parser.json);
-                    setCustomModel(gltf.scene);
-                    statusText.innerText = 'Loaded: ' + file.name;
-                    window.lastLoadedModelName = file.name;
-                    // Blenderのワット単位 → Three.js向けに自動スケーリング
-                    glbLights.forEach((light) => {
-                        if (light.isRectAreaLight) {
-                            // カスタムプロパティ経由は生成時に変換済み、
-                            // KHR_lights_punctual経由のRectAreaLightはないが念のため
-                            if (!light.userData.isAreaLight && light.intensity > 50) {
-                                light.intensity *= 0.02;
-                            }
-                        } else if (light.isPointLight || light.isSpotLight) {
-                            if (light.intensity > 100) { light.intensity *= 0.001; }
-                        } else if (light.isDirectionalLight) {
-                            if (light.intensity > 10) { light.intensity *= 0.1; }
-                        }
-                        light.userData.baseIntensity = light.intensity;
-                    });
-                    glbLightMaster = 1.0;
-                    updateGlbLightsUI();
-                };
-                if (isBinary) loader.parse(ev.target.result, './', success, () => {});
-                else loader.parse(new TextDecoder('utf-8').decode(ev.target.result), './', success, () => {});
+                const buf = ev.target.result;
+                loadGltfBuffer(buf, file.name)
+                    // 読み込めたモデルは保存しておき、船の設定と結びつける（27-model-store.js）
+                    .then(() => { if (typeof rememberModelSource === 'function') rememberModelSource(file.name, ext, buf); })
+                    .catch(() => {});
             };
             reader.readAsArrayBuffer(file);
         } else if (ext === 'obj') {
             modelOffset.ry = -90.0; syncModelOffsetUI();
             reader.onload = (ev) => {
-                try { loadOBJ(ev.target.result, file.name); window.lastLoadedModelName = file.name; }
+                try {
+                    loadOBJ(ev.target.result, file.name);
+                    window.lastLoadedModelName = file.name;
+                    // OBJ単体は保存できる。MTL・テクスチャは別ファイルなので保存しない。
+                    if (typeof rememberModelSource === 'function') {
+                        rememberModelSource(file.name, 'obj', new TextEncoder().encode(ev.target.result).buffer);
+                    }
+                }
                 catch (e) { statusText.innerText = 'Error'; }
             };
             reader.readAsText(file);
@@ -90,7 +117,8 @@ function setupParamControl(sliderId, numInputId, decBtnId, incBtnId, setter) {
 function setupUIControls() {
     setupParamControl('time-slider', 'time-num', 'time-dec', 'time-inc', (v) => {
         physics.dayProgress = v / 24.0;
-        physics.gameTime = physics.dayProgress * physics.dayDuration;
+        // 日付はそのまま（以前は 0 日目に戻していて、月齢が進まなくなっていた）
+        physics.gameTime = (Math.floor(physics.gameTime / physics.dayDuration) + physics.dayProgress) * physics.dayDuration;
         updateDayNightCycle(physics.dayProgress);
         // 手動操作時は固定モードでも位置を即反映（lerpターゲットをリセット）
         if (sunLight && sunLight.userData.currentPos) {
@@ -99,11 +127,24 @@ function setupUIControls() {
             sunLight.userData.currentPos.set(Math.cos(sA)*sd, Math.sin(sA)*sd*Math.cos(0.4), -Math.sin(sA)*sd*Math.sin(0.4));
         }
     });
+    // 月齢：元の日付にいちばん近い、その月齢の日にする（16-daynight-and-telegraph.js の暦）
+    let phaseReady = false;
     setupParamControl('phase-slider', 'phase-num', 'phase-dec', 'phase-inc', (v) => {
-        physics.moonPhase = v;
-        physics.moonPhaseManual = true;
+        if (!phaseReady) return;                      // （始めに既定の値を入れるときは、日付を変えない）
+        if (typeof calSetMoonPhase === 'function') calSetMoonPhase(v); else physics.moonPhase = v;
         updateDayNightCycle(physics.dayProgress);
     });
+    phaseReady = true;
+    const dateIn = $('date-input');
+    if (dateIn) {
+        dateIn.min = '1800-01-01';
+        if (typeof calISO === 'function') { dateIn.max = calISO(calToday()); dateIn.value = calISO(calDayNow()); }
+        dateIn.addEventListener('change', () => {
+            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateIn.value || '');
+            if (m && typeof calSetDay === 'function') { calSetDay(calDayOf(+m[1], +m[2], +m[3])); updateDayNightCycle(physics.dayProgress); }
+        });
+        ['touchstart', 'mousedown'].forEach(ev => dateIn.addEventListener(ev, (e) => e.stopPropagation()));
+    }
     
     setupParamControl('winddir-slider', 'winddir-num', 'winddir-dec', 'winddir-inc', (v) => { physics.windDir = v; });
     setupParamControl('windspd-slider', 'windspd-num', 'windspd-dec', 'windspd-inc', (v) => { physics.windSpeed = v; });
@@ -131,8 +172,10 @@ function setupUIControls() {
     setupParamControl('wavewidth-slider', 'wavewidth-num', 'wavewidth-dec', 'wavewidth-inc', (v) => { physics.waveWidth = v; });
     setupParamControl('swell-slider', 'swell-num', 'swell-dec', 'swell-inc', (v) => { physics.swellStrength = v; });
     setupParamControl('chop-slider', 'chop-num', 'chop-dec', 'chop-inc', (v) => { physics.chopStrength = v; });
+    // v170: 天候パネル。波スライダーのsetupParamControlより後に呼ぶこと
+    // （初期化時にdisabled状態を上書きされないようにするため）。
+    if (typeof initWeatherUI === 'function') initWeatherUI();
     setupParamControl('turnrad-slider', 'turnrad-num', 'turnrad-dec', 'turnrad-inc', (v) => { physics.turningRadiusFactor = v; });
-    setupParamControl('physspeed-slider', 'physspeed-num', 'physspeed-dec', 'physspeed-inc', (v) => { physicsSpeed = v; });
 
     setupParamControl('maxspeed-slider', 'maxspeed-num', 'maxspeed-dec', 'maxspeed-inc', (v) => { physics.maxSpeed = v; });
     setupParamControl('scale-slider', 'scale-num', 'scale-dec', 'scale-inc', (v) => {
@@ -220,23 +263,19 @@ function setupUIControls() {
     bindSettingsSlider('rudy-slider', 'rudy-num', (v) => { physics.rudderOffset.y = v; if (rudderMarker) rudderMarker.position.y = v; if(rudder3DMesh) rudder3DMesh.position.y = v;});
     bindSettingsSlider('rudz-slider', 'rudz-num', (v) => { physics.rudderOffset.z = v; if (rudderMarker) rudderMarker.position.z = v; if(rudder3DMesh) rudder3DMesh.position.z = v;});
 
-    // 時間速度スライダー (0=等速 1=×12 2=×96 3=×576 4=×3456)
+    // 時間速度スライダー (0=等速 1=×2 2=×5 3=×10 4=×20 5=×50 6=×100)：時刻も船の動きも同じ倍率
     const timeSpeedSlider = $('time-speed-slider');
     const timeSpeedLabel = $('time-speed-label');
     function updateTimeSpeedLabel() {
-        if (!timeSpeedLabel) return;
-        if (timeFrozen) { timeSpeedLabel.textContent = '⏸ 固定'; return; }
-        const m = TIME_SPEED_STEPS[timeSpeedIndex];
-        timeSpeedLabel.textContent = m === 1 ? '×1 等速' : '×' + m;
+        if (timeSpeedLabel) timeSpeedLabel.textContent = timeSpeedLabelText();
     }
     if (timeSpeedSlider) {
+        timeSpeedSlider.max = TIME_SPEED_STEPS.length - 1;
         timeSpeedSlider.value = timeSpeedIndex;
         timeSpeedSlider.addEventListener('input', (e) => {
-            timeSpeedIndex = parseInt(e.target.value);
-            timeFrozen = false;
+            timeSpeedIndex = Math.max(0, Math.min(TIME_SPEED_STEPS.length - 1, parseInt(e.target.value) || 0));
+            physicsSpeed = TIME_SPEED_STEPS[timeSpeedIndex];
             updateTimeSpeedLabel();
-            const freezeBtn = $('time-freeze-btn');
-            if (freezeBtn) freezeBtn.style.background = 'rgba(255,255,255,0.2)';
         });
         const stopP = (e) => e.stopPropagation();
         timeSpeedSlider.addEventListener('touchstart', stopP);
@@ -247,6 +286,7 @@ function setupUIControls() {
         freezeBtn.addEventListener('click', () => {
             timeFrozen = !timeFrozen;
             freezeBtn.style.background = timeFrozen ? 'rgba(255,200,0,0.5)' : 'rgba(255,255,255,0.2)';
+            freezeBtn.textContent = timeFrozen ? '▶ 時刻を進める' : '⏸ 時刻を固定';
             updateTimeSpeedLabel();
         });
         freezeBtn.addEventListener('touchstart', (e) => e.stopPropagation());

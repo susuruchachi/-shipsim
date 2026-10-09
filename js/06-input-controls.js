@@ -5,12 +5,36 @@ function setupKeyboardControls() {
         if (e.key === 's' || e.key === 'S') changeTelegraph(-1);
         if (e.key === 'a' || e.key === 'A') keys.a = true;
         if (e.key === 'd' || e.key === 'D') keys.d = true;
+        // C：舵中央（舵輪を真ん中へ）　X：機関停止（テレグラフを STOP へ、一段ずつ）
+        if ((e.key === 'c' || e.key === 'C') && typeof bridgeCenterHelm === 'function') bridgeCenterHelm();
+        if ((e.key === 'x' || e.key === 'X') && typeof _tgAim === 'function') _tgAim(0);
+        // Q：スタンバイ（機関用意）　E：機関終了（F.W.E.）
+        if ((e.key === 'q' || e.key === 'Q' || e.key === 'e' || e.key === 'E') && !e.repeat && typeof setTelegraphSpecial === 'function') {
+            if (typeof _br !== 'undefined') _br.tgTarget = null;      // 一段ずつ進めている途中なら止める
+            setTelegraphSpecial((e.key === 'q' || e.key === 'Q') ? 'standby' : 'fwe');
+        }
     });
     window.addEventListener('keyup', (e) => {
         if (e.key === 'a' || e.key === 'A') keys.a = false;
         if (e.key === 'd' || e.key === 'D') keys.d = false;
     });
 }
+
+// ── 右上の TELEMETRY：見出しを押すとたたむ／開く（この端末で覚える） ──
+function toggleTelemetry(force) {
+    const el = document.getElementById('telemetry-panel');
+    if (!el) return;
+    const folded = (typeof force === 'boolean') ? force : !el.classList.contains('folded');
+    el.classList.toggle('folded', folded);
+    const f = document.getElementById('telemetry-fold');
+    if (f) f.textContent = folded ? '▸' : '▾';
+    try { localStorage.setItem('susuru_telemetry_folded', folded ? '1' : '0'); } catch (e) { /* ignore */ }
+}
+window.addEventListener('load', () => {
+    let v = null;
+    try { v = localStorage.getItem('susuru_telemetry_folded'); } catch (e) { v = null; }
+    if (v === '1') toggleTelemetry(true);
+});
 
 // ── HUD（ボタン・メーター類）の一括表示/非表示 ──────────────
 // body.hud-hiddenクラスの有無をCSS側(#menu-toggle等の並び)で判定して
@@ -37,6 +61,8 @@ let _screenshotInProgress = false;
 function captureScreenshot() {
     if (_screenshotInProgress) return; // 連打防止
     _screenshotInProgress = true;
+    // 直前の数秒の動画も保存する（38-clip-recorder.js。設定でOFFにできる）
+    if (typeof saveRecentClip === 'function') saveRecentClip();
 
     // 現在のHUD状態を保存し、撮影用に一時的に非表示にする
     const wasHidden = isHudHidden();
@@ -114,7 +140,8 @@ function setupMobileControls() {
     // ── 視点固定モード用2本指パン ──
     // OrbitControlsより先にイベントを処理し、2本指のときだけ横取りする。
     let _panPrev = null; // 前フレームの2本指中心座標
-    const canvas = document.querySelector('canvas');
+    // 3D の描画面（画面のテレグラフ・舵輪も canvas なので、先頭の canvas ではなく renderer のものを使う）
+    const canvas = (typeof renderer !== 'undefined' && renderer) ? renderer.domElement : document.querySelector('canvas');
     if (canvas) {
         canvas.addEventListener('touchstart', (e) => {
             if (e.touches.length === 2 && cameraMode === 'chase') {

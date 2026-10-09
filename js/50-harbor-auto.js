@@ -1,0 +1,974 @@
+// ════════════════════════════════════════════════════════════════
+//  タグを使った自動の離岸・着岸
+// ════════════════════════════════════════════════════════════════
+//  着岸（自動航行で港に着いたとき、またはタグのパネルの「自動着岸」）
+//    1. 泊地の、岸壁から船幅の3倍ほど沖に、岸壁の方を向いて止まる（自動航行が連れて来る）
+//    2. タグ2隻を、着岸したとき沖側になる舷の、船首と船尾に呼ぶ
+//    3. その場で 90° 回して、岸壁と平行にする
+//    4. 横へゆっくり押して岸壁に付ける（近づくほど遅く。最後は 0.1m/s ほど）
+//    5. もやい綱を取り、タグを帰す
+//  離岸（タグのパネルの「自動離岸」、または岸壁から自動航行を始めたとき）
+//    1. タグ2隻を沖側の舷の船首・船尾に呼ぶ（もやい綱を放す）
+//    2. 横へ引いて岸壁から離す → 港口の方へ回す → タグを帰す → 自動航行へ
+//  船の動かし方：目標の位置・向きとのずれから「ほしい横の速さ・回る速さ」を決め、
+//  そのための横の力と回す力を、船首・船尾のタグの 押す／引く と強さに分ける。
+//  前後のずれは機関（微速の前進・後進を少しずつ）で直す。舵は中央。
+//  座標：物理の面（+x が西）。船の中の +x は左舷。港の形 S（44-world-terrain.js の _portShape）の
+//  a は岸壁から沖へ、b は岸壁に沿って。岸壁の面は a≒6m（岸壁の当たり判定の外側）。
+
+const harborAuto = { mode: null, phase: '', msg: '', plan: null, then: null, t: 0, phaseT: 0, lastOrderT: -99, tugIds: [], lines: [] };
+window.harborAuto = harborAuto;
+// 接舷する舷（'auto'：今の向きに近い方／'port'：左舷を岸壁に／'starboard'：右舷を岸壁に）。端末に覚えておく
+harborAuto.sidePref = (() => { try { return localStorage.getItem('susuru_berth_side') || 'auto'; } catch (e) { return 'auto'; } })();
+function harborSetSidePref(v) {
+    harborAuto.sidePref = v;
+    try { localStorage.setItem('susuru_berth_side', v); } catch (e) { /* ignore */ }
+    if (typeof renderTugPanel === 'function') renderTugPanel();
+    if (typeof renderAutopilotPanel === 'function') renderAutopilotPanel();
+}
+window.harborSetSidePref = harborSetSidePref;
+const _haRad = Math.PI / 180;
+
+function _haDims() {
+    const hp = window.hullProfile;
+    const sc = physics.scale || 1;
+    const HL = ((hp && hp.ready) ? hp.halfLen : 6) * sc;
+    let hw = 0;
+    // 喫水線の幅と、張り出した所（砲郭・スポンソン・フレア）も入れた外形の幅の大きい方（43-world.js）
+    for (let k = -20; k <= 20; k++) { const z = k / 20 * HL / sc; hw = Math.max(hw, worldHullAt(z).hw, (typeof worldHullExtentAt === 'function' ? worldHullExtentAt(z) : 0) * sc); }
+    return { HL, hw, B: hw * 2, L: HL * 2 };
+}
+function _haWrap(d) { return ((d + 540) % 360) - 180; }
+function _haQ(S) {
+    return {
+        toW: (a, b) => ({ x: S.x + S.sx * a + S.sz * b, z: S.z + S.sz * a - S.sx * b }),
+        toQ: (x, z) => { const dx = x - S.x, dz = z - S.z; return { a: dx * S.sx + dz * S.sz, b: dx * S.sz - dz * S.sx }; },
+    };
+}
+// 桟橋の間の岸壁で、回す所を探す（harborBerthPlan から）：岸壁と平行な船を、岸壁の前（a ＝ aM、b ＝ bC）から
+// 岸壁沿い（±b）へまっすぐ動かして、船体がどこも浅い所に掛からないまま、回っても掛からない所（sweepOk）まで出られるか。
+// そこからさらに横（a の向き、川の上流・下流）へずれた所も探す（近い順）。見つかれば { sg, aM, bT, T }。
+// 港ごとに、船の大きさ・喫水が同じなら同じ答えなので覚えておく
+const _haSlipCache = new Map();
+function _haSlipPlan(port, S, Q, D, aB, aE, bC, drMid, sweepOk) {
+    const key = [port.id, S.sx.toFixed(4), S.sz.toFixed(4), aB.toFixed(1), aE.toFixed(1), bC.toFixed(1), D.L.toFixed(1), D.B.toFixed(1), drMid.toFixed(2)].join('|');
+    if (_haSlipCache.has(key)) return _haSlipCache.get(key);
+    const deep = (a, b) => { const w = Q.toW(a, b); return -worldSeabedAt(w.x, w.z); };
+    const hwS = D.hw + 6, needC = drMid + 0.8, needS = drMid * 0.7 + 0.5;
+    // 岸壁と平行な船体（真ん中 (a, b)、前後に 8m の余裕）が、どこも浅い所・陸に掛からないか
+    const hullOk = (a, b) => {
+        for (let s = -1; s <= 1.001; s += 0.125) {
+            const bb = b + s * (D.HL + 8), w = Math.abs(s) > 0.8 ? hwS * 0.6 : hwS;
+            if (deep(a, bb) < needC || deep(a - w, bb) < needS || deep(a + w, bb) < needS) return false;
+        }
+        return true;
+    };
+    let best = null;
+    for (const sg of [1, -1]) for (let aM = aB; aM <= Math.max(aB, aE) + 0.1; aM += 10) {
+        for (let d = 0; d <= 1500; d += 20) {
+            if (best && d >= best.cost) break;
+            const bT = bC + sg * d;
+            if (!hullOk(aM, bT)) break;
+            if (d < D.HL) continue;
+            for (const lat of [0, 40, -40, 80, -80, 120, -120, 160, -160, 200, -200, 250, -250]) {
+                const cost = d + Math.abs(lat) * 0.7 + (aM - aB) * 0.3;
+                if (best && cost >= best.cost) continue;
+                const Tq = Q.toW(aM + lat, bT);
+                if (!sweepOk(Tq)) continue;
+                let ok = true;
+                for (let t = 20; t < Math.abs(lat) && ok; t += 20) ok = hullOk(aM + Math.sign(lat) * t, bT);
+                if (ok) best = { cost, sg, aM, bT, T: Tq };
+            }
+        }
+    }
+    if (_haSlipCache.size > 64) _haSlipCache.clear();
+    _haSlipCache.set(key, best);
+    return best;
+}
+// 着岸の計画：どの港のどこに、どちら向きで付けるか
+// asBerthed：もう横付けしている船の計画（離岸）。舷の設定ではなく、今の向きのまま
+function harborBerthPlan(port, prefHeading, asBerthed) {
+    if (!port) return { ok: false, why: '港がありません' };
+    if (port.type === 'fishing') return { ok: false, why: `${port.name}には大きな船が横付けできる岸壁がありません` };
+    let S = _portShape(port), Q = _haQ(S);
+    const S0 = S, D = _haDims();
+    // 横付けに使える岸壁の区間（軍港は桟橋の無い側）
+    const PL = _portPierLayout(port.type, S.quayLen);
+    const segLen = PL.free[1] - PL.free[0];
+    if (!S.detail && segLen < D.L + 20) return { ok: false, why: `${port.name}の空いている岸壁（${Math.round(segLen)}m）は船（${Math.round(D.L)}m）より短いので付けられません` };
+    const T = PORT_TYPES[port.type];
+    const draft = worldShipDraft();
+    if (draft + 1 > T.depth + 2) return { ok: false, why: `${port.name}の岸壁は船に対して浅いので付けられません` };
+    let aB = 6 + D.hw + 1.5;
+    // 作り込んだ港：本物の岸の線から測る（船の長さの範囲で、岸から沖へ見て、喫水より深くなる所のいちばん沖の方）
+    let aQ = 6, quayExt = null, bCq = null;
+    if (S.detail && typeof worldSeabedAt === 'function') {
+        // （作り込んだ港では、作り物の港の「桟橋の無い区間」が船より短いとき（軍港の種類）は、岸壁の真ん中を基準に。
+        //   以前はその区間（幅 3〜70m）の真ん中を基準にしていて、ニューヨークの海軍工廠・スタテン島では桟橋の先・
+        //   根元の浅い所から測り、岸壁が短い・浅いと出ていた）
+        const PLb = (PL.free[1] - PL.free[0] < D.L) ? 0 : (PL.free[0] + PL.free[1]) / 2;
+        // （この港の岸壁の前の掘り込みは、港の形がまだ読み込まれていなくても足して見る）
+        const loaded = typeof terrain !== 'undefined' && terrain.ports && terrain.ports.has(port.id);
+        const depthAt = (a, b) => { const w = Q.toW(a, b); let h = worldSeabedAt(w.x, w.z); if (!loaded && typeof _portAdjust === 'function') h = _portAdjust(h, w.x, w.z, [S0]); return -h; };
+        // 船の幅（＋余裕）の分だけ続けて深い所の、いちばん岸寄りの始まり（岸の先の桟橋などの浅い所の外側）
+        // その深い所は、沖の水へ続いていること（リヴァプールの浮き桟橋と岸の間のすき間のような、
+        // 船の幅ほどしかない水に付けない）：船の幅＋40m（80m まで）続けて深い所の始まり
+        const needW = 2 * D.hw + 6, needRun = Math.max(needW, Math.min(80, needW + 40));
+        const shoreAt = (b) => {
+            let run0 = null;
+            for (let a = -30; a <= 260; a += 2) {
+                if (depthAt(a, b) > draft + 0.5) { if (run0 === null) run0 = a; if (a - run0 >= needRun) return run0; }
+                else run0 = null;
+            }
+            return null;
+        };
+        // 本物の岸壁の長さを測る：真ん中から左右へ、岸の線が続いていて（ずれが 15m 以内）、
+        // その後ろが陸（岸壁）の間。地図の設定の長さ（port.quay）ではなく、地形から
+        // 岸壁の向き：地図の設定の向きが本物の岸の線と少しずれていることがある（メイフラワーなど）ので、
+        // 真ん中の前後 120m の岸の線に合わせて回す（2 回）
+        //（clamp：大きくずれているときは、1 回に回すのを mMax までにして、少しずつ合わせる）
+        const align = (iters, mMax, clamp) => {
+            for (let it = 0; it < iters; it++) {
+                let n = 0, sb = 0, sa = 0, sbb = 0, sab = 0;
+                for (let b = PLb - 120; b <= PLb + 120; b += 20) { const a = shoreAt(b); if (a === null) continue; n++; sb += b; sa += a; sbb += b * b; sab += a * b; }
+                if (n < 5) break;
+                let m = (n * sab - sb * sa) / ((n * sbb - sb * sb) || 1);
+                if (clamp && Math.abs(m) >= mMax) m = Math.sign(m) * mMax;
+                if (!(Math.abs(m) > 0.015 && Math.abs(m) <= mMax)) break;
+                const l = Math.hypot(1, m);
+                S = Object.assign({}, S, { sx: (S.sx - m * S.sz) / l, sz: (S.sz + m * S.sx) / l });
+                Q = _haQ(S);
+            }
+        };
+        align(2, 0.4);
+        let s0 = shoreAt(PLb);
+        if (s0 === null) return { ok: false, why: `${port.name}の岸壁の前は、この船（喫水 ${draft.toFixed(1)}m）には浅すぎます` };
+        // 岸の線が続いている間（隣とのずれ 8m・真ん中とのずれ 25m まで）
+        const quayHere = (b, prev) => { const sa = shoreAt(b); return sa !== null && Math.abs(sa - prev) <= 8 && Math.abs(sa - s0) <= 25 && depthAt(sa - 10, b) < 3 ? sa : null; };
+        let bMin = PLb, bMax = PLb;
+        for (let b = PLb + 5, pr = s0; b <= PLb + 1200; b += 5) { const q = quayHere(b, pr); if (q === null) break; bMax = b; pr = q; }
+        for (let b = PLb - 5, pr = s0; b >= PLb - 1200; b -= 5) { const q = quayHere(b, pr); if (q === null) break; bMin = b; pr = q; }
+        // 船は岸壁の端から少しはみ出してもよい（両端それぞれ 船の長さの 1 割・30m まで）
+        const ovh = Math.min(30, D.L * 0.1);
+        // 短いと出たら、測り方をゆるめてもう一度（ニューヨークの 62番埠頭・海軍工廠などで、本当は 300m ある岸壁を
+        // 100〜180m と測っていた）：
+        //  ・地図の設定の向きが本物の岸壁と 20° 以上ずれていることがある：向きを合わせる回数・角度を広げる
+        //  ・岸壁が少し斜めだと、地形の 10m の升目で岸の線が 10m ずつ段になる：「直前の数十 m の線を延ばした所」
+        //    からのずれ 12m までを続いているとみなし、升目 1〜2 つの切れ目（係船柱の台など）も飛ばす
+        if (bMax - bMin + 2 * ovh < D.L) {
+            const S1 = S, Q1 = Q;
+            align(8, 0.3, true);
+            const s1 = shoreAt(PLb);
+            if (s1 !== null) {
+                const walk = (dir) => {
+                    const P = [[PLb, s1]]; let last = PLb, miss = 0;
+                    for (let b = PLb + 5 * dir; Math.abs(b - PLb) <= 1200; b += 5 * dir) {
+                        const n = Math.min(P.length, 16);
+                        let pred = P[P.length - 1][1];
+                        if (n >= 4) {
+                            let sb = 0, sa = 0, sbb = 0, sab = 0;
+                            for (let i = P.length - n; i < P.length; i++) { const [x, y] = P[i]; sb += x; sa += y; sbb += x * x; sab += x * y; }
+                            const m = (n * sab - sb * sa) / ((n * sbb - sb * sb) || 1);
+                            pred = m * b + (sa - m * sb) / n;
+                        }
+                        const a = shoreAt(b);
+                        if (a !== null && Math.abs(a - pred) <= 12 && depthAt(a - 10, b) < 3) { P.push([b, a]); last = b; miss = 0; }
+                        else if (++miss > 2) break;
+                    }
+                    return last;
+                };
+                const hi = walk(1), lo = walk(-1);
+                if (hi - lo > bMax - bMin) { bMax = hi; bMin = lo; s0 = s1; }
+                else { S = S1; Q = Q1; }
+            } else { S = S1; Q = Q1; }
+        }
+        quayExt = [bMin, bMax];
+        if (bMax - bMin + 2 * ovh < D.L) return { ok: false, why: `${port.name}の岸壁（${Math.round(bMax - bMin)}m）は船（${Math.round(D.L)}m）より短いので付けられません` };
+        // 船を置く所：設定の真ん中に近い所で、岸壁に収まる所
+        bCq = Math.max(bMin - ovh + D.HL, Math.min(bMax + ovh - D.HL, PLb));
+        let worst = -Infinity;
+        for (let b = bCq - D.HL; b <= bCq + D.HL + 0.1; b += 15) {
+            const found = shoreAt(b);
+            if (found === null) return { ok: false, why: `${port.name}の岸壁の前は、この船（喫水 ${draft.toFixed(1)}m）には浅すぎます` };
+            worst = Math.max(worst, found);
+        }
+        aQ = worst; aB = aQ + D.hw + 2.5;
+        // 岸壁に寄せる所：上の aQ（喫水より深くなり始める所）から測ると、岸壁の前の斜面の分（5〜10m）
+        // 離れすぎていた。岸壁（陸の縁）から、船の外形の半幅＋防舷材 1.5m の所を基準にする。
+        // 地形は 10m の升目なので陸の縁は階段状にでこぼこ（±4m ほど）している。見えている岸壁は滑らかな線なので、
+        // 縁の位置を直線に合わせ、その 8 割の点が内側に入る線を岸壁とする（いちばん出っ張った段に合わせない）。
+        // そのうえで、船底の真ん中に喫水＋0.3m、舷（丸い船底）に喫水の 7 割＋0.3m の深さがある所まで（座礁の判定と同じ見方）
+        // 縁は、沖へ続く深い所の始まり（shoreAt）から岸の方へ戻って、最初に陸（桟橋）に当たる所。
+        // 陸の側から「最初の水際」を探すと、リヴァプールのクルーズ・ターミナルのように浮き桟橋が岸から
+        // 離れている所では、桟橋の裏のすき間の岸を縁と取り違え、船を岸と桟橋の間に置いてしまっていた。
+        // （陸が 8m も続かない小さな点（係船柱の台など、升目 1 つ分）は縁にしない）
+        {
+            let hwWl = 0; for (let k = -10; k <= 10; k++) hwWl = Math.max(hwWl, worldHullAt(k / 10 * D.HL / (physics.scale || 1)).hw);
+            const W = [];
+            for (let b = bCq - D.HL; b <= bCq + D.HL + 0.1; b += 5) {
+                const s = shoreAt(b);
+                if (s === null) continue;
+                for (let a = s; a >= s - 60; a -= 0.5) if (depthAt(a - 0.5, b) < -0.3 && depthAt(a - 4, b) < -0.3 && depthAt(a - 8, b) < -0.3) { W.push([b, a]); break; }
+            }
+            if (W.length >= 8) {
+                let n = W.length, sb = 0, sa = 0, sbb = 0, sab = 0;
+                for (const [b, a] of W) { sb += b; sa += a; sbb += b * b; sab += a * b; }
+                const m = (n * sab - sb * sa) / ((n * sbb - sb * sb) || 1), c = (sa - m * sb) / n;
+                const res = W.map(([b, a]) => a - (c + m * b)).sort((x, y) => x - y);
+                const off = res[Math.min(res.length - 1, Math.floor(res.length * 0.8))];
+                let aNeed = -Infinity, ok = true;
+                for (let b = bCq - D.HL; b <= bCq + D.HL + 0.1 && ok; b += 10) {
+                    const wall = c + m * b + off;
+                    let need = null;
+                    for (let a = wall + D.hw + 1.5; a <= aB; a += 0.5) {
+                        if (depthAt(a, b) >= draft + 0.3 && depthAt(a - hwWl - 0.4, b) >= draft * 0.7 + 0.3) { need = a; break; }
+                    }
+                    if (need === null) { ok = false; break; }
+                    aNeed = Math.max(aNeed, need);
+                }
+                if (ok && Number.isFinite(aNeed)) aB = Math.min(aB, aNeed);
+            }
+        }
+    }
+    // 回す所：船首が岸壁（a＝6）に、船尾が沖の防波堤（44-world-terrain.js：岸から basin×0.95×0.8 の所）に
+    // 届かない所。回っている間は船の端が半径 HL の円を描く
+    const outerWall = port.type !== 'cargo' && !port.real ? S.basin * 0.95 * 0.8 - 8 : S.basin - 40;
+    const lo = 6 + 12 + D.HL, hi = outerWall - 15 - D.HL;
+    if (lo > hi) return { ok: false, why: `${port.name}の泊地（防波堤まで ${Math.round(outerWall)}m）は、この船（${Math.round(D.L)}m）を回すには狭すぎます` };
+    const aE = Math.max(lo, Math.min(hi, aB + 3 * D.B + 60));
+    // 岸沿いの位置：空いている区間の真ん中。回るときの円（半径 HL）が桟橋の軍艦や防波堤に掛からないように
+    let bLo = PL.free[0] + D.HL + 10, bHi = PL.free[1] - D.HL - 10;
+    if (PL.keepOut) bLo = Math.max(bLo, PL.keepOut[1] + D.HL + 15);
+    if (!port.real && port.type !== 'cargo') bHi = Math.min(bHi, S.quayLen / 2 + 40 - 8 - D.HL - 15);   // 防波堤の腕
+    if (quayExt) { bLo = bHi = bCq; }                 // 作り込んだ港：測った岸壁の上の位置
+    if (bLo > bHi) return { ok: false, why: `${port.name}には、この船（${Math.round(D.L)}m）を回して横付けできる広さがありません` };
+    const bC = Math.max(bLo, Math.min(bHi, (PL.free[0] + PL.free[1]) / 2));
+    // 岸壁と平行な 2 つの向きのうち、今の向きに近い方
+    const h1 = Math.atan2(S.sz, -S.sx) / _haRad, h2 = h1 + 180;
+    const cur = prefHeading !== undefined ? prefHeading : physics.heading;
+    // 接舷する舷：設定（harborAuto.sidePref）で左舷・右舷を決められる。自動なら今の向きに近い方
+    //（h1 では左舷が岸壁側）
+    const sp = asBerthed ? 'auto' : harborAuto.sidePref;
+    const useH1 = sp === 'port' ? true : sp === 'starboard' ? false : Math.abs(_haWrap(h1 - cur)) <= Math.abs(_haWrap(h2 - cur));
+    const hB = useH1 ? h1 : h2;
+    const open = useH1 ? -1 : 1;              // 沖側の舷（船の中の +x ＝ 左舷 なら +1）。h1 では左舷が岸壁側
+    const pB = Q.toW(aB, bC), pE = Q.toW(aE, bC);
+    // 港口の方の向き：現実世界の港は、掘った航路の最初の区間の向き（岸壁からまっすぐ沖とは限らない）
+    //（回す所 o から見て、航路の点のうち o にいちばん近い点から先へたどり、250m 以上離れた最初の点の方。
+    //  以前は航路の最初の 2 点の向きにしていたが、その 2 点が 20m ほどしか離れていない所（オーシャン・ドック）では
+    //  実際の航路と関係ない向きになり、ほぼ 180° 回してから自動航行が向きを戻していた）
+    const fw = port.real && port.fairway ? port.fairway.pts : null;
+    const outToward = (o, fallback) => {
+        if (!fw || fw.length < 2) return { h: fallback, pt: null };
+        const L = fw.map(q => worldUnitToLocal(worldLatLonToUnit(q.lat, q.lon)));
+        let kN = 1, dN = Infinity;
+        for (let k = 1; k < L.length; k++) { const d = Math.hypot(L[k].x - o.x, L[k].z - o.z); if (d < dN) { dN = d; kN = k; } }
+        for (let k = kN; k < L.length; k++) {
+            if (Number.isFinite(L[k].x) && Math.hypot(L[k].x - o.x, L[k].z - o.z) > 250) return { h: Math.atan2(L[k].x - o.x, L[k].z - o.z) / _haRad, pt: fw[k] };
+        }
+        return { h: fallback, pt: null };
+    };
+    const OUT = outToward(pE, Math.atan2(S.sx, S.sz) / _haRad);
+    const hOut = OUT.h;
+    // 回っている間に船体が通る円（回す所 Tq のまわり）の中が、どこも船の喫水より深いか
+    //（真ん中・船首尾の近く・端の外の 3 つの輪で、その所の喫水＋余裕）
+    const hpD = window.hullProfile, hlL = (hpD && hpD.ready) ? hpD.halfLen : 6;
+    const drMid = worldShipDraft(), drEnd = Math.max(worldHullAt(hlL * 0.85).d, worldHullAt(-hlL * 0.85).d);
+    const sweepOk = (Tq) => {
+        for (const [rr, need] of [[D.HL * 0.45, drMid + 1], [D.HL * 0.8, Math.max(drEnd, drMid * 0.9) + 1], [D.HL + 15, drEnd * 0.6]]) {
+            for (let k = 0; k < 36; k++) {
+                const a = k / 36 * Math.PI * 2;
+                if (worldSeabedAt(Tq.x + Math.sin(a) * rr, Tq.z + Math.cos(a) * rr) > -need) return false;
+            }
+        }
+        return true;
+    };
+    // 桟橋の間の岸壁（ニューヨークのハドソン川の埠頭など）：岸壁の前（aE）で回すと、回っている船体が隣の桟橋や
+    // 浅い所に掛かる。そのときはドックと同じく、桟橋の先の外（川の上）で岸壁と平行に回してから、桟橋の間を
+    // まっすぐ入り（出るときはまっすぐ出て）、岸壁の前で横へ寄せる
+    const slip = !port.dock && port.real && quayExt && typeof worldSeabedAt === 'function' && !sweepOk(pE)
+        ? _haSlipPlan(port, S, Q, D, aB, aE, bC, drMid, sweepOk) : null;
+    // ドックの中の岸壁（43-world.js の dock）：ドックの外（入口の外の真ん中の線の上）で向きを合わせ、
+    // 船首からまっすぐ入って、岸壁の前（ドックの真ん中の線の上）で止め、横へ寄せる。出るときは後ろへまっすぐ出る
+    let DK = null;                                    // ドック（または桟橋の間）へまっすぐ入る計画
+    if (port.dock) {
+        const E = worldUnitToLocal(worldLatLonToUnit(port.dock.entrance[0], port.dock.entrance[1]));
+        const ib = port.dock.inBearing * _haRad, ux = -Math.sin(ib), uz = Math.cos(ib);   // 入っていく向き（物理の面：東は −x）
+        const hDock = Math.atan2(ux, uz) / _haRad;                                       // 船首から入る向き
+        const qE = Q.toQ(E.x, E.z);
+        const aMid = Math.max(aB + 4, qE.a);                                             // ドックの真ん中の線（岸壁から）
+        if (aMid - aB < 10) return { ok: false, why: `${port.name}のドックは、この船（幅${Math.round(D.B)}m）には狭すぎます` };
+        let out = port.dock.turnOut || Math.max(D.HL + 90, 200);
+        let T = { x: E.x - ux * out, z: E.z - uz * out };
+        // ドックの前（川など）で、この船を回せる広さがあるか（回す所のまわり、船の半分の長さ＋余裕の円が水の上か）
+        // （角の 1〜2 点が浅いくらいは、回しながら少しずらして避けられる。3 点以上かかれば無理）
+        //（船の両端は喫水が浅いので、喫水の 6 割の深さで見る。タグで回すので、回す所は船の真ん中より少し寄せられる：半径は船の半分の 9 割＋余裕）
+        const ringOk = (rr, Tq) => {
+            Tq = Tq || T;
+            let bad = 0;
+            for (let k = 0; k < 24; k++) {
+                const a = k / 24 * Math.PI * 2;
+                if (worldSeabedAt(Tq.x + Math.sin(a) * rr, Tq.z + Math.cos(a) * rr) > -(worldShipDraft() * 0.6)) bad++;
+            }
+            return bad <= 2;
+        };
+        const rNeed = D.HL * 0.9 + 8;
+        // 回す所：回っている間に船体が通る円の中が、どこも船の喫水より深い所（sweepOk）。ドックの真ん中の線の上だけでなく、
+        // 横へずれた所も探す（入口に近い順）。横へずれた所で回したときは、入口の外の真ん中の線の上（align）へ
+        // 寄せてから、まっすぐ入る・出る。見つからなければ、前のゆるい決め方（喫水の 6 割・2 点まで浅くてよい）
+        let strict = false;
+        if (typeof worldSeabedAt === 'function') {
+            const px = uz, pz = -ux;                       // ドックの真ん中の線に直角な向き
+            let best = null;
+            for (let o = 150; o <= 900; o += 25) for (const lat of [0, 50, -50, 100, -100, 150, -150, 200, -200, 250, -250]) {
+                const cost = o + Math.abs(lat) * 0.7;
+                if (best && cost >= best.cost) continue;
+                const Tq = { x: E.x - ux * o + px * lat, z: E.z - uz * o + pz * lat };
+                if (sweepOk(Tq)) best = { cost, o, Tq };
+            }
+            if (best) { out = best.o; T = best.Tq; strict = true; }
+            else if (!ringOk(rNeed)) {
+                for (let o = 150; o <= 700; o += 25) {
+                    const Tq = { x: E.x - ux * o, z: E.z - uz * o };
+                    if (ringOk(rNeed, Tq)) { out = o; T = Tq; break; }
+                }
+            }
+        }
+        // 入口の外の、真ん中の線の上（船がドックの外に出きる所）
+        const aOut = Math.min(out, D.HL + 40);
+        const align = { x: E.x - ux * aOut, z: E.z - uz * aOut };
+        if (typeof worldSeabedAt === 'function' && !strict && !ringOk(rNeed)) {
+            let rMax = 0;
+            for (let rr = 20; rr < rNeed; rr += 10) { if (!ringOk(rr)) break; rMax = rr; }
+            return { ok: false, why: `${port.name}のドックの前は、この船（${Math.round(D.L)}m）を回すには狭すぎます（回せるのは長さおよそ ${Math.max(0, Math.round(2 * (rMax - 8) / 0.9 / 10) * 10)}m までの船）` };
+        }
+        DK = { hDock, aMid, T, align };
+    } else if (slip) {
+        // 桟橋の間：岸壁と平行に、桟橋の先の外（b ＝ bT）から岸壁の前（bC）へ入る。+b の向きは (S.sz, −S.sx)
+        const ux = -slip.sg * S.sz, uz = slip.sg * S.sx;
+        DK = { hDock: Math.atan2(ux, uz) / _haRad, aMid: slip.aM, T: slip.T, align: Q.toW(slip.aM, slip.bT) };
+    }
+    if (DK) {
+        const { hDock, aMid, T, align } = DK;
+        const pBd = Q.toW(aB, bC), pCd = Q.toW(aMid, bC);
+        // 沖側の舷（船の中の +x ＝ 左舷 が、岸壁から離れた方を向いているなら +1）。船首から入ったとき
+        const hr = hDock * _haRad, openBow = (Math.cos(hr) * S.sx - Math.sin(hr) * S.sz) > 0 ? 1 : -1;
+        // 岸壁に付ける舷の設定（左舷付け＝沖側は右舷 −1）が船首から入ったときと逆なら、ドックの外の回す所で
+        // 船尾をドックへ向けて、後ろへまっすぐ入る（ドックの中では回さない）。
+        // 「自動」と、もう横付けしている船の計画（離岸）は、今の向きに近い方
+        const sp = asBerthed ? 'auto' : harborAuto.sidePref;
+        const cur = prefHeading !== undefined ? prefHeading : physics.heading;
+        const sternIn = sp === 'port' ? openBow !== -1 : sp === 'starboard' ? openBow !== 1
+            : (asBerthed && Math.abs(_haWrap(cur - hDock)) > 90);
+        const hBerth = sternIn ? hDock + 180 : hDock, open = sternIn ? -openBow : openBow;
+        const OUTD = outToward(T, hDock + 180);
+        return {
+            ok: true, port, S, aB, aE: aMid, bC, open, dock: true, slip: !!slip, aQ, quayExt, sternIn,
+            berth: { x: pBd.x, z: pBd.z, h: hBerth },
+            mid: { x: pCd.x, z: pCd.z },                 // ドックの真ん中の線の上の、岸壁の前
+            turn: { x: T.x, z: T.z },                    // ドックの外で向きを合わせる所
+            align: Math.hypot(T.x - align.x, T.z - align.z) > 15 ? align : null,   // 回す所が真ん中の線から外れていれば、ここへ寄せてから入る
+            hIn: hBerth, hOut: OUTD.h, outPt: OUTD.pt,
+        };
+    }
+    return {
+        ok: true, port, S, aB, aE, bC, open, aQ, quayExt,
+        berth: { x: pB.x, z: pB.z, h: hB },
+        turn: { x: pE.x, z: pE.z },
+        hIn: Math.atan2(-S.sx, -S.sz) / _haRad,     // 岸壁の方を向く
+        hOut, outPt: OUT.pt,                         // 港口の方を向く（outPt：その向きの航路の点）
+    };
+}
+window.harborBerthPlan = harborBerthPlan;
+
+// 今、岸壁に横付けしているか（離岸できるか）
+function harborBerthedAt() {
+    if (!window.world || world.mode !== 'world') return null;
+    const ll = worldShipLatLon();
+    // 近くの港（同じ港の別の埠頭も）を近い順に調べ、その岸壁に横付けしている所を探す
+    const cands = (typeof worldBuildPorts === 'function' ? worldBuildPorts() : [])
+        .map(p => ({ port: p, dist: worldDistance(ll.lat, ll.lon, p.lat, p.lon) })).filter(c => c.dist < 4000).sort((a, b) => a.dist - b.dist);
+    for (const np of cands) {
+        const plan = harborBerthPlan(np.port);
+        if (!plan.ok) continue;
+        const Q = _haQ(plan.S), q = Q.toQ(physics.cgWorldX, physics.cgWorldZ);
+        const parallel = Math.min(Math.abs(_haWrap(physics.heading - plan.berth.h)), Math.abs(_haWrap(physics.heading - plan.berth.h - 180)));
+        const ext = plan.quayExt || [-plan.S.quayLen / 2, plan.S.quayLen / 2];
+        if (q.a < plan.aB + 25 && q.a > 0 && q.b > ext[0] - 20 && q.b < ext[1] + 20 && parallel < 25) {
+            // 今の向きで計画し直す（舷の設定ではなく、今付けている舷のまま）
+            return harborBerthPlan(np.port, physics.heading, true);
+        }
+    }
+    return null;
+}
+window.harborBerthedAt = harborBerthedAt;
+
+// ── タグの数と持ち場 ──
+// 船の長さで：小さい船 2 隻、大きい船 4 隻、とても大きい船 6 隻
+function harborTugCount() { const L = _haDims().L; return L < 120 ? 2 : L < 230 ? 4 : 6; }
+window.harborTugCount = harborTugCount;
+// 持ち場の並び：沖側（open）の船首・船尾、4 隻なら反対舷の船首・船尾も、6 隻なら両舷の中央も
+function _haStationKeys(open, n) {
+    const all = tugStations();
+    const hp = window.hullProfile, hl = (hp && hp.ready) ? hp.halfLen : 6;
+    const used = new Set();
+    const pick = (side, where) => {
+        const st = all.filter(s => s.side === side && !used.has(s.key));
+        let q;
+        if (where === 'fwd') q = st.filter(s => s.z > 0.3 * hl).sort((a, b) => b.z - a.z)[0] || st.find(s => s.key === `d0.75:${side}`);
+        else if (where === 'aft') q = st.filter(s => s.z < -0.3 * hl).sort((a, b) => a.z - b.z)[0] || st.find(s => s.key === `d-0.75:${side}`);
+        else q = st.filter(s => Math.abs(s.z) < 0.3 * hl).sort((a, b) => Math.abs(a.z) - Math.abs(b.z))[0] || st.find(s => s.key === `d0:${side}`);
+        if (q) used.add(q.key);
+        return q ? q.key : null;
+    };
+    const order = [[open, 'fwd'], [open, 'aft'], [-open, 'fwd'], [-open, 'aft'], [open, 'mid'], [-open, 'mid']].slice(0, Math.max(1, n));
+    return order.map(([sd, w]) => pick(sd, w)).filter(Boolean);
+}
+function _haSide(t) { const s = t && tugStations().find(q => q.key === t.station); return s && s.side ? s.side : 0; }
+// 付いているタグを持ち場（keys）に割り当てる（同じ舷の近い持ち場へ）。余ったタグは帰し、足りなければ呼ぶ
+function _haTakeTugs(keys) {
+    const have = (window.tugs || []).filter(t => t.state !== 'leaving');
+    const st = tugStations(), S = (k) => st.find(x => x.key === k);
+    const out = keys.map(() => null);
+    keys.forEach((k, i) => { const t = have.find(q => q.station === k && !out.includes(q)); if (t) out[i] = t; });
+    for (const t of have) {
+        if (out.includes(t)) continue;
+        const ts = S(t.station);
+        let bi = -1, bd = Infinity;
+        keys.forEach((k, i) => {
+            if (out[i]) return;
+            const s2 = S(k);
+            const d = ts && s2 ? Math.abs(ts.z - s2.z) + (ts.side !== s2.side ? 1e4 : 0) : 0;
+            if (d < bd) { bd = d; bi = i; }
+        });
+        if (bi < 0) { tugSet(t.id, 'release'); continue; }
+        out[bi] = t; if (t.station !== keys[bi]) { t.station = keys[bi]; t.engaged = false; if (t.state === 'on') t.state = 'coming'; }
+    }
+    for (let i = 0; i < keys.length; i++) if (!out[i]) out[i] = tugCall(keys[i]);
+    for (const t of out) if (t) { t.action = 'standby'; t.autoPower = 0; t.dir = 'side'; t.switchT = 0; t.awaySide = false; }
+    if (typeof renderTugPanel === 'function') renderTugPanel();
+    return out.filter(Boolean);
+}
+
+// ── タグがそろったか：全部付いた、または 2 隻以上が付いていて、残りは近づけない（すき間が狭い等）か
+//    TUG_START_WAIT 秒待ったとき。付いていないタグは近づき続け、付いたら力の割り振りに加わる ──
+const TUG_START_WAIT = 45;
+function _haReadyState(list, waitT) {
+    const all = list.length, on = list.filter(t => t.state === 'on').length;
+    const stuck = list.filter(t => t.state !== 'on' && t.stuck).length;
+    const needMin = Math.min(2, all);
+    const ok = all > 0 && (on === all || (on >= needMin && (on + stuck === all || waitT > TUG_START_WAIT)));
+    return { ok, on, all, stuck, partial: ok && on < all };
+}
+// 付いているタグだけで作業する。一度持ち場に着いたタグ（engaged）は、押す⇄引くの付き直しで
+// 少し離れている間も作業中に数える（そうしないと、引きに出たとたん待機に戻されてしまう）
+const _haWorking = (t) => t.state === 'on' || t.switchT > 0 || !!t.engaged;
+
+// ── 狭い水路・浅い水道の付き添い（サウサンプトンのように、タグが横と回頭を助ける）──
+// 自動航行（49-autopilot.js）が、狭い区間の手前で呼び、通り抜けたら帰す
+const tugEscort = { active: false, ids: [], open: 1, held: null, t: 0 };
+window.tugEscort = tugEscort;
+// 水の広い方の舷に付く
+function _teOpenSide() {
+    if (typeof worldSeabedAt !== 'function') return 1;
+    const D = _haDims(), h = physics.heading * _haRad, fx = Math.sin(h), fz = Math.cos(h), sx = Math.cos(h), sz = -Math.sin(h);
+    const room = (sg) => {
+        let sum = 0;
+        for (const a of [-0.7, 0, 0.7]) for (const d of [30, 70, 130]) {
+            const x = physics.cgWorldX + fx * a * D.HL + sx * sg * (D.hw + d), z = physics.cgWorldZ + fz * a * D.HL + sz * sg * (D.hw + d);
+            sum += Math.min(30, Math.max(-10, -worldSeabedAt(x, z)));
+        }
+        return sum;
+    };
+    return room(1) >= room(-1) ? 1 : -1;
+}
+function tugEscortStart() {
+    if (tugEscort.active) return;
+    const open = _teOpenSide();
+    const T = _haTakeTugs(_haStationKeys(open, harborTugCount()));
+    Object.assign(tugEscort, { active: true, open, ids: T.map(t => t.id), held: null, t: 0, readyOnce: false, callD: 0 });
+    if (typeof renderAutopilotPanel === 'function') renderAutopilotPanel();
+}
+// keep：タグは帰さない（そのまま着岸に使う）
+function tugEscortStop(keep) {
+    tugEscort.manual = false;
+    const was = tugEscort.active || tugEscort.held;
+    const ids = tugEscort.active ? tugEscort.ids : tugEscort.held ? tugEscort.held.ids : [];
+    tugEscort.active = false; tugEscort.held = null; tugEscort.readyOnce = false;
+    if (!was) return;
+    for (const id of ids) {
+        const t = _haTug(id);
+        if (!t) continue;
+        delete t.autoPower; delete t.awaySide;
+        if (!keep) tugSet(t.id, 'release');
+    }
+}
+function _teTugs() { return tugEscort.ids.map(_haTug).filter(Boolean); }
+function tugEscortReady() { return _haReadyState(_teTugs(), tugEscort.t || 0).ok; }
+function tugEscortAlive() { return _teTugs().length > 0; }
+// eS：航路の線へ戻る横のずれ（＋x＝左舷の方へ m）、eYaw：向けたい向きとの差（度、heading の向き）
+function tugEscortAssist(eS, eYaw, dt) {
+    if (!tugEscort.active) return;
+    // 持ち場に付いているタグだけで（付き直している間のタグは力を出さない）
+    const all = _teTugs(), use = all.filter(_haWorking);
+    for (const t of all) if (!use.includes(t)) t.autoPower = 0;
+    if (!use.length) return;
+    const D = _haDims();
+    const massKg = Math.max(1e5, (physics.mass || 1) * 1e6);
+    const vS = _tugShip.vSway, r = _tugShip.yawRate + (physics.turnRate || 0) * _haRad;
+    const vSd = Math.abs(eS) < 2 ? 0 : Math.max(-0.4, Math.min(0.4, 0.015 * eS));
+    const rd = Math.max(-0.006, Math.min(0.006, 0.03 * eYaw * _haRad));
+    const Fs = massKg * 1.8 * 0.3 * (vSd - vS);
+    const Mz = massKg * 1.5 * D.L * D.L / 12 * 0.3 * (rd - r);
+    _haAllocate(Fs, Mz, use, dt);
+}
+// 手で頼む付き添い（自動では来ない水路でも）：自動航行中は、頼んでいる間は狭い水路と同じく付き添われて微速で進む
+function tugEscortManual(on) {
+    if (on) {
+        if (!(window.world && world.mode === 'world')) return;
+        tugEscortStart();
+        tugEscort.manual = true;
+    } else tugEscortStop();
+    if (typeof renderTugPanel === 'function') renderTugPanel();
+    if (typeof renderAutopilotPanel === 'function') renderAutopilotPanel();
+}
+Object.assign(window, { tugEscortStart, tugEscortStop, tugEscortReady, tugEscortAlive, tugEscortAssist, tugEscortManual });
+
+// ── 始める・やめる ──
+function _haMsg(s) { harborAuto.msg = s; if (typeof renderTugPanel === 'function') renderTugPanel(); if (typeof renderAutopilotPanel === 'function') renderAutopilotPanel(); }
+function harborAutoStart(mode, plan, then) {
+    if (!plan || !plan.ok) { _haMsg(plan ? plan.why : '港の近くではありません'); return false; }
+    // 潜水艦（54-submarine.js）は潜ったままでは離着岸しない
+    if (window.sub && typeof isSubmarine === 'function' && isSubmarine() && (sub.depth > 1 || sub.mode === 'dive')) { _haMsg('潜航中は離着岸できません。浮上してからにしてください'); return false; }
+    if (typeof autopilot !== 'undefined' && autopilot.active) autopilotStop('', true);
+    if (typeof autopilot !== 'undefined' && autopilot.chase && typeof apChaseStop === 'function') apChaseStop('', 'keep');
+    Object.assign(harborAuto, { mode, plan, then: then || null, phase: 'tugs', t: 0, phaseT: 0, lastOrderT: -99, tugIds: [], resume: null, holdH: null, turning: false, alignDone: false, offA: undefined, w1: null });
+    _haClearLines();
+    // タグ：もう付いているタグ（狭い水路で付き添ってきたタグなど）はそのまま使い、足りなければ呼ぶ
+    const T = _haTakeTugs(_haStationKeys(plan.open, harborTugCount()));
+    harborAuto.tugIds = T.map(t => t.id);
+    tugEscort.active = false; tugEscort.held = null; tugEscort.manual = false;
+    _haMsg(mode === 'berth' ? `${plan.port.name}：タグを待っています（着岸）` : `${plan.port.name}：タグを待っています（離岸）`);
+    return true;
+}
+function harborAutoStop(msg) {
+    // 途中で止めたときは「再開」できるように
+    if (harborAuto.mode && msg) harborAuto.resume = { mode: harborAuto.mode, port: harborAuto.plan.port, then: harborAuto.then };
+    harborAuto.mode = null; harborAuto.phase = '';
+    for (const t of (window.tugs || [])) { delete t.autoPower; delete t.awaySide; }
+    if (typeof _apOrder === 'function') _apOrder(0);
+    if (typeof autopilot !== 'undefined') autopilot.pendingOrder = undefined;
+    _haMsg(msg || '');
+}
+function harborAutoBerthNow() {
+    const ll = worldShipLatLon(), np = worldNearestPort(ll.lat, ll.lon);
+    if (!np || np.dist > 6000) { _haMsg('港の近くではありません'); return; }
+    harborAutoStart('berth', harborBerthPlan(np.port));
+}
+function harborAutoDepartNow(then) {
+    const plan = harborBerthedAt();
+    if (!plan) { _haMsg('岸壁に横付けしていません'); return false; }
+    harborDepartHeading(plan, then);
+    return harborAutoStart('depart', plan, then);
+}
+// 回す向き（plan.hOut を直す）：自動航行が最初に向かう点の方。同じ作り込んだ港の中の別の埠頭へ行くときは、港の出口ではなく、
+// そちらへ向かう港内の水路の最初の点。回す所からその点へまっすぐ行くと浅い所にかかるときは、
+// 自動航行と同じく港の中の深い所をたどる道すじの、250m 以上先の点の方（タグなしの離岸も：49-autopilot.js）
+function harborDepartHeading(plan, then) {
+    if (typeof _rwDetailOf === 'function') {
+        const D = _rwDetailOf(plan.port.lat, plan.port.lon);
+        let tgt = plan.outPt || null;
+        if (then && then.real && then.fairway && then.fairway.pts.length >= 2 && D && D === _rwDetailOf(then.lat, then.lon)) tgt = then.fairway.pts[1];
+        if (D && tgt) {
+            const Q = _haQ(plan.S), o = plan.dock ? plan.turn : Q.toW(plan.aE, plan.bC || 0);
+            const oll = worldUnitToLatLon(worldLocalToUnit(o.x, o.z));
+            const safe = typeof _apLineSafe === 'function' && typeof apMargins === 'function'
+                && _apLineSafe(oll, tgt, apMargins().needTug, typeof _apShipHalfBeam === 'function' ? _apShipHalfBeam() : _haDims().hw);
+            let pts = [tgt];
+            if (!safe) { const r = _rwDetailRoute(D, oll, { lat: tgt.lat, lon: tgt.lon }); if (r) pts = [...r.pts, tgt]; }
+            const q = pts.find(p => { const L = worldUnitToLocal(worldLatLonToUnit(p.lat, p.lon)); return Math.hypot(L.x - o.x, L.z - o.z) > 250; }) || pts[pts.length - 1];
+            const L = worldUnitToLocal(worldLatLonToUnit(q.lat, q.lon));
+            if (Math.hypot(L.x - o.x, L.z - o.z) > 30) plan.hOut = Math.atan2(L.x - o.x, L.z - o.z) / _haRad;
+        }
+    }
+    return plan.hOut;
+}
+window.harborDepartHeading = harborDepartHeading;
+function harborAutoResume() {
+    const r = harborAuto.resume;
+    if (!r) return;
+    harborAuto.resume = null;
+    if (r.mode === 'berth') harborAutoStart('berth', harborBerthPlan(r.port));
+    else if (!harborAutoDepartNow(r.then)) { if (r.then && typeof autopilotStart === 'function') autopilotStart(r.then); }
+}
+Object.assign(window, { harborAutoStart, harborAutoStop, harborAutoBerthNow, harborAutoDepartNow, harborAutoResume });
+
+// 横の力 Fs（＋x＝左舷へ）と回す力 Mz を、付いているタグ（何隻でも・両舷でも）に割り振る。
+// 各タグの力 f = a + b·z（z：船首尾方向の位置）で、合計が Fs、モーメントが Mz になるうち、いちばん小さい力で。
+// 押す⇄引く を付け直さずに済むタグに、なるべく受け持たせる（付け直しは少し待ってから。その間は力を出さない）
+// 引けるか：索を取れる金物があり、（ドックなど狭い所では）横へ引く所（金物から 45m 先）が水の上か
+function _haCanPull(s2, st, narrow) {
+    const hs = s2 && tugPullHook(s2, st);
+    if (!hs) return false;
+    if (!s2.side) return true;
+    const C = _tugShipCtx(), hk = _localToWorldFlat(hs.x, hs.y, hs.z), sd = s2.side;
+    // 横へ引く所が他の船にかかる（向かいに着いている船との間が狭い）：いちばん短い索でも入れなければ引かない
+    //（引こうとしたタグが 2 隻の船の間に挟まれていた）
+    const rS = 8 + TUG_LEN / 2;
+    if (typeof _tugInTraffic === 'function' && (_tugInTraffic(hk.x + C.F.sx * sd * rS, hk.z + C.F.sz * sd * rS, TUG_BEAM / 2 + 2)
+        || _tugInTraffic(hk.x + C.F.sx * sd * (rS + TUG_LEN / 2), hk.z + C.F.sz * sd * (rS + TUG_LEN / 2), 3))) return false;
+    if (!narrow) return true;
+    const r = 45 + TUG_LEN / 2 + 6;
+    return !_tugStaticBlocked(hk.x + C.F.sx * sd * r, hk.z + C.F.sz * sd * r);
+}
+// 離岸で岸壁から離す所（岸壁からの距離 a）：ドックの真ん中の線（aMax）までだが、沖側に他の船（向かいの岸壁に
+// 着いている船など）がいれば、その船との間に、タグが短い索で引ける幅（45m ほど）を残す所まで。
+// 少なくとも岸壁から 8m は離す（狭ければ、それ以上は寄せない）
+function _haDepartOffA(P, aMax) {
+    if (typeof trafficHulls !== 'function') return aMax;
+    const Q = _haQ(P.S), q = Q.toQ(physics.cgWorldX, physics.cgWorldZ), D = _haDims();
+    let aO = Infinity;                                       // （a は岸壁から離れる向きに増える）
+    for (const H of trafficHulls()) {
+        for (let i = -12; i <= 12; i++) {
+            const a = i / 12 * H.HL * 0.98, w = H.hw(a);
+            for (const sg of [-1, 1]) {
+                const r = Q.toQ(H.x + H.fx * a + H.sx * sg * w, H.z + H.fz * a + H.sz * sg * w);
+                if (Math.abs(r.b - q.b) > D.HL + 20 || r.a < q.a) continue;
+                aO = Math.min(aO, r.a);
+            }
+        }
+    }
+    if (!Number.isFinite(aO)) return aMax;
+    const gap = 8 + TUG_LEN + 6;                             // 短い索＋タグの長さ＋余裕
+    return Math.max(q.a + 8, Math.min(aMax, aO - D.hw - gap));
+}
+function _haAllocate(Fs, Mz, list, dt, noPull) {
+    const st = tugStations(), sc = physics.scale || 1;
+    const T = list.filter(Boolean).map(t => { const s2 = st.find(q => q.key === t.station); return { t, z: s2 ? s2.z * sc : 0, side: s2 && s2.side ? s2.side : 1, canPull: _haCanPull(s2, st, noPull) }; });
+    if (!T.length) return;
+    // 力 F・モーメント M を、重み w のタグに割り振る（いちばん小さい力で）。タグが前後の 1 か所にしかいない（1 隻だけ・
+    // 同じ所に並んでいる）ときは、横へ押すと必ず回ってしまうので、回したい向きと同じになるときだけ、小さい方の力で
+    //（以前は横の力だけを出し、84番埠頭の桟橋の間で、船首のタグが座礁して帰ったあと、残った 1 隻だけで押して 18° 回っていた）
+    const solveFM = (F, M, w) => {
+        let S0 = 0, S1 = 0, S2 = 0;
+        T.forEach((q, i) => { S0 += w[i]; S1 += w[i] * q.z; S2 += w[i] * q.z * q.z; });
+        const det = S0 * S2 - S1 * S1;
+        if (!(S0 > 0)) return T.map(() => 0);
+        if (Math.abs(det) < 1e-6 * Math.max(1, S0 * S2)) {
+            const zc = S1 / S0;
+            if (Math.abs(zc) < 0.1 * Math.max(10, Math.sqrt(S2 / S0)) || Math.abs(zc) < 5) return T.map((q, i) => w[i] * F / S0);
+            //（回したい向きと逆でも、回す力の要求が小さい間は 3 割まで押す：止まったままにならないように）
+            const fF = F, fM = M / zc, lo = 0.3 * Math.abs(fF);
+            const tot = Math.sign(fF) === Math.sign(fM) ? Math.sign(fF) * Math.min(Math.abs(fF), Math.max(Math.abs(fM), lo))
+                : Math.abs(fM) < lo ? fF * 0.3 * (1 - Math.abs(fM) / lo) : 0;
+            return T.map((q, i) => w[i] * tot / S0);
+        }
+        const a = (F * S2 - M * S1) / det, b = (S0 * M - S1 * F) / det;
+        return T.map((q, i) => w[i] * (a + b * q.z));
+    };
+    const solve = (w) => solveFM(Fs, Mz, w);
+    let f = solve(T.map(() => 1));
+    f = solve(T.map((q, i) => { const want = Math.sign(f[i]) === q.side ? 'pull' : 'push'; if (want === 'pull' && !q.canPull) return 0.02; return (q.t.action === 'standby' || q.t.action === want) ? 1 : 0.15; }));
+    // 索を取れる金物が近くに無いタグは引けない（押すだけ）
+    f = f.map((v, i) => (Math.sign(v) === T[i].side && !T[i].canPull) ? 0 : v);
+    // 引けないタグの分などで横の力が足りなければ、その向きに力を出せるタグ（押す側か、引ける側）で残りを分け合う
+    //（持ち場に着いていないタグがいるときも、着いているタグだけで動かせる。足す分は、回す力を変えないように前後で分ける。
+    //  前後の片方にしかいなければ、回ってしまうので足さない）
+    const deficit = Fs - f.reduce((a, v) => a + v, 0);
+    if (Math.abs(deficit) > Math.abs(Fs) * 0.25) {
+        const w2 = T.map((q, i) => (Math.sign(deficit) === q.side ? q.canPull : true) ? 1 : 0);
+        const add = solveFM(deficit, 0, w2);
+        f = f.map((v, i) => v + add[i]);
+    }
+    const Fmax = _tugPullN();
+    const big = Math.max(...f.map(Math.abs));
+    if (big > Fmax) f = f.map(v => v * Fmax / big);
+    T.forEach((q, i) => {
+        const t = q.t;
+        t.dir = 'side';
+        const p = Math.min(1, Math.abs(f[i]) / Fmax);
+        const wantAct = p < 0.03 ? t.action : (Math.sign(f[i]) === q.side ? 'pull' : 'push');
+        if (t.action === 'standby') t.action = wantAct === 'standby' ? 'push' : wantAct;
+        if (wantAct !== t.action) {
+            t.autoPower = 0;
+            t.switchT = (t.switchT || 0) + dt;
+            if (t.switchT > 4) { t.action = wantAct; t.switchT = 0; }
+        } else { t.switchT = 0; t.autoPower = p; }
+    });
+}
+
+// 前後に引くタグを1隻選んで力を決める（引けるのは索を取れる金物のあるタグだけ：47-tugboats.js の tugPullHook）
+function _haAxialTug(use, eA, vA, massKg) {
+    if (use.length < 4 || Math.abs(eA) > 150 || (Math.abs(eA) < 5 && Math.abs(vA) < 0.1) || Math.abs(vA) > 2) { harborAuto.axId = null; return null; }
+    // 目標へ向かう速さ（近いほどゆっくり）に合わせて、前へ引くか後ろへ引くか（行き過ぎそうなら逆へ引いて止める）
+    const vAd0 = Math.abs(eA) < 5 ? 0 : Math.sign(eA) * Math.min(0.6, 0.012 * Math.abs(eA));
+    const fwd = vAd0 - vA > 0, st = tugStations();
+    // 引く所（船首・船尾の先）が陸・浅い所にかかるとき（両舷とも回り込めないときも）は、前後には引かせず機関だけで寄せる
+    //（桟橋の間の奥へ入るとき、船首の先へ回ろうとしたタグが浅い所に乗り上げて帰ってしまい、横へ寄せるタグが足りなくなっていた）
+    {
+        const D = _haDims(), h = physics.heading * _haRad, sg = fwd ? 1 : -1;
+        const fx = Math.sin(h) * sg, fz = Math.cos(h) * sg, sx = Math.cos(h), sz = -Math.sin(h);
+        const bad = (a, s) => _tugStaticBlocked(physics.cgWorldX + fx * a + sx * s, physics.cgWorldZ + fz * a + sz * s);
+        const r0 = D.HL + 8 + TUG_LEN / 2;
+        if (bad(r0, 0) || bad(r0 + 20, 0) || (bad(D.HL + 5, D.hw + 15) && bad(D.HL + 5, -D.hw - 15))) { harborAuto.axId = null; return null; }
+    }
+    let best = use.find(t => t.id === harborAuto.axId && t.dir === (fwd ? 'fwd' : 'aft')) || null;
+    if (!best) {
+        let bz = -Infinity;
+        for (const t of use) {
+            const s2 = st.find(q => q.key === t.station);
+            if (!s2 || !tugPullHook(s2, st)) continue;
+            const z = fwd ? s2.z : -s2.z;
+            if (z > bz) { bz = z; best = t; }
+        }
+    }
+    if (!best) { harborAuto.axId = null; return null; }
+    harborAuto.axId = best.id;
+    const Fa = massKg * 0.514 * 0.25 * (vAd0 - vA);
+    best.action = 'pull'; best.dir = fwd ? 'fwd' : 'aft'; best.switchT = 0;
+    best.autoPower = Math.min(1, Math.abs(Fa) / _tugPullN());
+    return best;
+}
+// ── 目標の位置・向きへ動かす ──
+function _haTug(id) { return (window.tugs || []).find(t => t.id === id && t.state !== 'leaving'); }
+function _haTugs() { return (harborAuto.tugIds || []).map(_haTug).filter(Boolean); }
+function _haControl(target, dt, opt) {
+    const hp = window.hullProfile, D = _haDims();
+    const h = physics.heading * _haRad, fx = Math.sin(h), fz = Math.cos(h), sx = Math.cos(h), sz = -Math.sin(h);
+    const ex = target.x - physics.cgWorldX, ez = target.z - physics.cgWorldZ;
+    const eA = ex * fx + ez * fz, eS = ex * sx + ez * sz;
+    const eY = target.h !== undefined ? _haWrap(target.h - physics.heading) : 0;
+    const massKg = Math.max(1e5, (physics.mass || 1) * 1e6);
+    // 前後：機関（最微速の前進・後進と停止）で。大きな船は機関を止めても何分も惰性で進むので、
+    // 止まるのに要る距離（後進をかけたときの減速と、機関が逆転するまでの遅れから）を見て、早めに逆をかけて止める。
+    // 以前は「目標の速さより速ければ逆」を 6 秒ごとにしていたので、1 ノット近く行き過ぎてドックの中で前後に
+    // 行ったり来たりしていた（オリンピック：止めてから止まるまでに 100m 以上）
+    const vA = physics.speed || 0;
+    const vmax = Math.max(0.25, opt.vA || 0.5);
+    harborAuto.t += dt;
+    const pf = (typeof enginePowerFactor === 'function') ? enginePowerFactor() : 1;
+    const kAcc = 0.3 / Math.max(0.1, physics.mass || 1) * pf;                    // 機関の速さの目標へ近づく割合[1/秒]（17-main-loop.js）
+    const vSlow = 0.15 * Math.max(1, physics.maxSpeed || 13);                    // 最微速後進の速さの目標[ノット]
+    const v = Math.abs(vA) * 0.514, aBrake = Math.max(0.002, (Math.abs(vA) + vSlow) * kAcc * 0.514);
+    const dStop = v * v / (2 * aBrake) + v * 7 + 2;                             // 逆転までの遅れ（約 7 秒）の分も
+    const toward = Math.sign(vA) === Math.sign(eA) && Math.abs(vA) > 0.05;
+    let o = 0;
+    // 今の指令を続けるときと、新しくかけるときとで、境目に幅を持たせる（境目の近くで、停止と微速を 2〜3 秒ごとに
+    // 行き来して、早送りではテレグラフがガチャガチャ鳴り続けていた）
+    const cur = autopilot.lastOrder || 0, gap = harborAuto.t - harborAuto.lastOrderT;
+    const aTol = opt.aTol || 6;
+    const braking0 = cur !== 0 && cur === -Math.sign(vA);                                      // 今、逆をかけて止めている
+    const vBrake = braking0 ? 0.12 : 0.25;                                                      // 止めるのは 0.25 ノットから、0.12 ノットまで
+    // （機関で止めるのは 0.12〜0.25 ノットまで。逆転の遅れで行き過ぎないように。残りは惰性と、前後に引くタグで）
+    if (Math.abs(eA) < aTol) o = Math.abs(vA) > vBrake ? -Math.sign(vA) : 0;                   // 着いた：止める
+    else if (toward && Math.abs(eA) < dStop * (braking0 ? 1.3 : 1)) o = Math.abs(vA) > vBrake ? -Math.sign(vA) : 0;   // このままでは行き過ぎる：逆をかける
+    else if (!toward && Math.abs(vA) > 0.12) o = Math.sign(eA);                                // 離れる向きに動いている：目標の方へ
+    else if (cur === Math.sign(eA) ? Math.abs(vA) < vmax : Math.abs(vA) < vmax * 0.6) o = Math.sign(eA);   // まだ遅い：目標の方へ
+    else o = 0;                                                                                 // 十分な速さ：惰性で
+    // 指令は 2 秒に一度まで（ベルが鳴りすぎないよう）。機関をかけ直すのは 10 秒あけて。逆をかけるのは急ぐ
+    const braking = o !== 0 && o === -Math.sign(vA) && toward;
+    const wait = braking ? 0.5 : (o !== 0 && Math.abs(o) >= Math.abs(cur)) ? 10 : 2;
+    if (o !== cur && gap > wait) {
+        if (typeof _apOrder === 'function') { _apOrder(o); harborAuto.lastOrderT = harborAuto.t; }
+    }
+    if (typeof _apHelm === 'function') _apHelm(0, dt);
+    // 横と回頭：タグで
+    const vS = _tugShip.vSway, r = _tugShip.yawRate + (physics.turnRate || 0) * _haRad;
+    // 横へ動かす速さ・回す速さの上限。以前の半分ほどの速さで、大きな船の離着岸に 20〜30 分かかっていた
+    //（呼び出し側の指定の 1.5 倍・2 倍。止めるときの減速は、タグの力で間に合う範囲）
+    const vSmax = Math.abs(eS) < 8 ? 0.15 : (opt.vS || 0.35) * 1.5;
+    const vSd = Math.abs(eS) < 0.3 ? 0 : Math.max(-vSmax, Math.min(vSmax, 0.03 * eS));
+    const rMax = (opt.r || 0.005) * 2;
+    const rd = Math.max(-rMax, Math.min(rMax, 0.04 * eY * _haRad));
+    const Fs = massKg * 1.8 * 0.3 * (vSd - vS);
+    const Mz = massKg * 1.5 * D.L * D.L / 12 * 0.3 * (rd - r);
+    // 岸壁のすぐ近くでは、岸壁側の舷のタグは挟まれるので離れて待つ（沖側のタグだけで押し引き）
+    const L = _haTugs(), open = harborAuto.plan.open;
+    const side = opt.openOnly ? L.filter(t => _haSide(t) !== -open) : L;
+    for (const t of L) { t.awaySide = !side.includes(t); if (t.awaySide) { t.action = 'standby'; t.autoPower = 0; t.switchT = 0; } }
+    // まだ持ち場に着いていないタグは、待機の位置へ向かい続ける（着いたら加わる）
+    const use = side.filter(_haWorking);
+    for (const t of side) if (!use.includes(t)) { t.autoPower = 0; if (t.action !== 'standby') t.action = 'standby'; }
+    // 前後の最後の寄せ：目標まで 150m 以内でゆっくりのときは、船首（前へ）か船尾（後ろへ）のタグにも
+    // 前後に引かせる（機関だけより細かく寄せられる）。4 隻以上いるときだけ（横と回頭のタグを残す）
+    // （前後に引きに回ったタグは持ち場を移る間「着いていない」になるので、選ぶのは付き添いの全タグから）
+    const ax = _haAxialTug(side, eA, vA, massKg);
+    // ドックの中では、横へ引く所（45m 先）がドックの壁の中になることがあるので、そのタグは押すだけ
+    _haAllocate(Fs, Mz, ax ? use.filter(t => t !== ax) : use, dt, !!(harborAuto.plan && harborAuto.plan.dock));
+    return { eA, eS, eY, vS, r, dist: Math.hypot(ex, ez) };
+}
+
+// ── もやい綱（着岸したら、沖側でない舷の金物から岸壁のボラードへ）──
+function _haClearLines() { for (const l of harborAuto.lines) { scene.remove(l); l.geometry.dispose(); } harborAuto.lines = []; }
+function _haMakeLines(plan) {
+    _haClearLines();
+    if (typeof mooringPoints !== 'function') return;
+    const S = plan.S, Q = _haQ(S), half = S.quayLen / 2;
+    const ext = plan.quayExt || [-half, half];          // 岸壁の端（作り込んだ港は測った長さ）
+    const mat = typeof ropeMaterial === 'function' ? ropeMaterial() : new THREE.LineBasicMaterial({ color: 0x8b6a43 });
+    // 「索・もやい綱を直接かける」を選んでいないビット・ボラードからは取らない（クリートはいつも取れる）
+    const okIt = (m) => typeof mooringTowOk !== 'function' || mooringTowOk(shipMooring.items[m.index]);
+    const pts = mooringPoints().filter(m => m.side === -plan.open && okIt(m));
+    for (const m of pts) {
+        const q = Q.toQ(m.world.x, m.world.z);
+        const lead = m.local.z > 0 ? 1 : -1;
+        // 船首側は前へ、船尾側は後ろへ（ヘッドライン・スターンライン）
+        const hB = plan.berth.h * _haRad, dirB = Math.sign((Math.sin(hB) * S.sz - Math.cos(hB) * S.sx)) || 1;   // 船首が b の＋向きか
+        let bb = q.b + lead * dirB * 20;
+        bb = Math.round((bb - ext[0] - 12) / 25) * 25 + ext[0] + 12;
+        bb = Math.max(ext[0] + 12, Math.min(ext[1] - 12, bb));
+        // 岸壁の縁（作り込んだ港は本物の岸の線：船の横から陸の方へ見て、最初に陸になる所の少し陸側）
+        let aL = 4.5;
+        if (S.detail && typeof worldSeabedAt === 'function') {
+            for (let a = (plan.aB || 20) - 3; a > -40; a -= 1) { const w0 = Q.toW(a, bb); if (worldSeabedAt(w0.x, w0.z) > 0.3) { aL = a - 1.5; break; } }
+        }
+        const w = Q.toW(aL, bb);
+        // 金物から舷の縁（クリートは舷の外へ索を出す）を通って岸壁のボラードへ
+        const sd = Math.sign(m.local.x) || m.side, hw = (typeof _tugHalfWidth === 'function') ? _tugHalfWidth(m.local.z) : Math.abs(m.local.x);
+        const edge = shipGroup.localToWorld(new THREE.Vector3(sd * Math.max(hw, Math.abs(m.local.x)) * 1.01, m.local.y, m.local.z));
+        const g = new THREE.BufferGeometry().setFromPoints([m.world.clone(), edge, new THREE.Vector3(w.x, 3.7, w.z)]);
+        const l = new THREE.Line(g, mat); l.frustumCulled = false;
+        scene.add(l); harborAuto.lines.push(l);
+    }
+    harborAuto.linePose = { x: physics.cgWorldX, z: physics.cgWorldZ };
+}
+
+// ── 毎フレーム ──
+function updateHarborAuto(t, dt) {
+    // 着岸した状態で始めたときのもやい綱（船の位置が画面に反映されてから張る）
+    if (harborAuto.pendingLines && ++harborAuto.pendingT > 3) { _haMakeLines(harborAuto.pendingLines); harborAuto.pendingLines = null; }
+    // 綱を取っている間に船が動いたら綱を外す
+    if (harborAuto.lines.length && harborAuto.linePose && Math.hypot(physics.cgWorldX - harborAuto.linePose.x, physics.cgWorldZ - harborAuto.linePose.z) > 4) _haClearLines();
+    // 離岸のあと待たせているタグ：航路が決まらない・狭くない航路なら帰す
+    if (tugEscort.held && !harborAuto.mode) {
+        tugEscort.held.t += Math.max(0, dt || 0);
+        const ap = typeof autopilot !== 'undefined' ? autopilot : null;
+        if (!ap || (!ap.planning && !ap.active) || tugEscort.held.t > 900) tugEscortStop();
+    }
+    if (!harborAuto.mode) return;
+    dt = Math.min(2, Math.max(0, dt || 0));
+    if (!window.world || world.mode !== 'world') { harborAutoStop('世界を航海するモードではないので止めました'); return; }
+    if ((typeof keys !== 'undefined' && (keys.a || keys.d)) || (typeof _br !== 'undefined' && _br.wheelDrag)) { harborAutoStop('手で舵を取ったので、自動の離着岸を止めました'); return; }
+    const P = harborAuto.plan;
+    harborAuto.phaseT += dt;
+    const next = (ph, msg) => { harborAuto.phase = ph; harborAuto.phaseT = 0; harborAuto.sideGo = false; _haMsg(msg); };
+    const TL = _haTugs();
+    if (!TL.length) { harborAutoStop('タグがいなくなったので止めました'); return; }
+    // 離岸の最初（岸壁から離す）は沖側の舷のタグだけで押し引きするので、そのタグがそろったかで決める
+    const workers = harborAuto.mode === 'depart' ? TL.filter(q => _haSide(q) !== -P.open) : TL;
+    const RS = _haReadyState(workers.length ? workers : TL, harborAuto.phase === 'tugs' ? harborAuto.phaseT : 0), ready = RS.ok;
+    // 一部のタグが入れないまま始めるときは、そう知らせる
+    const partialMsg = () => !RS.partial ? '' : RS.stuck > 0
+        ? `（${RS.stuck}隻は今は入れないので、入れるようになったら加わります${RS.all - RS.on - RS.stuck > 0 ? `。ほかの${RS.all - RS.on - RS.stuck}隻は着きしだい加わります` : ''}）`
+        : `（残りの${RS.all - RS.on}隻は着きしだい加わります）`;
+    if (harborAuto.mode === 'berth') {
+        if (harborAuto.phase === 'tugs') {
+            _haControl({ x: P.turn.x, z: P.turn.z, h: physics.heading }, dt, { vA: 0.4 });
+            for (const q of TL) q.autoPower = 0;
+            if (ready) next('turn', `${P.port.name}：タグ${RS.on}隻で岸壁と平行に回しています${partialMsg()}`);
+            else if (harborAuto.phaseT > 900) harborAutoStop('タグが持ち場に着けないので止めました');
+        } else if (harborAuto.phase === 'turn') {
+            // 回す所（軍港などでは港口の線から横へずれた所）に着くまでは、向きを保ったまま横へ運ぶ
+            //（途中で回すと、船尾が桟橋の軍艦などを払ってしまう）
+            const dTurn = Math.hypot(P.turn.x - physics.cgWorldX, P.turn.z - physics.cgWorldZ);
+            if (harborAuto.holdH === undefined || harborAuto.holdH === null) harborAuto.holdH = physics.heading;
+            const moving = dTurn > 40 && !harborAuto.turning;
+            if (!moving) harborAuto.turning = true;
+            const e = _haControl({ x: P.turn.x, z: P.turn.z, h: moving ? harborAuto.holdH : P.berth.h }, dt, { vA: 0.3, r: 0.006 });
+            if (!moving && Math.abs(e.eY) < 2.5 && Math.abs(e.r) < 0.002) {
+                if (P.dock && P.align) next('align', `${P.port.name}：${P.slip ? '桟橋の間' : 'ドック'}の入口の前へ寄せています`);
+                else if (P.dock) next('enter', `${P.port.name}：タグに付き添われて、${P.slip ? '桟橋の間' : 'ドック'}へ${P.sternIn ? '後ろからまっすぐ' : 'まっすぐ'}入っています`);
+                else next('side', `${P.port.name}：タグで岸壁へ寄せています`);
+            }
+        } else if (harborAuto.phase === 'align') {
+            // 回す所から、入口の外の真ん中の線の上へ（向きはドックの向きのまま）
+            const e = _haControl({ x: P.align.x, z: P.align.z, h: P.berth.h }, dt, { vA: 0.4, vS: 0.3, r: 0.003 });
+            harborAuto.remain = e.dist;
+            if (e.dist < 15 && Math.abs(e.eY) < 2 && Math.abs(physics.speed || 0) < 0.5) next('enter', `${P.port.name}：タグに付き添われて、${P.slip ? '桟橋の間' : 'ドック'}へ${P.sternIn ? '後ろからまっすぐ' : 'まっすぐ'}入っています`);
+        } else if (harborAuto.phase === 'enter') {
+            // ドックの真ん中の線に沿って、岸壁の前まで（前後は機関と、船首・船尾のタグの前後の引き）
+            const e = _haControl({ x: P.mid.x, z: P.mid.z, h: P.berth.h }, dt, { vA: 0.5, vS: 0.2, r: 0.003 });
+            harborAuto.remain = Math.abs(e.eA);
+            if (Math.abs(e.eA) < 12 && Math.abs(e.eS) < 5 && Math.abs(e.eY) < 2 && Math.abs(physics.speed || 0) < 0.3) next('side', `${P.port.name}：タグで岸壁へ寄せています`);
+        } else if (harborAuto.phase === 'side') {
+            // 沖側の舷のタグが、船首寄りと船尾寄りの両方で持ち場に着く（付き直しの途中でない）までは（3 分まで）、横へは寄せずにその場で待つ。
+            // （前の段で前後に引いていたタグが付き直している間に、真ん中の 1 隻だけで押し始めると向きを保てず、
+            //   桟橋の間（84番埠頭）では 18° 回って船尾が奥の浅い所に当たっていた）
+            const st = tugStations(), hlS = ((window.hullProfile && hullProfile.ready) ? hullProfile.halfLen : 6) * 0.2;
+            const zOf = (q) => { const s2 = st.find(x => x.key === q.station); return s2 ? s2.z : 0; };
+            const OS = TL.filter(q => _haSide(q) !== -P.open), OW = OS.filter(q => q.state === 'on');
+            const lack = (f) => OS.some(q => f(zOf(q))) && !OW.some(q => f(zOf(q)));
+            //（一度寄せ始めたら、タグが押す⇄引くで付き直す間も待たない。待つ間も前後（機関）は岸壁の前の位置へ合わせ続ける）
+            const hold = !harborAuto.sideGo && harborAuto.phaseT < 180 && (lack(z => z > hlS) || lack(z => z < -hlS));
+            if (!hold) harborAuto.sideGo = true;
+            let tgt = P.berth;
+            if (hold) {
+                const hr = physics.heading * _haRad, fx = Math.sin(hr), fz = Math.cos(hr);
+                const eA0 = (P.berth.x - physics.cgWorldX) * fx + (P.berth.z - physics.cgWorldZ) * fz;
+                tgt = { x: physics.cgWorldX + fx * eA0, z: physics.cgWorldZ + fz * eA0, h: P.berth.h };
+            }
+            const e = _haControl(tgt, dt, { vA: 0.3, vS: 0.35, r: 0.003, openOnly: true, aTol: 10 });
+            harborAuto.remain = hold ? harborAuto.remain : Math.abs(e.eS);
+            if (!hold && Math.abs(e.eS) < 0.8 && Math.abs(e.eA) < 15 && Math.abs(e.eY) < 1.5 && Math.abs(e.vS) < 0.06 && Math.abs(physics.speed || 0) < 0.15) {
+                _tugShip.vSway = 0; _tugShip.yawRate = 0; physics.speed = 0; physics.turnRate = 0;
+                _apOrder(0);
+                _haMakeLines(P);
+                tugReleaseAll();
+                harborAuto.mode = null; harborAuto.phase = '';
+                for (const q of (window.tugs || [])) { delete q.autoPower; delete q.awaySide; }
+                _haMsg(`${P.port.name}に着岸しました。もやい綱を取り、タグを帰します`);
+            }
+        }
+    } else if (harborAuto.mode === 'depart') {
+        const Q = _haQ(P.S);
+        const q = Q.toQ(physics.cgWorldX, physics.cgWorldZ);
+        // 岸壁から離す所：ドックでは真ん中の線まで。向かいに他の船が着いていれば、その船との間にタグが引ける幅を残す所まで
+        //（真ん中まで寄せると、沖側で引くタグが 2 隻の船の間に挟まれて押しつぶされていた：オーシャン・ドック）
+        if (harborAuto.phase === 'tugs' || !Number.isFinite(harborAuto.offA)) harborAuto.offA = P.dock ? _haDepartOffA(P, P.aE) : P.aE;
+        const offA = harborAuto.offA, narrowOff = offA < P.aE - 5;
+        const off = Q.toW(offA, (P.bC || 0) + (q.b - (P.bC || 0)) * 0.5);
+        if (harborAuto.phase === 'tugs') {
+            _haControl({ x: physics.cgWorldX, z: physics.cgWorldZ, h: physics.heading }, dt, { vA: 0.2, openOnly: true });
+            for (const x of TL) x.autoPower = 0;
+            if (ready) next('off', `${P.port.name}：タグ${RS.on}隻で岸壁から離しています${partialMsg()}`);
+            else if (harborAuto.phaseT > 900) harborAutoStop('タグが持ち場に着けないので止めました');
+        } else if (harborAuto.phase === 'off') {
+            const e = _haControl({ x: off.x, z: off.z, h: P.dock ? P.berth.h : physics.heading }, dt, { vA: 0.2, vS: 0.35, r: 0.002, openOnly: true });
+            if (q.a > offA - (narrowOff ? 3 : 15)) {
+                if (P.dock) {
+                    harborAuto.holdH = physics.heading;
+                    // 向かいに船がいて真ん中まで寄せなかったとき：岸壁と平行に、その離した所のまま入口まで下がってから、真ん中の線へ
+                    const ex = P.align || P.turn;
+                    harborAuto.w1 = narrowOff ? Q.toW(offA, Q.toQ(ex.x, ex.z).b) : null;
+                    harborAuto.alignDone = false;
+                    next('back', `${P.port.name}：タグに付き添われて、${P.slip ? '桟橋の間' : 'ドック'}から${P.sternIn ? '前へ' : '後ろへ'}まっすぐ出ています`);
+                }
+                else next('turn', `${P.port.name}：港口の方へ回しています`);
+            }
+        } else if (harborAuto.phase === 'back') {
+            // ドックの真ん中の線に沿って、入口の外まで（向きはそのまま）。回す所が線から外れていれば、
+            // まず入口の外の線の上（align）まで出てから、回す所へ
+            const W1 = harborAuto.w1;
+            const tgt = W1 ? W1 : P.align && !harborAuto.alignDone ? P.align : P.turn;
+            const e = _haControl({ x: tgt.x, z: tgt.z, h: harborAuto.holdH }, dt, { vA: 0.5, vS: tgt === P.turn ? 0.3 : 0.2, r: 0.003 });
+            harborAuto.remain = e.dist;
+            if (tgt === W1 && e.dist < 25) harborAuto.w1 = null;
+            else if (tgt === P.align && e.dist < 20) harborAuto.alignDone = true;
+            else if (tgt === P.turn && e.dist < 30 && Math.abs(physics.speed || 0) < 0.4) next('turn', `${P.port.name}：港口の方へ回しています`);
+        } else if (harborAuto.phase === 'turn') {
+            const tp = P.dock ? P.turn : off;
+            const e = _haControl({ x: tp.x, z: tp.z, h: P.hOut }, dt, { vA: 0.3, r: 0.006 });
+            if (Math.abs(e.eY) < 4 && Math.abs(e.r) < 0.003) {
+                const then = harborAuto.then;
+                // 続けて自動航行するときは、航路が狭ければそのまま付き添えるよう、航路が決まるまでタグを待たせる
+                if (then) tugEscort.held = { ids: harborAuto.tugIds.slice(), t: 0 };
+                else tugReleaseAll();
+                harborAuto.mode = null; harborAuto.phase = '';
+                for (const x of (window.tugs || [])) { delete x.autoPower; delete x.awaySide; if (then && x.state !== 'leaving') x.action = 'standby'; }
+                _haMsg(then ? `${P.port.name}を離岸しました` : `${P.port.name}を離岸しました。タグを帰します`);
+                if (then && typeof autopilotStart === 'function') autopilotStart(then);
+            }
+        }
+    }
+}
+window.updateHarborAuto = updateHarborAuto;
