@@ -135,7 +135,7 @@ window.azipodActive = azipodActive;
 //           レバーの向き＝ポッドの向き（360°）、推力＝テレグラフ（機関の回転数）。舵は使わない
 function podModeNow() {
     if (!azipodActive()) return null;
-    const auto = (window.autopilot && (autopilot.active || autopilot.chase)) || (window.harborAuto && harborAuto.mode);
+    const auto = (window.autopilot && (autopilot.active || autopilot.chase || autopilot.selfDepart)) || (window.harborAuto && harborAuto.mode);
     if (auto) return 'helm';
     if (maneuver.podMode === 'helm' && typeof bridgeAzimuthLever === 'function' && bridgeAzimuthLever() !== null) return 'lever';
     return maneuver.podMode;
@@ -371,6 +371,9 @@ function updateManeuver(t, dt) {
     maneuver.thrusters.forEach((T, i) => {
         const s = _mnv.th[i], bow = (T.at || 0) >= 0;
         let want = mode === 'joy' ? s.auto : s.set;
+        // 自動航行（49-autopilot.js）がスラスターで動かしている間：横と回頭の指示を、船首寄り・船尾寄りに振り分ける
+        const A = _mnv.apThr;
+        if (A && performance.now() - A.t < 600) want = A.lat + (bow ? 1 : -1) * A.yaw;
         for (const k in _mnv.keys) if (_mnv.keys[k]) { const [w, sg] = MNV_KEYS[k]; if ((w === 'bow') === bow) want = sg; }
         if (design || T._on === false) want = 0;
         want = Math.max(-1, Math.min(1, want || 0));
@@ -392,6 +395,13 @@ function updateManeuver(t, dt) {
     _mnvUpdateHudButton();
 }
 window.updateManeuver = updateManeuver;
+// 自動航行がスラスターで船を動かす（毎フレーム呼ぶ。呼ばれなくなったら 0.6 秒でやめる）。
+// lat：横（＋＝左舷へ）、yaw：回頭（＋＝船首を左舷へ）、それぞれ −1〜1（全力の割合）。力は 47-tugboats.js の横流れ・回頭の計算へ
+function maneuverAutoThrust(lat, yaw) { _mnv.apThr = { lat: lat || 0, yaw: yaw || 0, t: performance.now() }; }
+function maneuverAutoThrustOff() { _mnv.apThr = null; }
+// サイドスラスター（横向きのスクリュー）が付いていて使えるか
+function maneuverHasThrusters() { return maneuver.thrusters.some(T => T._on !== false && (+T.kW || 0) > 0); }
+Object.assign(window, { maneuverAutoThrust, maneuverAutoThrustOff, maneuverHasThrusters });
 // 自動航行がスラスターで船を動かしている間の見た目（lat：＋＝左舷へ、yaw：＋＝船首を左舷へ）
 function maneuverAutoVis(lat, yaw) { _mnv.autoVis = { lat: lat || 0, yaw: yaw || 0, t: performance.now() }; }
 window.maneuverAutoVis = maneuverAutoVis;

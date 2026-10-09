@@ -106,6 +106,11 @@
             </div>
         </div>
         <input type="range" id="phase-slider" min="0.0" max="1.0" step="0.05" value="0.5" class="param-slider" style="accent-color: #aaddff;">
+        <div class="param-row" style="margin-top:6px;">
+            <label style="color:#aaddff; font-weight:bold;">Date (日付):</label>
+            <input type="date" id="date-input" min="1800-01-01" style="background:#0a1932;color:#aaddff;border:1px solid #446688;border-radius:4px;padding:2px 6px;font-family:inherit;font-size:12px;">
+        </div>
+        <div id="moon-age" style="font-size:11px;color:#8fb8d8;text-align:right;"></div>
     </div>
 
     <div class="section-title">NAVIGATION LIGHTS</div>
@@ -200,6 +205,7 @@
             <div style="display:flex;justify-content:space-between;"><span>風向</span><span id="weather-dir-val" style="font-family:monospace;color:#8fb8d8;"></span></div>
             <input type="range" id="weather-dir" min="0" max="355" step="5" value="45" class="param-slider" style="accent-color:#aaddff;">
             <button type="button" id="weather-apply-now" class="adjust-btn" style="margin-top:4px;width:100%;height:auto;font-size:11px;font-weight:normal;padding:5px 6px;">⚡ すぐ反映（うねりも含めて一気に切り替え）</button>
+            <button type="button" id="aurora-btn" class="adjust-btn" onclick="auroraToggle()" style="margin-top:4px;width:100%;height:auto;font-size:11px;font-weight:normal;padding:5px 6px;">🌌 オーロラを出す（夜に見えます）</button>
         </div>
     </div>
 
@@ -1206,7 +1212,7 @@
           <select id="bridge-wheel-turns" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;max-width:100%;" onchange="setBridgeOption('wheelTurns', this.value)"></select>
         </div>
         <div class="sp-row" style="gap:6px;"><span class="sp-label" style="min-width:0;">彫り込む文字:</span>
-          <input type="text" id="bridge-wheel-text" value="R.M.S. OLYMPIC" maxlength="40" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:12px;flex:1;min-width:0;" oninput="setBridgeOption('wheelText', this.value)">
+          <input type="text" id="bridge-wheel-text" value="BROWN&#39;S PATENT TELEMOTOR ROSEBANK IRONWORKS EDINBURGH" style="background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:12px;flex:1;min-width:0;" oninput="setBridgeOption('wheelText', this.value)">
         </div>
         <div class="sp-row">
           <label class="sp-toggle"><input type="checkbox" id="bridge-wheel-bell" checked onchange="setBridgeOption('wheelBell', this.checked)"> 古典的な舵輪（1周で舵1°のとき）：1周ごとにベルを鳴らす</label>

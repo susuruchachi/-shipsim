@@ -247,6 +247,7 @@ function _localToWorldFlat(x, y, z) {
 
 // ── 呼ぶ・指示・帰す ──
 let _tugNextId = 1;
+const TUG_GONE_DIST = 1800;     // 帰るタグを消す距離[m]
 function tugCall(stationKey) {
     if (tugs.filter(t => t.state !== 'leaving').length >= TUG_MAX) return null;
     if (typeof shipGroup === 'undefined' || !shipGroup) return null;
@@ -254,9 +255,9 @@ function tugCall(stationKey) {
     // 持ち場の指定が無ければ、まだ誰も付いていない持ち場から（引ける金物を先に）
     const used = new Set(tugs.filter(t => t.state !== 'leaving').map(t => t.station));
     const pick = (stationKey && st.find(s => s.key === stationKey)) || st.find(s => s.fitting && !used.has(s.key)) || st.find(s => !used.has(s.key)) || st[0];
-    // 帰りかけのタグがまだ近く（2km 以内）にいれば、新しく呼ばずに、そのタグを呼び戻す
+    // 帰りかけのタグがまだ近く（消えるまでの 1.8km 以内）にいれば、新しく呼ばずに、そのタグを呼び戻す
     {
-        let back = null, bd = 2000;
+        let back = null, bd = TUG_GONE_DIST + 200;
         for (const t of tugs) {
             if (t.state !== 'leaving' || t.aground) continue;
             const d = Math.hypot(t.pos.x - shipGroup.position.x, t.pos.z - shipGroup.position.z);
@@ -348,6 +349,19 @@ function _tugStaticBlocked(x, z) {
     if (!window.world || world.mode !== 'world' || typeof worldSeabedAt !== 'function') return false;
     return worldSeabedAt(x, z) > -TUG_DRAFT;
 }
+// 他の船（59-traffic.js）の船体の中か（m：船体の外へ足す余裕[m]）
+function _tugInTraffic(x, z, m) {
+    if (typeof trafficHulls !== 'function') return false;
+    for (const H of trafficHulls()) {
+        const dx = x - H.x, dz = z - H.z;
+        if (Math.abs(dx) > H.HL + m + 60 || Math.abs(dz) > H.HL + m + 60) continue;
+        const a = dx * H.fx + dz * H.fz;
+        if (Math.abs(a) > H.HL + m) continue;
+        if (Math.abs(dx * H.sx + dz * H.sz) < Math.max(0, H.hw(Math.max(-H.HL, Math.min(H.HL, a)))) + m) return true;
+    }
+    return false;
+}
+window.tugInTraffic = _tugInTraffic;
 function _tugShipCtx() {
     const hp = window.hullProfile;
     const sc = physics.scale || 1;
@@ -590,7 +604,8 @@ function _tugStep(t, dt, last) {
         if (tg.state === 'leaving') {
             const away = tg.pos.clone().sub(sp).setY(0).normalize();
             tx = tg.pos.x + away.x * 200; tz = tg.pos.z + away.z * 200; tyaw = Math.atan2(away.x, away.z);
-            if (tg.pos.distanceTo(sp) > 900) { scene.remove(tg.g); scene.remove(tg.line); tg.line.geometry.dispose(); tugs.splice(i, 1); renderTugPanel(); continue; }
+            // 1.8km 離れたら帰り着いたことにして消す（それまでに呼ばれたら、新しく呼ばずにこのタグを呼び戻す：tugCall）
+            if (tg.pos.distanceTo(sp) > TUG_GONE_DIST) { scene.remove(tg.g); scene.remove(tg.line); tg.line.geometry.dispose(); tugs.splice(i, 1); renderTugPanel(); continue; }
         } else {
             let side = st.side || 1;
             const hw = _tugHalfWidth(st.z) * sc;
@@ -625,9 +640,13 @@ function _tugStep(t, dt, last) {
                     if (tg.dir !== 'side' && st.side) return _tugFromShip(C, (tg.dir === 'fwd' ? 1 : -1) * (C.HL + ext + TUG_LEN / 2), 0);
                     return { x: hook.x + d.x * r, z: hook.z + d.z * r };
                 };
+                // 引く所が他の船（向かいの岸壁に着いている船など）にかかるときも縮める（タグが船の間に挟まれないように）
+                const busy = (p) => _tugStaticBlocked(p.x, p.z) || _tugInTraffic(p.x, p.z, TUG_BEAM / 2 + 2)
+                    || _tugInTraffic(p.x + d.x * TUG_LEN / 2, p.z + d.z * TUG_LEN / 2, 3);
                 let q = at(k0);
                 tg.lineAuto = false;
-                for (const f of [0.6, 0.35, 0.2]) { if (!_tugStaticBlocked(q.x, q.z)) break; const q2 = at(k0 * f); q = q2; tg.lineAuto = true; }
+                for (const f of [0.6, 0.35, 0.2]) { if (!busy(q)) break; const q2 = at(k0 * f); q = q2; tg.lineAuto = true; }
+                tg.pullBusy = busy(q);
                 tx = q.x; tz = q.z; tyaw = Math.atan2(d.x, d.z);
                 tg.pullDir = d;
             } else if (tg.action === 'push') {

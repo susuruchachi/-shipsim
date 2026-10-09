@@ -136,7 +136,9 @@ function updateUnderwater(t) {
     const designMode = !!(panel && panel.classList.contains('open'));
 
     // 水面をまたぐ所をぼかす。波で±数cm出入りしても点滅しない。
-    let amount = designMode ? 0 : _uwSmoothstep(-UW_SURFACE_BLEND, UW_SURFACE_BLEND, depth);
+    // 海面を非表示にしているときは、水中の暗さ・こもった音にしない（海底が見えるだけ）
+    const waterHidden = typeof userWaterVisible !== 'undefined' && !userWaterVisible;
+    let amount = (designMode || waterHidden) ? 0 : _uwSmoothstep(-UW_SURFACE_BLEND, UW_SURFACE_BLEND, depth);
     // 船の中（喫水線より下の船内）は水の中ではない。浸水した区画の水の中だけ水中の見た目・音にする
     if (amount > 0.001) {
         const L = _uwInsideHull(cam.position);

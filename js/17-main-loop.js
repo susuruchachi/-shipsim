@@ -1,3 +1,4 @@
+let _calUiT = 0;
 function animate() {
     requestAnimationFrame(animate);
     // 描画頻度の上限（33-performance.js）。120Hz 表示の端末などで、必要以上に
@@ -26,11 +27,11 @@ function animate() {
         physics.gameTime += dt * baseSpeed * mult;
     }
     physics.dayProgress = (physics.gameTime / physics.dayDuration) % 1;
-    if (!physics.moonPhaseManual) {
-        const totalDays = physics.gameTime / physics.dayDuration;
-        physics.moonPhase = (totalDays / 29.5) % 1.0;
-        $('phase-slider').value = physics.moonPhase;
-        $('phase-num').value = physics.moonPhase.toFixed(2);
+    // 月齢は日付と時刻から（16-daynight-and-telegraph.js の暦）。時間が進めば月齢も進む
+    if (typeof calMoonPhase === 'function') {
+        physics.moonPhase = calMoonPhase();
+        if (!(_calUiT > 0)) { _calUiT = 0.5; calSyncUI(false); auroraSyncUI(); }
+        _calUiT -= dt;
     }
     // v170: 天候を先に進める。ここで physics.windSpeed/waveRoughness 等が
     // 書き換わり、この後の波・浮力・描画がすべて新しい海況で計算される。
@@ -64,6 +65,8 @@ function animate() {
         const totalDays2 = physics.gameTime / physics.dayDuration;
         if (totalDays2 >= nextAuroraDay) {
             auroraActive = Math.min(1.0, auroraActive + dt * 0.04);
+            // （天候の欄のボタンで出したときは、止めるまで続ける）
+            if (window._auroraHold) nextAuroraDay = Math.max(nextAuroraDay, totalDays2 - 0.3);
             if (totalDays2 >= nextAuroraDay + 0.35) {
                 auroraActive = Math.max(0.0, auroraActive - dt * 0.015);
                 if (auroraActive <= 0.0) nextAuroraDay = totalDays2 + 25.0 + Math.random() * 9.0;
@@ -178,6 +181,8 @@ function animate() {
         // 推力はスクリューの軸（船首尾の向き）に沿って押すので、波で船首が上がれば上向きにも押す（下の上下の計算）
         const thrustGrossAcc = propTargetSpeed * _kThrust * 0.514444;
         physics.speed = THREE.MathUtils.clamp(physics.speed, -maxSpd * 0.5, maxSpd);
+        // 離岸のスプリング（49-autopilot.js）：綱で留めているので、機関を回しても前後には進まない
+        if (!isDesignMode && window.autopilot && autopilot.selfDepart && autopilot.selfDepart.spring) physics.speed = 0;
 
         // --- 旋回・船首方位 ---
         const LReal = 12.0 * physics.scale;
@@ -969,6 +974,16 @@ function updateSunShadowFollow() {
     sunLight.target.position.copy(shipGroup.position);
     sunLight.target.updateMatrixWorld();
     sunLight.position.copy(shipGroup.position).addScaledVector(dirToSun, SUN_SHADOW_LIGHT_DISTANCE);
+    // 影の範囲：船の大きさに合わせて（小さい船ほど影の地図の升目が細かく、影がくっきり・正確に）。
+    // 船の半分の長さ＋40m（低い太陽で長く伸びる影・近くのタグ）を、60〜220m に
+    {
+        const hp = window.hullProfile, HL = ((hp && hp.ready) ? hp.halfLen : 6) * (physics.scale || 1);
+        const half = Math.max(60, Math.min(220, HL * 1.15 + 40)), c = sunLight.shadow.camera;
+        if (Math.abs(c.right - half) > half * 0.04) {
+            c.left = -half; c.right = half; c.top = half; c.bottom = -half;
+            c.updateProjectionMatrix();
+        }
+    }
 
     // 水面シェーダーへシャドウマップ本体と変換行列を渡す。
     // sunLight.shadow.mapはThree.jsが初回描画時に遅延生成するため、
@@ -1205,7 +1220,7 @@ function updateUI() {
 
     const gameHours = Math.floor(physics.gameTime / (physics.dayDuration / 24)) % 24;
     const gameMinutes = Math.floor((physics.gameTime % (physics.dayDuration / 24)) / (physics.dayDuration / 24 / 60));
-    _uiTxt($('ui-time'), `Time     : ${gameHours.toString().padStart(2, '0')}:${gameMinutes.toString().padStart(2, '0')}`);
+    _uiTxt($('ui-time'), `Time     : ${gameHours.toString().padStart(2, '0')}:${gameMinutes.toString().padStart(2, '0')}${typeof calISO === 'function' ? '  ' + calISO(calDayNow()) : ''}`);
 
     _uiTxt($('ui-roll'), `Roll     : ${(physics.roll * 180 / Math.PI).toFixed(1)}°`);
     _uiTxt($('ui-pitch'), `Pitch    : ${(physics.pitch * 180 / Math.PI).toFixed(1)}°`);

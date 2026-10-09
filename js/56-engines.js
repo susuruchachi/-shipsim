@@ -160,7 +160,7 @@ window.enginePowerFactor = enginePowerFactor;
 // ── 指令 ──
 function _engIndependent() {
     // 自動航行・自動の離着岸の間は、テレグラフ 1 つでまとめて動かす
-    const auto = (window.autopilot && (autopilot.active || autopilot.chase)) || (window.harborAuto && harborAuto.mode);
+    const auto = (window.autopilot && (autopilot.active || autopilot.chase || autopilot.selfDepart)) || (window.harborAuto && harborAuto.mode);
     return shipEngines.split && !auto;
 }
 function _engTargetOrder(E) {

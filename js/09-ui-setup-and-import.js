@@ -117,7 +117,8 @@ function setupParamControl(sliderId, numInputId, decBtnId, incBtnId, setter) {
 function setupUIControls() {
     setupParamControl('time-slider', 'time-num', 'time-dec', 'time-inc', (v) => {
         physics.dayProgress = v / 24.0;
-        physics.gameTime = physics.dayProgress * physics.dayDuration;
+        // 日付はそのまま（以前は 0 日目に戻していて、月齢が進まなくなっていた）
+        physics.gameTime = (Math.floor(physics.gameTime / physics.dayDuration) + physics.dayProgress) * physics.dayDuration;
         updateDayNightCycle(physics.dayProgress);
         // 手動操作時は固定モードでも位置を即反映（lerpターゲットをリセット）
         if (sunLight && sunLight.userData.currentPos) {
@@ -126,11 +127,24 @@ function setupUIControls() {
             sunLight.userData.currentPos.set(Math.cos(sA)*sd, Math.sin(sA)*sd*Math.cos(0.4), -Math.sin(sA)*sd*Math.sin(0.4));
         }
     });
+    // 月齢：元の日付にいちばん近い、その月齢の日にする（16-daynight-and-telegraph.js の暦）
+    let phaseReady = false;
     setupParamControl('phase-slider', 'phase-num', 'phase-dec', 'phase-inc', (v) => {
-        physics.moonPhase = v;
-        physics.moonPhaseManual = true;
+        if (!phaseReady) return;                      // （始めに既定の値を入れるときは、日付を変えない）
+        if (typeof calSetMoonPhase === 'function') calSetMoonPhase(v); else physics.moonPhase = v;
         updateDayNightCycle(physics.dayProgress);
     });
+    phaseReady = true;
+    const dateIn = $('date-input');
+    if (dateIn) {
+        dateIn.min = '1800-01-01';
+        if (typeof calISO === 'function') { dateIn.max = calISO(calToday()); dateIn.value = calISO(calDayNow()); }
+        dateIn.addEventListener('change', () => {
+            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateIn.value || '');
+            if (m && typeof calSetDay === 'function') { calSetDay(calDayOf(+m[1], +m[2], +m[3])); updateDayNightCycle(physics.dayProgress); }
+        });
+        ['touchstart', 'mousedown'].forEach(ev => dateIn.addEventListener(ev, (e) => e.stopPropagation()));
+    }
     
     setupParamControl('winddir-slider', 'winddir-num', 'winddir-dec', 'winddir-inc', (v) => { physics.windDir = v; });
     setupParamControl('windspd-slider', 'windspd-num', 'windspd-dec', 'windspd-inc', (v) => { physics.windSpeed = v; });

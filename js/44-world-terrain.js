@@ -173,7 +173,8 @@ const _trSeabedU = { value: TR_SEABED };
 // カメラが水の中（潜水艦の視点・波の谷の下など）にあるときだけ、深い海底まで描く
 function _trDeepRange() {
     const wy = Number.isFinite(window._physicsWaveY) ? window._physicsWaveY : 0;
-    const see = typeof camera !== 'undefined' && camera && camera.position.y < wy + 3;
+    // 海面を非表示にしているときも、海底をぜんぶ描く
+    const see = (typeof userWaterVisible !== 'undefined' && !userWaterVisible) || (typeof camera !== 'undefined' && camera && camera.position.y < wy + 3);
     if (see === _trSeeDeep) return;
     _trSeeDeep = see;
     for (const m of [terrain.near, terrain.far, terrain.fine]) {
@@ -1472,7 +1473,7 @@ function _trSeabedCut() {
 let _ocFloor = null;
 function _trOceanFloor() {
     const keel = _trLowestY(), cx = physics.cgWorldX || 0, cz = physics.cgWorldZ || 0;
-    const near = keel - oceanSeabedAt(cx, cz) < 100;
+    const near = keel - oceanSeabedAt(cx, cz) < 100 || (typeof userWaterVisible !== 'undefined' && !userWaterVisible);
     if (!near) { if (_ocFloor) _ocFloor.visible = false; return; }
     const N = 48, W = 1600;
     if (!_ocFloor) {

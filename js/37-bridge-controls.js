@@ -87,8 +87,10 @@ const BRIDGE_BELLS = {
     electric: '電子音',
 };
 window.BRIDGE_BELLS = BRIDGE_BELLS;
+// 古典的な舵輪の縁の刻印（既定）：テレモーター（舵取り機）の製造元の銘板
+const BRIDGE_WHEEL_TEXT = "BROWN'S PATENT TELEMOTOR ROSEBANK IRONWORKS EDINBURGH";
 const bridgeUI = {
-    telegraph: 'olympic', wheel: 'classic', wheelText: 'R.M.S. OLYMPIC', waitAnswer: true, bell: 'auto',
+    telegraph: 'olympic', wheel: 'classic', wheelText: BRIDGE_WHEEL_TEXT, waitAnswer: true, bell: 'auto',
     tgTheme: 'auto', tgLit: true,     // 盤面の色（auto/white/black）・暗くなったら盤面を光らせる
     wheelBell: true,                  // 古典的な舵輪：1周ごとにベルを鳴らす（1周で舵1°のとき）
     wheelTurns: 'real',               // 古典的な舵輪の回す量（BRIDGE_WHEEL_TURNS）
@@ -957,11 +959,19 @@ function _drawWheel(ctx, S, design, wheelDeg, rudder, order, text) {
         _ring(ctx, 0, 0, R * 0.84, R * 0.85, 'rgba(60,40,10,0.6)');
         _ring(ctx, 0, 0, R * 0.97, R * 0.98, 'rgba(60,40,10,0.6)');
         const label = (text && text.trim()) ? text.trim() : ' ';
-        ctx.font = `bold ${Math.round(S * 0.043)}px Georgia,"Times New Roman","Hiragino Mincho ProN",serif`;
+        // 文字数に制限はない。1周に収まらない長さなら、収まるまで文字を小さくする
+        const font = (px) => `bold ${px.toFixed(1)}px Georgia,"Times New Roman","Hiragino Mincho ProN",serif`;
+        let px = S * 0.043;
+        ctx.font = font(px);
         ctx.textBaseline = 'middle';
         const unit = label + '  ✦  ';
         const circ = 2 * Math.PI * R * 0.91;
-        const w = ctx.measureText(unit).width;
+        let w = ctx.measureText(unit).width;
+        if (w > circ) {
+            px = Math.max(S * 0.012, px * circ / w * 0.98);
+            ctx.font = font(px);
+            w = ctx.measureText(unit).width;
+        }
         const reps = Math.max(1, Math.floor(circ / w));
         for (let k = 0; k < reps; k++) _textOnArc(ctx, unit, 0, 0, R * 0.91, k / reps * Math.PI * 2, true, '#3b2708');
         // 中心のハブ
@@ -1300,8 +1310,10 @@ window.updateBridge = updateBridge;
 // ── 保存・読み込み ──
 function getBridgeConfig() { return { telegraph: bridgeUI.telegraph, wheel: bridgeUI.wheel, wheelText: bridgeUI.wheelText, waitAnswer: bridgeUI.waitAnswer, bell: bridgeUI.bell, tgTheme: bridgeUI.tgTheme, tgLit: bridgeUI.tgLit, wheelBell: bridgeUI.wheelBell, wheelTurns: bridgeUI.wheelTurns }; }
 function applyBridgeConfig(c) {
-    const d = { telegraph: 'olympic', wheel: 'classic', wheelText: 'R.M.S. OLYMPIC', waitAnswer: true, bell: 'auto', tgTheme: 'auto', tgLit: true, wheelBell: true, wheelTurns: 'real' };
+    const d = { telegraph: 'olympic', wheel: 'classic', wheelText: BRIDGE_WHEEL_TEXT, waitAnswer: true, bell: 'auto', tgTheme: 'auto', tgLit: true, wheelBell: true, wheelTurns: 'real' };
     Object.assign(bridgeUI, d, c || {});
+    // 以前の既定の刻印のままなら、新しい既定に替える
+    if (bridgeUI.wheelText === 'R.M.S. OLYMPIC') bridgeUI.wheelText = BRIDGE_WHEEL_TEXT;
     if (!BRIDGE_TELEGRAPHS[bridgeUI.telegraph]) bridgeUI.telegraph = 'olympic';
     if (!BRIDGE_WHEELS[bridgeUI.wheel]) bridgeUI.wheel = 'classic';
     if (!BRIDGE_WHEEL_TURNS[bridgeUI.wheelTurns]) bridgeUI.wheelTurns = 'real';

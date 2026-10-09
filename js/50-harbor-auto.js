@@ -542,7 +542,7 @@ function harborAutoStart(mode, plan, then) {
     if (window.sub && typeof isSubmarine === 'function' && isSubmarine() && (sub.depth > 1 || sub.mode === 'dive')) { _haMsg('潜航中は離着岸できません。浮上してからにしてください'); return false; }
     if (typeof autopilot !== 'undefined' && autopilot.active) autopilotStop('', true);
     if (typeof autopilot !== 'undefined' && autopilot.chase && typeof apChaseStop === 'function') apChaseStop('', 'keep');
-    Object.assign(harborAuto, { mode, plan, then: then || null, phase: 'tugs', t: 0, phaseT: 0, lastOrderT: -99, tugIds: [], resume: null, holdH: null, turning: false, alignDone: false });
+    Object.assign(harborAuto, { mode, plan, then: then || null, phase: 'tugs', t: 0, phaseT: 0, lastOrderT: -99, tugIds: [], resume: null, holdH: null, turning: false, alignDone: false, offA: undefined, w1: null });
     _haClearLines();
     // タグ：もう付いているタグ（狭い水路で付き添ってきたタグなど）はそのまま使い、足りなければ呼ぶ
     const T = _haTakeTugs(_haStationKeys(plan.open, harborTugCount()));
@@ -568,9 +568,13 @@ function harborAutoBerthNow() {
 function harborAutoDepartNow(then) {
     const plan = harborBerthedAt();
     if (!plan) { _haMsg('岸壁に横付けしていません'); return false; }
-    // 回す向き：自動航行が最初に向かう点の方。同じ作り込んだ港の中の別の埠頭へ行くときは、港の出口ではなく、
-    // そちらへ向かう港内の水路の最初の点。回す所からその点へまっすぐ行くと浅い所にかかるときは、
-    // 自動航行と同じく港の中の深い所をたどる道すじの、250m 以上先の点の方
+    harborDepartHeading(plan, then);
+    return harborAutoStart('depart', plan, then);
+}
+// 回す向き（plan.hOut を直す）：自動航行が最初に向かう点の方。同じ作り込んだ港の中の別の埠頭へ行くときは、港の出口ではなく、
+// そちらへ向かう港内の水路の最初の点。回す所からその点へまっすぐ行くと浅い所にかかるときは、
+// 自動航行と同じく港の中の深い所をたどる道すじの、250m 以上先の点の方（タグなしの離岸も：49-autopilot.js）
+function harborDepartHeading(plan, then) {
     if (typeof _rwDetailOf === 'function') {
         const D = _rwDetailOf(plan.port.lat, plan.port.lon);
         let tgt = plan.outPt || null;
@@ -587,8 +591,9 @@ function harborAutoDepartNow(then) {
             if (Math.hypot(L.x - o.x, L.z - o.z) > 30) plan.hOut = Math.atan2(L.x - o.x, L.z - o.z) / _haRad;
         }
     }
-    return harborAutoStart('depart', plan, then);
+    return plan.hOut;
 }
+window.harborDepartHeading = harborDepartHeading;
 function harborAutoResume() {
     const r = harborAuto.resume;
     if (!r) return;
@@ -605,10 +610,37 @@ Object.assign(window, { harborAutoStart, harborAutoStop, harborAutoBerthNow, har
 function _haCanPull(s2, st, narrow) {
     const hs = s2 && tugPullHook(s2, st);
     if (!hs) return false;
-    if (!narrow || !s2.side) return true;
+    if (!s2.side) return true;
     const C = _tugShipCtx(), hk = _localToWorldFlat(hs.x, hs.y, hs.z), sd = s2.side;
+    // 横へ引く所が他の船にかかる（向かいに着いている船との間が狭い）：いちばん短い索でも入れなければ引かない
+    //（引こうとしたタグが 2 隻の船の間に挟まれていた）
+    const rS = 8 + TUG_LEN / 2;
+    if (typeof _tugInTraffic === 'function' && (_tugInTraffic(hk.x + C.F.sx * sd * rS, hk.z + C.F.sz * sd * rS, TUG_BEAM / 2 + 2)
+        || _tugInTraffic(hk.x + C.F.sx * sd * (rS + TUG_LEN / 2), hk.z + C.F.sz * sd * (rS + TUG_LEN / 2), 3))) return false;
+    if (!narrow) return true;
     const r = 45 + TUG_LEN / 2 + 6;
     return !_tugStaticBlocked(hk.x + C.F.sx * sd * r, hk.z + C.F.sz * sd * r);
+}
+// 離岸で岸壁から離す所（岸壁からの距離 a）：ドックの真ん中の線（aMax）までだが、沖側に他の船（向かいの岸壁に
+// 着いている船など）がいれば、その船との間に、タグが短い索で引ける幅（45m ほど）を残す所まで。
+// 少なくとも岸壁から 8m は離す（狭ければ、それ以上は寄せない）
+function _haDepartOffA(P, aMax) {
+    if (typeof trafficHulls !== 'function') return aMax;
+    const Q = _haQ(P.S), q = Q.toQ(physics.cgWorldX, physics.cgWorldZ), D = _haDims();
+    let aO = Infinity;                                       // （a は岸壁から離れる向きに増える）
+    for (const H of trafficHulls()) {
+        for (let i = -12; i <= 12; i++) {
+            const a = i / 12 * H.HL * 0.98, w = H.hw(a);
+            for (const sg of [-1, 1]) {
+                const r = Q.toQ(H.x + H.fx * a + H.sx * sg * w, H.z + H.fz * a + H.sz * sg * w);
+                if (Math.abs(r.b - q.b) > D.HL + 20 || r.a < q.a) continue;
+                aO = Math.min(aO, r.a);
+            }
+        }
+    }
+    if (!Number.isFinite(aO)) return aMax;
+    const gap = 8 + TUG_LEN + 6;                             // 短い索＋タグの長さ＋余裕
+    return Math.max(q.a + 8, Math.min(aMax, aO - D.hw - gap));
 }
 function _haAllocate(Fs, Mz, list, dt, noPull) {
     const st = tugStations(), sc = physics.scale || 1;
@@ -890,7 +922,11 @@ function updateHarborAuto(t, dt) {
     } else if (harborAuto.mode === 'depart') {
         const Q = _haQ(P.S);
         const q = Q.toQ(physics.cgWorldX, physics.cgWorldZ);
-        const off = Q.toW(P.aE, (P.bC || 0) + (q.b - (P.bC || 0)) * 0.5);
+        // 岸壁から離す所：ドックでは真ん中の線まで。向かいに他の船が着いていれば、その船との間にタグが引ける幅を残す所まで
+        //（真ん中まで寄せると、沖側で引くタグが 2 隻の船の間に挟まれて押しつぶされていた：オーシャン・ドック）
+        if (harborAuto.phase === 'tugs' || !Number.isFinite(harborAuto.offA)) harborAuto.offA = P.dock ? _haDepartOffA(P, P.aE) : P.aE;
+        const offA = harborAuto.offA, narrowOff = offA < P.aE - 5;
+        const off = Q.toW(offA, (P.bC || 0) + (q.b - (P.bC || 0)) * 0.5);
         if (harborAuto.phase === 'tugs') {
             _haControl({ x: physics.cgWorldX, z: physics.cgWorldZ, h: physics.heading }, dt, { vA: 0.2, openOnly: true });
             for (const x of TL) x.autoPower = 0;
@@ -898,17 +934,26 @@ function updateHarborAuto(t, dt) {
             else if (harborAuto.phaseT > 900) harborAutoStop('タグが持ち場に着けないので止めました');
         } else if (harborAuto.phase === 'off') {
             const e = _haControl({ x: off.x, z: off.z, h: P.dock ? P.berth.h : physics.heading }, dt, { vA: 0.2, vS: 0.35, r: 0.002, openOnly: true });
-            if (q.a > P.aE - 15) {
-                if (P.dock) { harborAuto.holdH = physics.heading; next('back', `${P.port.name}：タグに付き添われて、${P.slip ? '桟橋の間' : 'ドック'}から${P.sternIn ? '前へ' : '後ろへ'}まっすぐ出ています`); }
+            if (q.a > offA - (narrowOff ? 3 : 15)) {
+                if (P.dock) {
+                    harborAuto.holdH = physics.heading;
+                    // 向かいに船がいて真ん中まで寄せなかったとき：岸壁と平行に、その離した所のまま入口まで下がってから、真ん中の線へ
+                    const ex = P.align || P.turn;
+                    harborAuto.w1 = narrowOff ? Q.toW(offA, Q.toQ(ex.x, ex.z).b) : null;
+                    harborAuto.alignDone = false;
+                    next('back', `${P.port.name}：タグに付き添われて、${P.slip ? '桟橋の間' : 'ドック'}から${P.sternIn ? '前へ' : '後ろへ'}まっすぐ出ています`);
+                }
                 else next('turn', `${P.port.name}：港口の方へ回しています`);
             }
         } else if (harborAuto.phase === 'back') {
             // ドックの真ん中の線に沿って、入口の外まで（向きはそのまま）。回す所が線から外れていれば、
             // まず入口の外の線の上（align）まで出てから、回す所へ
-            const tgt = P.align && !harborAuto.alignDone ? P.align : P.turn;
-            const e = _haControl({ x: tgt.x, z: tgt.z, h: harborAuto.holdH }, dt, { vA: 0.5, vS: tgt === P.align ? 0.2 : 0.3, r: 0.003 });
+            const W1 = harborAuto.w1;
+            const tgt = W1 ? W1 : P.align && !harborAuto.alignDone ? P.align : P.turn;
+            const e = _haControl({ x: tgt.x, z: tgt.z, h: harborAuto.holdH }, dt, { vA: 0.5, vS: tgt === P.turn ? 0.3 : 0.2, r: 0.003 });
             harborAuto.remain = e.dist;
-            if (tgt === P.align && e.dist < 20) harborAuto.alignDone = true;
+            if (tgt === W1 && e.dist < 25) harborAuto.w1 = null;
+            else if (tgt === P.align && e.dist < 20) harborAuto.alignDone = true;
             else if (tgt === P.turn && e.dist < 30 && Math.abs(physics.speed || 0) < 0.4) next('turn', `${P.port.name}：港口の方へ回しています`);
         } else if (harborAuto.phase === 'turn') {
             const tp = P.dock ? P.turn : off;

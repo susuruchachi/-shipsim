@@ -2154,6 +2154,13 @@ function _tfBuildMesh(S) {
     g.name = 'Traffic:' + S.name;
     return g;
 }
+// カメラから船までの距離[m]（カメラで他の船を追っているとき、自分の船から遠くても、カメラの近くの船はよく描く）
+const _tfCamU = {};
+function _tfCamDist(S) {
+    if (typeof camera === 'undefined' || !camera || !(S.dPl < TF_NEAR)) return S.dPl;
+    const l = _tfLocal(S, _tfCamU);
+    return Number.isFinite(l.x) ? Math.hypot(l.x - camera.position.x, l.z - camera.position.z) : S.dPl;
+}
 function _tfDropMesh(S) {
     if (!S || !S.mesh) return;
     if (typeof scene !== 'undefined' && scene) scene.remove(S.mesh);
@@ -2193,7 +2200,9 @@ function _tfVisual(S, t, vis, night) {
     const dp = S.dmg && typeof trafficDamagePose === 'function' ? trafficDamagePose(S) : null;
     g.position.set(loc.x, oh * 0.8 - (dp ? dp.sink : 0), loc.z);
     g.rotation.set(-pitch * 0.7 + (dp ? dp.trim : 0), yaw, roll * 0.6 - (dp ? dp.heel : 0), 'YXZ');
-    g.visible = S.dPl < vis * 1.4 + S.L;
+    // 見える距離：自分の船とカメラの近い方から（カメラで追っている船はいつも）
+    const dV = S.id === traffic.camFollow ? 0 : Math.min(S.dPl, Math.hypot(loc.x - camera.position.x, loc.z - camera.position.z));
+    g.visible = dV < vis * 1.4 + S.L;
     // 影は近く（TF_SHADOW_NEAR）の船だけ落とす（影の地図に描く数を減らす）
     const sh = S.dPl < TF_SHADOW_NEAR;
     if (g.userData.shadowOn !== sh) { g.userData.shadowOn = sh; g.traverse(o => { if (o.isMesh) { if (o.userData.cs0 === undefined) o.userData.cs0 = o.castShadow; o.castShadow = sh && o.userData.cs0; } }); }
@@ -2411,7 +2420,11 @@ function updateTraffic(t, dt) {
     const glowK = night * ((typeof lightSettings !== 'undefined' && Number.isFinite(lightSettings.windowGlowMult)) ? lightSettings.windowGlowMult : 1);
     for (const P of _tfProto.values()) if (P.glow && P.users > 0 && P.glowK !== glowK) { P.glowK = glowK; for (const [m, base] of P.glow) m.emissiveIntensity = base * glowK; }
     {
-        const show = traffic.ships.filter(S => S.saved && S.dPl < Math.min(TF_SHOW, vis * 1.5 + 2000) && _tfShown(S)).sort((a, b) => a.dPl - b.dPl);
+        // （カメラで追っている船はいちばん先に：遠くて後回しにされると、モデルが外れて追うのが切れ、
+        //  カメラが自分の船へ飛んで戻る。外から見ると、追っていた船が遠くへ瞬間移動したように見えていた）
+        const fol = traffic.camFollow, near = (S) => Math.min(S.dPl, _tfCamDist(S));
+        const show = traffic.ships.filter(S => S.saved && (S.dPl < Math.min(TF_SHOW, vis * 1.5 + 2000) || (S.id === fol && S.dPl < TF_NEAR)) && _tfShown(S))
+            .sort((a, b) => (b.id === fol) - (a.id === fol) || near(a) - near(b));
         // 近い船から、モデルの大きさの合計が予算に収まるだけ（同じモデルの船は 1 つ分）
         const keys = new Set(), mx = _tfProtoMax(), budget = _tfProtoBudget(), PB = traffic.protoBytes || new Map();
         let used = 0;
@@ -2549,17 +2562,20 @@ function trafficFollow(id) {
     if (typeof _wmShowInfo === 'function') _wmShowInfo();
 }
 window.trafficFollow = trafficFollow;
+const _tfFolP = new THREE.Vector3();
 function _tfFollowTick() {
     if (traffic.camFollow == null) return;
     const S = _tfById(traffic.camFollow);
     // 視点のボタンで別の視点にした・船が居なくなった・遠く（25km より先）へ行った：やめる
-    if (cameraMode !== 'free' || !S || !_tfShown(S) || !S.mesh || !(S.dPl < TF_NEAR)) {
-        if (cameraMode === 'free' && (!S || !_tfShown(S) || !(S.dPl < TF_NEAR))) _tfMsg('追っていた船が見えなくなったので、追うのをやめました');
+    if (cameraMode !== 'free' || !S || !_tfShown(S) || !(S.dPl < TF_NEAR) || S.st === 'gone' || S.st === 'off') {
+        if (cameraMode === 'free') _tfMsg('追っていた船が見えなくなったので、追うのをやめました');
         traffic.camFollow = null; traffic.camLast = null; window._waterCenter = null;
         if (cameraMode === 'free') trafficFollow(null);
         return;
     }
-    const p = S.mesh.position;
+    // （モデルを読み込み直している間など、形が無くても、船の位置で追い続ける）
+    let p = S.mesh && S.mesh.position;
+    if (!p) { const l = _tfLocal(S, {}); if (!Number.isFinite(l.x)) return; p = _tfFolP.set(l.x, traffic.camLast ? traffic.camLast.y : 0, l.z); }
     if (!traffic.camLast) {
         // 初め：船の斜め後ろの上から
         const yaw = _tfYaw(S, { x: p.x, z: p.z }), fx = Math.sin(yaw), fz = Math.cos(yaw);
@@ -3000,7 +3016,7 @@ async function _tfLoadProto(v) {
         buf = null;
         // 光源は外す（重い）。影は落とす（窓の発光面は落とさない）。
         // 窓・キャビンの発光（自分の船の registerWindowGlowMaterial と同じ見分け方）は、昼は消して夜だけ点ける
-        const lights = [], glow = new Map();
+        const lights = [], glow = new Map(), twinCache = new Map();
         const isGlow = (m) => {
             if (!m || !m.emissive) return false;
             const c = m.emissive;
@@ -3019,6 +3035,10 @@ async function _tfLoadProto(v) {
                 if (isGlow(m)) { win = true; if (!glow.has(m)) glow.set(m, m.emissiveIntensity != null ? m.emissiveIntensity : 1); }
                 // 晴れた昼の影のくっきりさ（間接光を弱める）を、自分の船と同じに（61-ship-ao.js）
                 if (typeof _aoPatchMaterial === 'function') _aoPatchMaterial(m);
+            }
+            // 背中合わせに重なった面は表だけ描く（まだらに見えないように：08-model-loading-and-lighting.js）
+            if (typeof splitTwinFaces === 'function' && splitTwinFaces(o, twinCache)) {
+                for (const m of [].concat(o.material)) if (m && isGlow(m) && !glow.has(m)) { win = true; glow.set(m, m.emissiveIntensity != null ? m.emissiveIntensity : 1); }
             }
             o.castShadow = !win; o.receiveShadow = true; o.userData.noLightBake = true; o.userData.noBloom = !win;
         });

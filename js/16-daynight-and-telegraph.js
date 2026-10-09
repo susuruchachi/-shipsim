@@ -204,3 +204,84 @@ function updateDayNightCycle(dayProgress) {
     }
 }
 
+
+// ════════════════════════════════════════════════════════════════
+//  暦（日付）と月齢
+// ════════════════════════════════════════════════════════════════
+//  日付は 1800 年 1 月 1 日から今日まで選べる。時刻が 24 時を過ぎれば次の日になる。
+//  月齢は日付と時刻から天文の式で出す（平均の朔望月 29.530589 日。2000 年 1 月 6 日 18 時ごろの新月が基準）。
+//  月齢を手で変えたときは、元の日付にいちばん近い、その月齢の日にする。
+//  physics.dateDay0：gameTime の 0 日目が、1800 年 1 月 1 日から数えて何日目か
+const CAL_JD0 = 2378496.5;                  // 1800-01-01 0 時のユリウス日
+const CAL_SYNODIC = 29.530588853;
+const CAL_NEW_MOON_JD = 2451550.26;
+function _calUTC(y, m, d) { const t = new Date(0); t.setUTCFullYear(y, m - 1, d); t.setUTCHours(0, 0, 0, 0); return t.getTime(); }
+const CAL_MS0 = _calUTC(1800, 1, 1);
+function calDayOf(y, m, d) { return Math.round((_calUTC(y, m, d) - CAL_MS0) / 86400000); }
+function calDateOf(n) { const t = new Date(CAL_MS0 + n * 86400000); return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate() }; }
+function calToday() { const t = new Date(); return calDayOf(t.getFullYear(), t.getMonth() + 1, t.getDate()); }
+function calDayNow() {
+    if (!Number.isFinite(physics.dateDay0)) physics.dateDay0 = calToday();
+    return physics.dateDay0 + Math.floor(physics.gameTime / physics.dayDuration);
+}
+function calISO(n) { const q = calDateOf(n); return `${String(q.y).padStart(4, '0')}-${String(q.m).padStart(2, '0')}-${String(q.d).padStart(2, '0')}`; }
+// その日（時刻も）の月齢（0＝新月、0.5＝満月）
+function calMoonPhaseAt(n, frac) {
+    const jd = CAL_JD0 + n + (frac || 0);
+    const p = ((jd - CAL_NEW_MOON_JD) / CAL_SYNODIC) % 1;
+    return p < 0 ? p + 1 : p;
+}
+function calMoonPhase() { return calMoonPhaseAt(calDayNow(), physics.dayProgress || 0); }
+// 日付を決める（時刻はそのまま）。1800 年 1 月 1 日〜今日
+function calSetDay(n) {
+    n = Math.max(0, Math.min(calToday(), Math.round(n)));
+    physics.dateDay0 = n - Math.floor(physics.gameTime / physics.dayDuration);
+    physics.moonPhase = calMoonPhase();
+    calSyncUI(true);
+}
+// 月齢を決める：元の日付にいちばん近い、その月齢の日へ（同じ時刻のまま）
+function calSetMoonPhase(p) {
+    const n = calDayNow(), cur = calMoonPhase();
+    let dp = ((p - cur) % 1 + 1.5) % 1 - 0.5;                    // −0.5〜0.5 周
+    let k = Math.round(dp * CAL_SYNODIC);
+    // 今日より先にはできないので、前の周の同じ月齢へ
+    if (n + k > calToday()) k -= Math.round(CAL_SYNODIC);
+    calSetDay(n + k);
+}
+let _calShown = null;
+function calSyncUI(force) {
+    const n = calDayNow();
+    const el = document.getElementById('date-input');
+    if (el && document.activeElement !== el && (force || _calShown !== n)) { el.max = calISO(calToday()); el.value = calISO(n); }
+    _calShown = n;
+    const ps = document.getElementById('phase-slider'), pn = document.getElementById('phase-num');
+    if (ps && document.activeElement !== ps) ps.value = physics.moonPhase;
+    if (pn && document.activeElement !== pn) pn.value = physics.moonPhase.toFixed(2);
+    const ml = document.getElementById('moon-age');
+    if (ml) {
+        const age = physics.moonPhase * CAL_SYNODIC;
+        const name = physics.moonPhase < 0.03 || physics.moonPhase > 0.97 ? '新月' : Math.abs(physics.moonPhase - 0.5) < 0.03 ? '満月'
+            : Math.abs(physics.moonPhase - 0.25) < 0.04 ? '上弦' : Math.abs(physics.moonPhase - 0.75) < 0.04 ? '下弦' : '';
+        ml.textContent = `月齢 ${age.toFixed(1)}${name ? '（' + name + '）' : ''}`;
+    }
+}
+window.calDayNow = calDayNow; window.calSetDay = calSetDay; window.calSetMoonPhase = calSetMoonPhase;
+window.calISO = calISO; window.calMoonPhase = calMoonPhase; window.calDayOf = calDayOf; window.calSyncUI = calSyncUI;
+
+// ── オーロラ（天候の欄のボタン）：今夜から出す・止める（夜だけ見える） ──
+function auroraToggle(on) {
+    const days = physics.gameTime / physics.dayDuration;
+    if (on === undefined) on = !(auroraActive > 0.01 || days >= nextAuroraDay);
+    if (on) { nextAuroraDay = days; window._auroraHold = true; }
+    else { window._auroraHold = false; nextAuroraDay = days + 25 + Math.random() * 9; }
+    auroraSyncUI();
+}
+function auroraSyncUI() {
+    const b = document.getElementById('aurora-btn');
+    if (!b) return;
+    const days = physics.gameTime / physics.dayDuration;
+    const on = !!window._auroraHold || days >= nextAuroraDay;
+    const lab = on ? '🌌 オーロラを止める' : '🌌 オーロラを出す（夜に見えます）';
+    if (b.textContent !== lab) b.textContent = lab;
+}
+window.auroraToggle = auroraToggle;

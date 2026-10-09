@@ -233,9 +233,51 @@ function _flOut(e, p, y, a, t) {
     const x = _flWX(e, p, y, a), z = _flWZ(e, p, y, a);
     return typeof getWaveHeight === 'function' ? getWaveHeight(x, z, t, true) : 0;
 }
+// ── 甲板を越える大波（青波・グリーンウォーター）──
+//  波の山が主甲板の舷の縁より高くなると、甲板に海水が打ち込む。ほとんどは舷の排水口から海へ戻るが、一部は
+//  甲板の開口（ハッチ・通風筒・扉）から下の区画へ入る。開口は甲板の 0.06%（0.15〜1.2m²）とみなす：
+//  1 m の打ち込みが 3 秒続いて、1 区画に 2〜3 トン。続けば溜まっていく（排水ポンプで汲み出せる）。
+//  ふだんは 0.2 秒ごとに、舷の縁の 12 か所 × 両舷だけ見る（重くしない）
+const FL_GREEN_OPEN = 0.0006, FL_GREEN_MIN = 0.15, FL_GREEN_MAX = 1.2;
+function _flGreenCheck(e, t, dt) {
+    flood.greenT = Math.max(0, (flood.greenT || 0) - dt);
+    flood.greenChk = (flood.greenChk || 0) - dt;
+    if (flood.greenChk > 0) return;
+    flood.greenChk = 0.2;
+    if (flood.dirty || _flKey() !== flood.key) _flBuild();
+    const D = flood.D; if (!D || !flood.comps.length || typeof wtHW !== 'function') return;
+    for (let k = 0; k < 12; k++) {
+        const a = D.aS + (k + 0.5) / 12 * (D.aB - D.aS), hw = wtHW(D.yDeck * 0.999 + D.yBot * 0.001, a);
+        if (!(hw > 0)) continue;
+        for (const sd of [-1, 1]) {
+            const p = sd * hw;
+            if (_flOut(e, p, D.yDeck, a, t) > _flWY(e, p, D.yDeck, a) + 0.05) { flood.greenT = 4; return; }
+        }
+    }
+}
+// 区画の上の甲板の縁で、波の山が縁を越えている高さ[m]（両舷・前後 3 か所でいちばん高い所）
+function _flGreenHead(c, e, t, D) {
+    let h = 0;
+    for (const a of [c.a0 + (c.a1 - c.a0) * 0.2, (c.a0 + c.a1) / 2, c.a1 - (c.a1 - c.a0) * 0.2]) {
+        const hw = wtHW(D.yDeck * 0.999 + D.yBot * 0.001, a);
+        if (!(hw > 0)) continue;
+        for (const sd of [-1, 1]) {
+            if (c.np > 1) { const ref = wtHWRef(D, a), f = ref > 0 ? sd * hw / ref : 0; if (f < c.fLo - 0.05 || f > c.fHi + 0.05) continue; }
+            const p = sd * hw;
+            h = Math.max(h, _flOut(e, p, c.y1, a, t) - _flWY(e, p, c.y1, a));
+        }
+    }
+    return Math.min(4, h);
+}
 function updateFlooding(t, dt) {
     let any = flood.holes.length > 0;
     if (!any) for (const c of flood.comps) if (c.vol > 0) { any = true; break; }
+    // 大波が甲板を越えているか（穴が無くても浸水する）
+    {
+        const r0 = typeof wtRoot === 'function' ? wtRoot() : null;
+        if (r0 && !(typeof isDesignMode !== 'undefined' && isDesignMode) && !flood.sunk && (dt || 0) > 0) _flGreenCheck(r0.matrixWorld.elements, t, Math.max(0, Math.min(30, dt)));
+        if (flood.greenT > 0) any = true;
+    }
     if (!any) { flood.massKg = 0; flood.torqueP = 0; flood.rollBias = 0; flood.deckCap = false; window._wtDeckCap = false; _flVisual(false); return; }
     if (flood.dirty || _flKey() !== flood.key) {
         // 区画の並びが変わった：水は抜いて、穴を付け直す
@@ -258,6 +300,18 @@ function updateFlooding(t, dt) {
             c.deckY = yd;
         }
         for (const h of flood.holes) h.out = _flOut(e, h.p, h.y, h.a, t);
+        // 甲板を越える大波：打ち込んでいる区画と、その高さ
+        let greenIn = false;
+        for (let i = 0; i < flood.nMain; i++) {
+            const c = flood.comps[i];
+            c.greenH = flood.greenT > 0 ? _flGreenHead(c, e, t, flood.D) : 0;
+            if (c.greenH > 0.05) greenIn = true;
+        }
+        if (greenIn && !flood.greenMsg) {
+            flood.greenMsg = true; flood.shown = true;
+            if (!flood.pump) flood.pump = true;          // （溜まった水は、排水ポンプで汲み出す）
+            _flMsg('大波が甲板を越えて、甲板の開口から海水が少しずつ入っています（排水ポンプを動かしました）');
+        }
         const n = Math.min(60, Math.max(1, Math.ceil(dt / 0.25))), hdt = dt / n;
         for (let it = 0; it < n; it++) {
             for (const c of flood.comps) { const st = _flState(c, sc3); c.Yw = _flWY(e, st.x, st.y, st.a); c.dv = 0; }
@@ -284,12 +338,20 @@ function updateFlooding(t, dt) {
                 q = Math.max(0, Math.min(q, (H.Yw - Lo.Yw) * aH * aL / (aH + aL), H.vol + H.dv, Lo.vmax - Lo.vol - Lo.dv));
                 H.dv -= q; Lo.dv += q;
             }
-            // 主甲板が水に入った区画：上から
+            // 主甲板が水に入った区画（沈んでいく船：甲板が波の無い海面より下）：上から。
+            // 波の山が甲板を越えるだけのとき（甲板は海面より上）は、下の大波の分（開口から一部だけ）
             for (let i = 0; i < flood.nMain; i++) {
                 const c = flood.comps[i];
-                if (!(c.deckOut > c.deckY)) continue;
+                if (!(c.deckOut > c.deckY) || !(wl0 > c.deckY)) continue;
                 const top = Math.max(c.deckY, c.Yw);
                 if (c.deckOut > top) c.dv += FL_CD * Math.max(2, c.deckA * sc2 * 0.03) * Math.sqrt(2 * FL_G * (c.deckOut - top)) * hdt;
+            }
+            // 甲板を越えた大波：甲板の開口から（舷の排水口から戻る分を除いた、一部だけ）
+            for (let i = 0; i < flood.nMain; i++) {
+                const c = flood.comps[i];
+                if (!(c.greenH > 0.05) || wl0 > c.deckY) continue;
+                const room = c.vmax - c.vol - c.dv;
+                if (room > 0) c.dv += Math.min(room, FL_CD * Math.min(FL_GREEN_MAX, Math.max(FL_GREEN_MIN, c.deckA * sc2 * FL_GREEN_OPEN)) * Math.sqrt(2 * FL_G * Math.min(2, c.greenH)) * hdt);
             }
             // 排水ポンプ：水の多い区画から
             if (flood.pump) {

@@ -151,7 +151,7 @@ const PERF_PRESETS = {
     //   1 フレームに 500 回以上も引き波の高さを計算し、引き波が伸びるほど重くなっていた。泡の上下はゆっくりなので
     //   数フレームに 1 回で十分。引き波の記録（historyMax）は 0.4 秒おきで、15 秒より古いものは波を立てない
     //   （02 / 04）ので、40 件（16 秒）より多く持っても使われない）
-    high:    { smokeCap: 2000, normalsInterval: 1, historyMax: 40, pixelRatio: 2.0,  shadowsEnabled: true,  shadowMapSize: 2048, foamUpdateInterval: 4 },
+    high:    { smokeCap: 2000, normalsInterval: 1, historyMax: 40, pixelRatio: 2.0,  shadowsEnabled: true,  shadowMapSize: 4096, foamUpdateInterval: 4 },
     medium:  { smokeCap: 1000, normalsInterval: 3, historyMax: 35, pixelRatio: 1.0,  shadowsEnabled: true,  shadowMapSize: 2048, foamUpdateInterval: 5 },
     low:     { smokeCap: 600,  normalsInterval: 4, historyMax: 22, pixelRatio: 0.85, shadowsEnabled: true,  shadowMapSize: 1024, foamUpdateInterval: 6 },
     verylow: { smokeCap: 300,  normalsInterval: 6, historyMax: 14, pixelRatio: 0.75, shadowsEnabled: true,  shadowMapSize: 512,  foamUpdateInterval: 8 },

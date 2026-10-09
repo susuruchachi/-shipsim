@@ -278,8 +278,97 @@ function applyAnisotropyToMaterial(mat) {
     });
 }
 
+// ── 背中合わせに重なった面（同じ位置の三角形が表裏 2 枚）──
+//  模型によっては、薄い板（通風筒の口・煙突の縁・ボートのカバーなど）を、表向きと裏向きの 2 枚の面で作ってある
+//  （表と裏で色が違うことも多い）。この船の材質は両面を描く（DoubleSide）ので、同じ所に 2 枚とも描かれて奥行きが
+//  まったく同じになり、どちらが見えるかが画素ごとに入れ替わって、まだらに見えていた（モーリタニアの通風筒・煙突など）。
+//  そこで、その 2 枚の組は表だけ描く材質（FrontSide：裏から見ると反対の 1 枚が見える）に分ける。
+//  向きまで同じ、まったく同じ面が 2 枚あるときは 1 枚を消す。ほかの面は今まで通り両面
+function splitTwinFaces(mesh, frontCache) {
+    const g = mesh.geometry, P = g && g.attributes.position;
+    if (!P || !mesh.material) return 0;
+    const idx = g.index ? g.index.array : null, nT = Math.floor((idx ? idx.length : P.count) / 3);
+    if (nT < 2 || nT > 4000000) return 0;
+    if (!g.boundingBox) g.computeBoundingBox();
+    const bb = g.boundingBox, ext = Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
+    const q = Math.max(1e-9, ext * 2e-6);
+    // 頂点の位置を細かい升目に丸めた番号（同じ位置の頂点は同じ番号）
+    const qv = new Int32Array(P.count * 3), vh = new Uint32Array(P.count);
+    for (let v = 0; v < P.count; v++) {
+        const x = Math.round((P.getX(v) - bb.min.x) / q), y = Math.round((P.getY(v) - bb.min.y) / q), z = Math.round((P.getZ(v) - bb.min.z) / q);
+        qv[v * 3] = x; qv[v * 3 + 1] = y; qv[v * 3 + 2] = z;
+        let h = Math.imul(x, 73856093) ^ Math.imul(y, 19349663) ^ Math.imul(z, 83492791);
+        vh[v] = h >>> 0;
+    }
+    const V = (t, k) => idx ? idx[t * 3 + k] : t * 3 + k;
+    const same = (a, b) => qv[a * 3] === qv[b * 3] && qv[a * 3 + 1] === qv[b * 3 + 1] && qv[a * 3 + 2] === qv[b * 3 + 2];
+    const kind = new Uint8Array(nT);               // 0：ふつう、1：背中合わせの組、2：まったく同じ面（消す）
+    const map = new Map();
+    let twins = 0, dups = 0;
+    for (let t = 0; t < nT; t++) {
+        const a = V(t, 0), b = V(t, 1), c = V(t, 2);
+        if (same(a, b) || same(b, c) || same(a, c)) continue;          // つぶれた三角形
+        const h = ((vh[a] + vh[b] + vh[c]) ^ Math.imul(vh[a] ^ vh[b] ^ vh[c], 2654435761)) >>> 0;
+        const L = map.get(h);
+        if (L) {
+            let hit = false;
+            for (const u of L) {
+                const ua = V(u, 0), ub = V(u, 1), uc = V(u, 2);
+                // 同じ 3 点か（順番は問わない）
+                const m0 = same(a, ua) ? 0 : same(a, ub) ? 1 : same(a, uc) ? 2 : -1;
+                if (m0 < 0) continue;
+                const U = [ua, ub, uc];
+                if (!(same(b, U[(m0 + 1) % 3]) && same(c, U[(m0 + 2) % 3])) && !(same(b, U[(m0 + 2) % 3]) && same(c, U[(m0 + 1) % 3]))) continue;
+                if (same(b, U[(m0 + 1) % 3])) { kind[t] = 2; dups++; }   // 同じ向き（同じ面が 2 枚）
+                else { if (kind[u] === 0) { kind[u] = 1; twins++; } kind[t] = 1; twins++; }
+                hit = true; break;
+            }
+            if (hit) continue;
+            L.push(t);
+        } else map.set(h, [t]);
+    }
+    if (!twins && !dups) return 0;
+    // 三角形を並べ直す：元の材質ごとに、ふつうの面（両面）と、背中合わせの面（表だけ）
+    const mats = Array.isArray(mesh.material) ? mesh.material.slice() : [mesh.material];
+    const groups = g.groups && g.groups.length ? g.groups : [{ start: 0, count: nT * 3, materialIndex: 0 }];
+    const out = [], ng = [];
+    const frontIdx = new Map();
+    for (const G of groups) {
+        const t0 = Math.floor(G.start / 3), t1 = Math.min(nT, t0 + Math.floor(G.count / 3)), mi = G.materialIndex || 0;
+        const s0 = out.length;
+        for (let t = t0; t < t1; t++) if (kind[t] === 0) out.push(V(t, 0), V(t, 1), V(t, 2));
+        if (out.length > s0) ng.push({ start: s0, count: out.length - s0, materialIndex: mi });
+        const s1 = out.length;
+        for (let t = t0; t < t1; t++) if (kind[t] === 1) out.push(V(t, 0), V(t, 1), V(t, 2));
+        if (out.length > s1) {
+            let fi = frontIdx.get(mi);
+            if (fi === undefined) {
+                const m = mats[mi];
+                let fm = frontCache && frontCache.get(m);
+                if (!fm) {
+                    fm = m.clone(); fm.side = THREE.FrontSide;
+                    // （材質に足した描き方の変更も引き継ぐ：clone は onBeforeCompile を写さない）
+                    fm.onBeforeCompile = m.onBeforeCompile; fm.customProgramCacheKey = m.customProgramCacheKey;
+                    if (typeof registerWindowGlowMaterial === 'function' && typeof windowGlowMaterials !== 'undefined' && windowGlowMaterials.indexOf(m) !== -1) registerWindowGlowMaterial(fm);
+                    if (frontCache) frontCache.set(m, fm);
+                }
+                fi = mats.length; mats.push(fm); frontIdx.set(mi, fi);
+            }
+            ng.push({ start: s1, count: out.length - s1, materialIndex: fi });
+        }
+    }
+    const IA = P.count > 65535 ? Uint32Array : Uint16Array;
+    g.setIndex(new THREE.BufferAttribute(new IA(out), 1));
+    g.clearGroups(); for (const G of ng) g.addGroup(G.start, G.count, G.materialIndex);
+    mesh.material = mats;
+    return twins + dups;
+}
+window.splitTwinFaces = splitTwinFaces;
+
 function applyMaterialsToModel(model) {
     const normalMapDone = new Set(); // 同じマテリアルを複数メッシュで共有していても生成は1回だけ
+    const frontCache = new Map();
+    let twinN = 0;
     model.traverse((child) => {
         if (!child.isMesh || !child.material) return;
         // v83: 船体・上部構造・煙突・舵などすべてのGLBメッシュで影を出す/受ける。
@@ -330,6 +419,8 @@ function applyMaterialsToModel(model) {
         // 窓・キャビンなどの発光マテリアル（registerWindowGlowMaterialで登録済み）を
         // 含むメッシュだけブルーム対象として残す。それ以外のPBR面（船体・甲板等）は
         // 引き続きブルームパスから除外する（ガビガビ防止）。
+        // 背中合わせに重なった面は、表だけ描く（まだらに見えないように）
+        twinN += splitTwinFaces(child, frontCache);
         const hasWindowGlow = newMats.some((m) => m && windowGlowMaterials.indexOf(m) !== -1);
         child.userData.noBloom = !hasWindowGlow;
         // emissiveメッシュをリストに追加（後で発光パネルの抽出に使う）
@@ -343,6 +434,7 @@ function applyMaterialsToModel(model) {
             child.castShadow = false;
         }
     });
+    if (twinN) console.log(`[model] 背中合わせに重なった面 ${twinN} 枚を、表だけ描くようにしました`);
 }
 
 // v91: 船モデルを読み替える際、古いモデルのジオメトリ/マテリアル/テクスチャを

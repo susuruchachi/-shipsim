@@ -175,7 +175,8 @@ function collectShipConfig() {
         shipPos: { x: physics.cgWorldX, z: physics.cgWorldZ, heading: physics.heading },
         dayProgress: physics.dayProgress,
         moonPhase: physics.moonPhase,
-        moonPhaseManual: !!physics.moonPhaseManual,
+        // 日付（1800 年 1 月 1 日から数えた日。月齢はこの日付と時刻から決まる：16-daynight-and-telegraph.js）
+        dateDay: (typeof calDayNow === 'function') ? calDayNow() : null,
         // 船の情報：会社・組織、就航・引退の年（59-traffic.js：他の船として出すときの会社・時代）
         info: getShipInfo(),
         // 最後に使ったモデル形式名
@@ -475,25 +476,14 @@ function applyShipConfig(cfg) {
     }
     if (Number.isFinite(cfg.dayProgress)) {
         physics.dayProgress = cfg.dayProgress;
-        physics.gameTime = cfg.dayProgress * physics.dayDuration;
+        physics.gameTime = (Math.floor(physics.gameTime / physics.dayDuration) + cfg.dayProgress) * physics.dayDuration;
         const hour = cfg.dayProgress * 24;
         setVal('time-slider', hour); setVal('time-num', hour.toFixed(1));
         updateDayNightCycle(cfg.dayProgress);
     }
-    if (Number.isFinite(cfg.moonPhase)) {
-        physics.moonPhase = cfg.moonPhase;
-        // moonPhaseManual が true のときだけ手動固定。false（またはセーブに含まれない）なら自動進行
-        physics.moonPhaseManual = cfg.moonPhaseManual === true;
-        // 自動進行の場合、gameTimeを月齢から逆算して合わせる
-        // （totalDays = moonPhase * 29.5 + 任意の整数日）
-        if (!physics.moonPhaseManual) {
-            const currentDays = physics.gameTime / physics.dayDuration;
-            const currentCycles = Math.floor(currentDays / 29.5);
-            // 現在のサイクル内で moonPhase に対応する日数に合わせる
-            physics.gameTime = (currentCycles * 29.5 + cfg.moonPhase * 29.5) * physics.dayDuration;
-        }
-        setVal('phase-slider', cfg.moonPhase); setVal('phase-num', cfg.moonPhase.toFixed(2));
-    }
+    // 日付（月齢は日付から）。日付の無い以前の保存は、今の日付にいちばん近い、保存した月齢の日に
+    if (Number.isFinite(cfg.dateDay) && typeof calSetDay === 'function') calSetDay(cfg.dateDay);
+    else if (Number.isFinite(cfg.moonPhase) && typeof calSetMoonPhase === 'function') calSetMoonPhase(cfg.moonPhase);
     if (cfg.lastModelName) {
         window.lastLoadedModelName = cfg.lastModelName;
         const statusText = $('import-status');

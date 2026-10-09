@@ -10,7 +10,10 @@
 //  にその値を掛ける。太陽の直接の光は今まで通り影の地図で、焼き込んだ照明（40-light-bake.js）はそのまま。
 //  計算は少しずつ（1 フレームに 6ms ほど）。船のモデル・形が変わったら（升目を作り直したら）やり直す。
 
-const shipAO = { grid: null, field: null, job: null, meshesDone: new WeakMap(), strength: 0.7, contrast: 1, checkT: 0 };
+//  ※ 焼き込みは今は使わない（strength 0・計算もしない）：升目が粗いので、影でない所が暗くなったり、
+//    面の細かい煙突などにまだらに付いて汚れのように見えていた。代わりに、太陽の影そのものを濃く・細かくした
+//    （下の _aoContrastUpdate と、17-main-loop.js の updateSunShadowFollow）
+const shipAO = { grid: null, field: null, job: null, meshesDone: new WeakMap(), strength: 0, contrast: 1, checkT: 0, bake: false };
 window.shipAO = shipAO;
 // 見通す向き（球の上にほぼ均等に 40 本）
 const _AO_DIRS = (() => {
@@ -121,7 +124,7 @@ function* _aoMeshes(G, F, list, root) {
         yield;
     }
 }
-const shipAOUniforms = { uAOStrength: { value: 0.7 }, uAODebug: { value: 0 }, uIndirK: { value: 1 }, uDirectK: { value: 1 } };    // uAODebug=1：空の見え方を白黒で表示（調整用）
+const shipAOUniforms = { uAOStrength: { value: 0 }, uAODebug: { value: 0 }, uIndirK: { value: 1 }, uDirectK: { value: 1 } };    // uAODebug=1：空の見え方を白黒で表示（調整用）
 function _aoPatchMaterial(mat) {
     if (!mat || mat.userData.aoPatched) return;
     if (!(mat.isMeshStandardMaterial || mat.isMeshPhongMaterial || mat.isMeshLambertMaterial)) return;
@@ -148,13 +151,22 @@ function _aoContrastUpdate() {
     const night = typeof lightingNightFactor === 'number' ? lightingNightFactor : 0;
     const sun = (window.weatherLightMul && Number.isFinite(weatherLightMul.sun)) ? Math.min(1, weatherLightMul.sun) : 1;
     const k = Math.max(0, Math.min(1, (1 - night * 1.5) * sun)) * shipAO.contrast;
-    shipAOUniforms.uIndirK.value = 1 - 0.42 * k;
-    shipAOUniforms.uDirectK.value = 1 + 0.1 * k;
+    // （晴れた昼の日陰は、間接光を 6 割減らして濃く。日なたは太陽の光を少し強めて、全体の明るさを保つ）
+    shipAOUniforms.uIndirK.value = 1 - 0.6 * k;
+    shipAOUniforms.uDirectK.value = 1 + 0.18 * k;
 }
 function shipShadowContrast(v) { shipAO.contrast = Math.max(0, Math.min(1.5, v)); }
 window.shipShadowContrast = shipShadowContrast;
 function updateShipAO() {
     _aoContrastUpdate();
+    if (!shipAO.bake) {
+        // 焼き込みはしない：日なたと日陰のくっきりさだけ、船のマテリアルに入れる（2 秒ごとに、新しいマテリアルへ）
+        const now = performance.now();
+        if (now - shipAO.checkT < 2000) return;
+        shipAO.checkT = now;
+        for (const m of (typeof _ssMeshes === 'function' ? _ssMeshes() : [])) (Array.isArray(m.material) ? m.material : [m.material]).forEach(_aoPatchMaterial);
+        return;
+    }
     const G = window.shipSolid && shipSolid.G;
     if (!G || typeof shipGroup === 'undefined' || !shipGroup) return;
     if (shipAO.job) {

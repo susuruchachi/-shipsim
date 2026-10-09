@@ -134,8 +134,10 @@ function init() {
     sunLight.shadow.camera.near   = SHADOW_CAM_NEAR;
     sunLight.shadow.camera.far    = SHADOW_CAM_FAR;
     sunLight.shadow.mapSize.set(perf.shadowMapSize, perf.shadowMapSize);
-    sunLight.shadow.bias       = -0.0008;
-    sunLight.shadow.normalBias = 0.4;
+    // （影の地図の升目を細かくした分、ずらしも小さく：手すり・煙突の根元などの影が浮かないように。
+    //  影の範囲は船の大きさに合わせて 17-main-loop.js の updateSunShadowFollow で決め直す）
+    sunLight.shadow.bias       = -0.0005;
+    sunLight.shadow.normalBias = 0.15;
     sunLight.shadow.radius     = 3; // PCFSoftShadowMapの追加ソフト化
     sunLight.shadow.camera.updateProjectionMatrix();
     applyShadowQualityFromPerf(); // perf.shadowsEnabledに応じてON/OFFを反映
