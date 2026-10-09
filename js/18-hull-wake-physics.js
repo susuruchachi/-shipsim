@@ -1423,6 +1423,8 @@ function scanHullProfile() {
                 [hullTriVerts, lenientTriVerts],
                 xIsForward, heightProfMinY, heightProfMaxY, wlY
             );
+            // 前後の位置ごとの甲板（舷側の外板の上の縁）の高さ（62-watertight.js の隔壁を甲板で切る）
+            if (hp.shape && typeof hullShapeComputeSheer === 'function') hullShapeComputeSheer(hp.shape, hullTriVerts, xIsForward);
         } catch (err) {
             console.warn('[HullScan] buildHullShape失敗、従来データへフォールバック', err);
             hp.shape = null;

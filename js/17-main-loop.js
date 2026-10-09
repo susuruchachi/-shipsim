@@ -142,7 +142,7 @@ function animate() {
             }
             else if (keys.a || touchLeft) physics.rudderAngle = Math.max(-35.0, physics.rudderAngle - 50 * subDt);
             else if (keys.d || touchRight) physics.rudderAngle = Math.min(35.0, physics.rudderAngle + 50 * subDt);
-            else if (window.autopilot && (autopilot.active || autopilot.selfDepart) && Number.isFinite(physics.autoRudder)) {
+            else if (window.autopilot && (autopilot.active || autopilot.selfDepart || autopilot.chase) && Number.isFinite(physics.autoRudder)) {
                 // 自動航行（49-autopilot.js）：ボタン操作の船でも、指示の舵角へ舵取機の速さで
                 const d = physics.autoRudder - physics.rudderAngle, step = 8 * subDt;
                 physics.rudderAngle += Math.abs(d) <= step ? d : Math.sign(d) * step;
@@ -157,7 +157,8 @@ function animate() {
         const speeds = { '-3': -maxSpd * 0.5, '-2': -maxSpd * 0.3, '-1': -maxSpd * 0.15, '0': 0.0, '1': maxSpd * 0.3, '2': maxSpd * 0.6, '3': maxSpd };
         // 機関は機関室が応答してから指令どおりに動かす（37-bridge-controls.js の telegraphAnswer）
         const _tgOrder = Number.isFinite(physics.telegraphAnswer) ? physics.telegraphAnswer : physics.telegraphState;
-        physics.targetSpeed = isDesignMode ? 0.0 : speeds[_tgOrder];
+        // 他の船と並走するとき（49-autopilot.js）は、テレグラフの段ではなく、機関の回転数（連続）で速さを合わせる
+        physics.targetSpeed = isDesignMode ? 0.0 : Number.isFinite(physics.apRpm) ? physics.apRpm * maxSpd : speeds[_tgOrder];
         // スクリューの回転数は、機関指令（テレグラフ）を目標に加減速する
         // （32-engine-propeller.js）。推力もこの回転数で決まるので、後進を
         // かけると先にスクリューが逆転し、その力で船が止まってから後ろへ進む。
@@ -170,8 +171,12 @@ function animate() {
         // 推進器の加速度（船首尾軸に沿った推力）。この後の heave 計算で、
         // 船体ピッチ角だけ傾けて鉛直成分も加えるために保持しておく。
         // 機関の馬力（56-engines.js）が見積もりより大きければ加速も速い
-        const thrustAccMag = (propTargetSpeed - physics.speed) * (0.3 / physics.mass) * ((typeof enginePowerFactor === 'function') ? enginePowerFactor() : 1);
+        const _kThrust = (0.3 / physics.mass) * ((typeof enginePowerFactor === 'function') ? enginePowerFactor() : 1);
+        const thrustAccMag = (propTargetSpeed - physics.speed) * _kThrust;
         physics.speed += thrustAccMag * subDt;
+        // スクリューそのものの推力（抵抗を引く前）：k×目標の速さ。走り続けている間（速さ＝目標）も推力は出ている。
+        // 推力はスクリューの軸（船首尾の向き）に沿って押すので、波で船首が上がれば上向きにも押す（下の上下の計算）
+        const thrustGrossAcc = propTargetSpeed * _kThrust * 0.514444;
         physics.speed = THREE.MathUtils.clamp(physics.speed, -maxSpd * 0.5, maxSpd);
 
         // --- 旋回・船首方位 ---
@@ -427,7 +432,8 @@ function animate() {
 
             // ── 推進器の鉛直成分：船首尾軸（ピッチ込み）に沿って推力が働くため、
             //   船がピッチしているときは推力の一部が鉛直方向にも加わる。
-            const thrustVertAcc = thrustAccMag * -Math.sin(physics.pitch);
+            //（以前は推力から抵抗を引いた残り（加速している分）だけを傾けていたので、一定の速さで走っている間は 0 だった）
+            const thrustVertAcc = thrustGrossAcc * -Math.sin(physics.pitch);
 
             // ── 質量に応じた応答減衰係数 ──────────────────────────────────
             // 以下のWAVE_FOLLOW_GAIN・maxHeaveAcc・vyMaxはこれまで船の質量と無関係な

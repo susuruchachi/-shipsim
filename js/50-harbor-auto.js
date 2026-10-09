@@ -486,7 +486,7 @@ function tugEscortStart() {
     if (tugEscort.active) return;
     const open = _teOpenSide();
     const T = _haTakeTugs(_haStationKeys(open, harborTugCount()));
-    Object.assign(tugEscort, { active: true, open, ids: T.map(t => t.id), held: null, t: 0, readyOnce: false });
+    Object.assign(tugEscort, { active: true, open, ids: T.map(t => t.id), held: null, t: 0, readyOnce: false, callD: 0 });
     if (typeof renderAutopilotPanel === 'function') renderAutopilotPanel();
 }
 // keep：タグは帰さない（そのまま着岸に使う）
@@ -541,6 +541,7 @@ function harborAutoStart(mode, plan, then) {
     // 潜水艦（54-submarine.js）は潜ったままでは離着岸しない
     if (window.sub && typeof isSubmarine === 'function' && isSubmarine() && (sub.depth > 1 || sub.mode === 'dive')) { _haMsg('潜航中は離着岸できません。浮上してからにしてください'); return false; }
     if (typeof autopilot !== 'undefined' && autopilot.active) autopilotStop('', true);
+    if (typeof autopilot !== 'undefined' && autopilot.chase && typeof apChaseStop === 'function') apChaseStop('', 'keep');
     Object.assign(harborAuto, { mode, plan, then: then || null, phase: 'tugs', t: 0, phaseT: 0, lastOrderT: -99, tugIds: [], resume: null, holdH: null, turning: false, alignDone: false });
     _haClearLines();
     // タグ：もう付いているタグ（狭い水路で付き添ってきたタグなど）はそのまま使い、足りなければ呼ぶ

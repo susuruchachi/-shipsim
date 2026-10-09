@@ -135,7 +135,7 @@ window.azipodActive = azipodActive;
 //           レバーの向き＝ポッドの向き（360°）、推力＝テレグラフ（機関の回転数）。舵は使わない
 function podModeNow() {
     if (!azipodActive()) return null;
-    const auto = (window.autopilot && autopilot.active) || (window.harborAuto && harborAuto.mode);
+    const auto = (window.autopilot && (autopilot.active || autopilot.chase)) || (window.harborAuto && harborAuto.mode);
     if (auto) return 'helm';
     if (maneuver.podMode === 'helm' && typeof bridgeAzimuthLever === 'function' && bridgeAzimuthLever() !== null) return 'lever';
     return maneuver.podMode;

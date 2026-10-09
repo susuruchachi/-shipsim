@@ -148,6 +148,24 @@ function hullShapeLevelProfile(segsFlat, extentSegs, tParams) {
         if (a1 < aMin) aMin = a1; if (a1 > aMax) aMax = a1;
     }
     if (!(aMax - aMin > 1e-9)) return null;
+    // 離れた部品（マスト・甲板室・ボートなど）を 1 つの輪郭につながない：前後方向に切れ目（全体の長さの 1.5% より
+    // 大きい隙間）のある所で塊に分け、いちばん長い塊だけを輪郭にする（船体の外板は前後に切れ目なく続く）。
+    // 以前は前後端をすべての線分から取り、間の幅を補間していたので、沈んで甲板より上まで水が来ると、
+    // 船体とマストを結んだ細長い輪郭（泡の帯）が水面に出ていた
+    {
+        const iv = [];
+        for (let i = 0; i < nExt; i++) { const a0 = ext[i*4], a1 = ext[i*4+2]; iv.push(a0 < a1 ? [a0, a1] : [a1, a0]); }
+        iv.sort((x, y) => x[0] - y[0]);
+        const gap = (aMax - aMin) * 0.015;
+        let best = null, cur = [iv[0][0], iv[0][1]];
+        for (let i = 1; i <= iv.length; i++) {
+            if (i < iv.length && iv[i][0] <= cur[1] + gap) { if (iv[i][1] > cur[1]) cur[1] = iv[i][1]; continue; }
+            if (!best || cur[1] - cur[0] > best[1] - best[0]) best = cur;
+            if (i < iv.length) cur = [iv[i][0], iv[i][1]];
+        }
+        if (best && (best[1] - best[0]) < (aMax - aMin) * 0.999) { aMin = best[0]; aMax = best[1]; }
+        if (!(aMax - aMin > 1e-9)) return null;
+    }
 
     const N = tParams.length;
     const hw = new Float64Array(N);
@@ -344,6 +362,48 @@ function buildHullShape(triPools, xIsForward, yLo, yHi, designWaterlineY) {
         minLevelY: levelY[0], maxLevelY: levelY[M - 1],
         wlLevel, kTop, kFirst,
     };
+}
+
+// ─────────────────────────────────────────
+//  甲板（舷側の外板の上の縁）の高さを、前後の位置ごとに求める
+//  船体の頂点を前後 64 の帯に分け、帯の中でいちばん外（その帯の最大の半幅の 85% より外）にある頂点の、
+//  いちばん高い所。甲板室・上部構造は舷側より内側にあるので入らない。船首楼・船尾楼の高さの段も出る。
+//  shape.sheer = { a0, a1, y: Float64Array(64) }。hullShapeDeckAt で引く
+// ─────────────────────────────────────────
+function hullShapeComputeSheer(shape, tris, xIsForward) {
+    if (!shape || !tris || tris.length < 9) return;
+    const N = 64;
+    let a0 = Infinity, a1 = -Infinity;
+    for (let i = 0; i < tris.length; i += 3) { const a = xIsForward ? tris[i] : tris[i + 2]; if (a < a0) a0 = a; if (a > a1) a1 = a; }
+    if (!(a1 > a0)) return;
+    const bin = (a) => Math.max(0, Math.min(N - 1, Math.floor((a - a0) / (a1 - a0) * N)));
+    const wMax = new Float64Array(N);
+    for (let i = 0; i < tris.length; i += 3) { const a = xIsForward ? tris[i] : tris[i + 2], p = Math.abs(xIsForward ? tris[i + 2] : tris[i]); const b = bin(a); if (p > wMax[b]) wMax[b] = p; }
+    const top = new Float64Array(N).fill(-Infinity);
+    for (let i = 0; i < tris.length; i += 3) {
+        const a = xIsForward ? tris[i] : tris[i + 2], p = Math.abs(xIsForward ? tris[i + 2] : tris[i]), y = tris[i + 1], b = bin(a);
+        if (p >= wMax[b] * 0.85 && y > top[b]) top[b] = y;
+    }
+    // 頂点の無い帯は、となりから
+    const ok = []; for (let b = 0; b < N; b++) if (Number.isFinite(top[b])) ok.push(b);
+    if (!ok.length) return;
+    for (let b = 0; b < N; b++) {
+        if (Number.isFinite(top[b])) continue;
+        let lo = -1, hi = -1;
+        for (const k of ok) { if (k < b) lo = k; else { hi = k; break; } }
+        top[b] = lo < 0 ? top[hi] : hi < 0 ? top[lo] : top[lo] + (top[hi] - top[lo]) * (b - lo) / (hi - lo);
+    }
+    // ならす（1 帯だけ飛び出た所：手すり・柱などの細い物）
+    const y = new Float64Array(N);
+    for (let b = 0; b < N; b++) { const v = [top[Math.max(0, b - 1)], top[b], top[Math.min(N - 1, b + 1)]].sort((p, q) => p - q); y[b] = v[1]; }
+    shape.sheer = { a0, a1, y };
+}
+// 前後 along での甲板の高さ（無ければ Infinity）
+function hullShapeDeckAt(shape, along) {
+    const S = shape && shape.sheer; if (!S) return Infinity;
+    const N = S.y.length, f = (along - S.a0) / (S.a1 - S.a0) * N - 0.5;
+    const i = Math.max(0, Math.min(N - 2, Math.floor(f))), t = Math.max(0, Math.min(1, f - i));
+    return S.y[i] + (S.y[i + 1] - S.y[i]) * t;
 }
 
 // levelY配列からyを挟む下側インデックスを返す（二分探索）

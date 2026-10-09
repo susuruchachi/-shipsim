@@ -160,7 +160,7 @@ window.enginePowerFactor = enginePowerFactor;
 // ── 指令 ──
 function _engIndependent() {
     // 自動航行・自動の離着岸の間は、テレグラフ 1 つでまとめて動かす
-    const auto = (window.autopilot && autopilot.active) || (window.harborAuto && harborAuto.mode);
+    const auto = (window.autopilot && (autopilot.active || autopilot.chase)) || (window.harborAuto && harborAuto.mode);
     return shipEngines.split && !auto;
 }
 function _engTargetOrder(E) {
@@ -202,7 +202,8 @@ function engineUpdate(dt, designMode) {
         if (E.answerAt > 0) { E.answerAt -= dt; if (E.answerAt <= 0) { E.answerAt = -1; E.answer = E.order; if (typeof telegraphBell === 'function') telegraphBell(bridgeUI.telegraph, true); _engDrawAll(); } }
         // アジポッドのジョイスティック操船（58-maneuvering.js）では、回転数をそちらで決める
         const ov = (!designMode && typeof maneuverRpmTarget === 'function') ? maneuverRpmTarget(E) : null;
-        let target = designMode ? 0 : (ov !== null ? ov : ENG_RPM_OF[_engTargetOrder(E)] || 0);
+        // （他の船と並走するときは、自動航行の回転数（連続）で：49-autopilot.js）
+        let target = designMode ? 0 : (ov !== null ? ov : Number.isFinite(physics.apRpm) ? physics.apRpm : ENG_RPM_OF[_engTargetOrder(E)] || 0);
         if (E.conf && E.conf.astern === false && target < 0) target = 0;
         let r = E.rpm;
         const R = ENG_RESPONSE[engineTypeOf(E)];

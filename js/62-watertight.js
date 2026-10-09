@@ -46,6 +46,8 @@ function _wtDims(hp) {
 }
 // 高さ y・前後 a での船体の半幅（模型の座標）
 function _wtHW(y, a) { return hullShapeHalfWidthAtAlong(window.hullProfile.shape, y, a); }
+// 前後 a での甲板（舷側の外板の上の縁）の高さ。隔壁の面は、舷側と同じく甲板からもはみ出さない（22-hull-shape.js）
+function _wtDeckAt(D, a) { const y = typeof hullShapeDeckAt === 'function' ? hullShapeDeckAt(window.hullProfile.shape, a) : Infinity; return Math.max(D.yBot + D.H * 0.1, Math.min(D.yDeck, y)); }
 // 縦隔壁を置く割合の基準の半幅：喫水線の半幅（喫水線の無い船首尾の端では、いちばん広い所）
 function _wtHWRef(D, a) {
     let w = _wtHW(D.yWL, a);
@@ -124,8 +126,10 @@ function _wtTransGeo(D, a, yTop) {
 // 縦隔壁（割合 f・前後 a0〜a1・上の縁 yTop）：舷側に沿って曲がる。船底のふくらみの所は、外板から上だけ
 function _wtLongGeo(D, f, a0, a1, yTop) {
     const NA = 48, NY = 10, pos = [], idx = [], top = [], bot = [];
+    const yTop0 = yTop;
     for (let i = 0; i <= NA; i++) {
         const a = a0 + (a1 - a0) * i / NA, p = f * _wtHWRef(D, a);
+        yTop = Math.min(yTop0, _wtDeckAt(D, a));
         let yLow = yTop;
         for (let k = 0; k <= 40; k++) { const y = D.yBot + (yTop - D.yBot) * k / 40; if (_wtHW(y, a) >= Math.abs(p) - 1e-6) { yLow = y; break; } }
         for (let j = 0; j <= NY; j++) {
@@ -195,7 +199,7 @@ function _wtBuild() {
     };
     // 横隔壁
     for (let j = 0; j < Lay.n; j++) {
-        const a = Lay.cuts[j + 1], yT = D.yBot + D.H * shipWT.th[j];
+        const a = Lay.cuts[j + 1], yT = Math.min(D.yBot + D.H * shipWT.th[j], _wtDeckAt(D, a));
         const g = _wtTransGeo(D, a, yT);
         add(g.face, 't'); add(g.edge, 't', true);
         mark('t' + j, 'mk', 0, yT, a);

@@ -1478,7 +1478,10 @@ function _tfPlayerAsShip() {
     const ll = _tfPlayerLL();
     const L = (window.hullProfile && hullProfile.ready) ? hullProfile.halfLen * 2 * (physics.scale || 1) : 200;
     const hdg = typeof worldTrueCompass === 'function' ? worldTrueCompass() : 0;
-    return { player: true, lat: ll.lat, lon: ll.lon, hdg, v: Math.abs(physics.speed || 0) * 0.514444, L, B: L / 9, name: '自分の船' };
+    //（自分の船は、物理の速さの値がそのまま 1 秒に進む m：17-main-loop.js。以前は ×0.514 してノットとみていて、
+    //  他の船は自分の船の速さを半分ほどに見積もり、最接近の予測がずれていた）
+    const B = typeof _apShipHalfBeam === 'function' ? _apShipHalfBeam() * 2 : L / 9;
+    return { player: true, lat: ll.lat, lon: ll.lon, hdg, v: Math.abs(physics.speed || 0), L, B, name: '自分の船' };
 }
 function _tfVel(o) { const h = o.hdg * _tfR; return { e: Math.sin(h) * (o.v || 0), n: Math.cos(h) * (o.v || 0) }; }
 // 最接近（CPA[m]・TCPA[秒]）
@@ -1631,6 +1634,9 @@ function _tfScan(S, obs, offT) {
     for (const O of obs) {
         if (O === S || O.st === 'off' || O.st === 'gone' || O.st === 'pending') continue;
         if (S.ghost && S.ghost.k === _tfSigKey(O) && traffic.t < S.ghost.until) continue;
+        // 自分の船がこの船と並走している（49-autopilot.js）：申し合わせて並んでいるので、この船は針路・速力を保つ
+        //（よけるのは並走している自分の船の方。曲がる先に自分の船の船首がかかっても、待って止まらない）
+        if (O.player && traffic.player && traffic.player.chaseId === S.id) continue;
         if (Math.abs(O.lat - S.lat) > 0.06) continue;
         if (_tfDist(S, O) > D + S.L / 2 + _tfReach(O) + 30) continue;
         if (!pts) { pts = _tfAheadPts(S, D, offT); pts.sort((x, y) => x.sig - y.sig); }
@@ -1697,6 +1703,8 @@ function _tfRules() {
         S.avoid = S.avoid || {};
         for (const O of all) {
             if (O === S) continue;
+            // 自分の船がこの船と並走している（49-autopilot.js）：申し合わせて並んで走っているので、よけない
+            if (O.player && traffic.player && traffic.player.chaseId === S.id) continue;
             // 離着岸中の船は、下の停泊中の船と同じく、岸壁（埠頭）の反対側・動いていく先の外を通る（通れなければ手前で待つ：_tfScan）
             if (O.st === 'berthing' || O.st === 'unberth') continue;
             const c = _tfCPA(S, O);
@@ -2377,8 +2385,15 @@ function updateTraffic(t, dt) {
     for (const P of _tfProto.values()) if (P.glow && P.users > 0 && P.glowK !== glowK) { P.glowK = glowK; for (const [m, base] of P.glow) m.emissiveIntensity = base * glowK; }
     {
         const show = traffic.ships.filter(S => S.saved && S.dPl < Math.min(TF_SHOW, vis * 1.5 + 2000) && _tfShown(S)).sort((a, b) => a.dPl - b.dPl);
-        const keys = new Set(), mx = _tfProtoMax();
-        for (const S of show) { if (keys.size < mx || keys.has(S.saved.key)) keys.add(S.saved.key); }
+        // 近い船から、モデルの大きさの合計が予算に収まるだけ（同じモデルの船は 1 つ分）
+        const keys = new Set(), mx = _tfProtoMax(), budget = _tfProtoBudget(), PB = traffic.protoBytes || new Map();
+        let used = 0;
+        for (const S of show) {
+            const k = S.saved.key; if (keys.has(k)) continue;
+            const b = PB.get(k) || TF_PROTO_GUESS;
+            if (keys.size && (keys.size >= mx || used + b > budget)) continue;
+            keys.add(k); used += b;
+        }
         for (const S of traffic.ships) if (S.saved) S.protoOK = keys.has(S.saved.key) && !(traffic.savedHoldUntil && performance.now() < traffic.savedHoldUntil);
     }
     for (const S of traffic.ships) {
@@ -2466,6 +2481,8 @@ function trafficShipInfoHTML(id) {
     const to = S.st === 'berth' ? '（停泊中）' : _tfPlaceName(S.to) || '—';
     const gname = (r) => { const G = (TF_GATES[world.realKey] || []).find(g => g.key === r); return G ? G.name : String(r).replace(/^.*?港 /, ''); };
     const cam = traffic.camFollow === S.id, mapF = _wm.followShip === S.id, canCam = S.dPl < TF_SHOW;
+    const chase = typeof autopilot !== 'undefined' && autopilot.chase && autopilot.chase.id === S.id;
+    const canChase = typeof apChaseStart === 'function' && S.st !== 'berth' && S.st !== 'berthing' && S.st !== 'unberth';
     return `<div class="wp-pname"><span style="color:${TF_MAP_COLOR[S.cls] || '#ddd'}">▲</span> ${S.name}</div>
         <div class="wp-pmeta">${S.line ? S.line + '・' : ''}${C.label}・全長 ${S.L}m・喫水 ${S.d}m<br>
         ${TF_STATE_LABEL[S.st] || ''}　速力 ${kn.toFixed(1)} ノット（最大 ${S.kn} ノット）<br>
@@ -2474,6 +2491,8 @@ function trafficShipInfoHTML(id) {
         <div class="wp-pbtns">
           <button ${canCam || cam ? '' : 'disabled title="近く（12km 以内）の船だけ"'} onclick="trafficFollow(${cam ? 'null' : S.id})">${cam ? '🎥 追うのをやめる' : '🎥 カメラで追う'}</button>
           <button onclick="_wm.followShip=${mapF ? 'null' : S.id};_wmShowInfo();worldMapRedraw(true)">${mapF ? '📍 地図で追うのをやめる' : '📍 地図で追う'}</button>
+          ${chase ? `<button class="on" onclick="apChaseStop('並走をやめました（機関はそのまま）','keep');_wmShowInfo()">🚢 並走をやめる</button>`
+                  : `<button ${canChase ? '' : 'disabled title="岸壁に着いている・着けている船は追えません"'} onclick="apChaseStart(${S.id});_wmShowInfo()">🚢 自分の船で追いかけて並走</button>`}
           ${close}</div>`;
 }
 window.trafficShipInfoHTML = trafficShipInfoHTML;
@@ -2777,6 +2796,7 @@ function trafficAdvice(ctx) {
     const L = me.L, safe = Math.max(inCh ? 150 : 900, 2.5 * L);
     for (const O of traffic.ships) {
         if (!(O.dPl < 12000) || !_tfShown(O) || O.st === 'berth') continue;
+        if (ctx && ctx.skip === O.id) continue;             // 追いかけている船（49-autopilot.js の並走）
         const c = _tfCPA(me, O);
         const rb = _tfWrap(_tfBrg(me, O) - me.hdg), rbFromO = _tfWrap(_tfBrg(O, me) - O.hdg);
         const sameDir = Math.abs(_tfWrap(O.hdg - me.hdg)) < 45;
@@ -2992,7 +3012,8 @@ async function _tfLoadProto(v) {
         _tfMergeProto(inner);
         // 空の見え方（プロムナードの奥などを暗く）を、自分の船と同じ方法で少しずつ焼き込む（60・61）
         if (typeof _ssBuild === 'function' && typeof _aoField === 'function' && typeof _aoMeshes === 'function') P.aoJob = _tfProtoAO(inner, (+ph.scale || 12) / 12);
-        Object.assign(P, { state: 'ok', glow: [...glow], obj: inner, S, wl, cx: (box.min.x + box.max.x) / 2, cz: (box.min.z + box.max.z) / 2, len, wid: box.max.x - box.min.x, keel: box.min.y, funnels, lamps });
+        Object.assign(P, { state: 'ok', glow: [...glow], obj: inner, S, wl, cx: (box.min.x + box.max.x) / 2, cz: (box.min.z + box.max.z) / 2, len, wid: box.max.x - box.min.x, keel: box.min.y, funnels, lamps, bytes: _tfProtoBytes(inner) });
+        traffic.protoBytes = traffic.protoBytes || new Map(); traffic.protoBytes.set(v.key, P.bytes);
     } catch (e) {
         console.warn('保存した船のモデルを読めませんでした：' + v.name, e);
         P.state = 'fail';
@@ -3012,7 +3033,9 @@ function _tfProtoDispose(key) {
 }
 // メモリが足りない（描画が捨てられた：33-performance.js）：保存した船のモデルを全部外し、sec 秒のあいだは使わない
 function trafficFreeMemory(sec) {
-    traffic.savedHoldUntil = performance.now() + (sec || 600) * 1000;
+    //（以前は 10 分、保存した船を 1 隻も出さなかった。2 分待ってから、予算を半分にして（30 分）また出す）
+    traffic.savedHoldUntil = performance.now() + Math.min(120, sec || 120) * 1000;
+    traffic.memLowUntil = performance.now() + 1800 * 1000;
     for (const S of traffic.ships) if (S.mesh && S.mesh.userData.saved) _tfDropMesh(S);
     for (const [key, P] of [..._tfProto]) if (P.state !== 'loading') _tfProtoDispose(key);
 }
@@ -3049,10 +3072,33 @@ function _tfBuildSavedMesh(S, P) {
 }
 // 見えなくなった保存した船のモデルは、1 分たったら捨てる（メモリ）
 // 同時に読み込んでおく保存した船のモデルの数（メモリ：スマホは 2 つ、パソコンは 4 つ）。いっぱいなら、使っていないものを捨てて空ける
-function _tfProtoMax() { return (typeof _texIsMobile === 'function' && _texIsMobile()) ? 2 : 4; }
+// 保存した船のモデルは、数ではなく GPU に載る大きさ（形の頂点・テクスチャ）の合計で決める。
+// 以前は 4 つ（スマホ 2 つ）までで、保存した船が多いと、すぐ近くにいる船でも 5 つ目からは描かれなかった。
+// 端末のメモリ（navigator.deviceMemory）に合わせ、パソコン 400〜900MB・スマホ 160〜260MB。
+// メモリが足りなくなって描画が捨てられたあとは、しばらく半分に
+function _tfProtoBudget() {
+    const mob = typeof _texIsMobile === 'function' && _texIsMobile(), dm = navigator.deviceMemory || (mob ? 3 : 8);
+    let b = mob ? Math.min(260, Math.max(160, dm * 60)) : Math.min(900, Math.max(400, dm * 110));
+    if (traffic.memLowUntil && performance.now() < traffic.memLowUntil) b *= 0.5;
+    return b * 1048576;
+}
+// モデルの大きさ[バイト]（頂点の配列＋テクスチャ。ミップマップの分 1.33 倍）
+function _tfProtoBytes(obj) {
+    let n = 0; const seenG = new Set(), seenT = new Set();
+    obj.traverse(o => {
+        if (o.geometry && !seenG.has(o.geometry)) { seenG.add(o.geometry); const g = o.geometry; for (const k in g.attributes) n += g.attributes[k].array.byteLength; if (g.index) n += g.index.array.byteLength; }
+        const ms = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
+        for (const m of ms) for (const k in m) { const t = m[k]; if (t && t.isTexture && !seenT.has(t)) { seenT.add(t); const im = t.image; if (im && im.width) n += im.width * im.height * 4 * 1.33; } }
+    });
+    return n;
+}
+const TF_PROTO_GUESS = 60 * 1048576;           // まだ読んでいないモデルの見込み
+function _tfProtoMax() { return (typeof _texIsMobile === 'function' && _texIsMobile()) ? 6 : 16; }
 function _tfProtoRoom() {
     if (traffic.savedHoldUntil && performance.now() < traffic.savedHoldUntil) return false;
-    if (_tfProto.size < _tfProtoMax()) return true;
+    let used = 0;
+    for (const P of _tfProto.values()) used += P.bytes || TF_PROTO_GUESS;
+    if (_tfProto.size < _tfProtoMax() && used + TF_PROTO_GUESS <= _tfProtoBudget()) return true;
     for (const [key, P] of _tfProto) if (P.users === 0 && P.state !== 'loading') { _tfProtoDispose(key); return true; }
     return false;
 }

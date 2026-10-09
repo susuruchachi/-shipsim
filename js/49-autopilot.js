@@ -691,6 +691,7 @@ window._apResumeRoute = _apResumeRoute;
 function _apMsg(s) { autopilot.msg = s; renderAutopilotPanel(); }
 async function autopilotStart(port) {
     if (!port || world.mode !== 'world') return;
+    if (autopilot.chase) apChaseStop('', 'keep');          // 他の船の追いかけ・並走はやめる
     // 岸壁に付いているなら：テレグラフが STAND BY（機関用意）になるのを待ってから出港する
     // （タグを使うならタグで離岸してから（50-harbor-auto.js。離岸が終わるとここへ戻る）、使わないなら綱を放して自分で出る）
     if (typeof harborBerthedAt === 'function' && !(harborAuto && harborAuto.mode) && harborBerthedAt()) {
@@ -1553,9 +1554,196 @@ function _apAground(dt) {
 }
 
 // ── 毎フレーム ──
+// ════════════════════════════════════════════════════════════════
+//  他の船を追いかけて、横に並んで走る（地図で選んだ他の船：59-traffic.js の説明の「自分の船で追いかけて並走」）
+// ════════════════════════════════════════════════════════════════
+// 相手の真横（舷と舷の間を少し空けた所）を「持ち場」にする。持ち場へ寄る速さ（前後は機関、横は向き）を相手の速さに足して、
+// その向きへ舵を取り、その速さに機関の回転数（連続：テレグラフの段では合わせきれない）を合わせる。
+// 遠いうちは全速で向かい、近づくにつれ寄る分を減らして、最後は相手と同じ向き・速さに。
+// 相手の反対の舷へ回るとき・行き過ぎて反対へ出たときは、相手の船尾の後ろを回る（相手の前を横切らない）
+const AP_CHASE_MAX = 150000;          // これより遠い船は追わない[m]
+function _apChaseGap(S) { return Math.max(40, 0.12 * Math.max(apShipLen(), S.L || 100)); }
+// 自分の船が相手の右（+1）・左（−1）のどちらにいるか
+function _apChaseSideNow(S) {
+    const me = worldShipLatLon(), p = _tfEN(S, me), h = S.hdg * _apRad;
+    return (p.e * Math.cos(h) - p.n * Math.sin(h)) >= 0 ? 1 : -1;
+}
+function apChaseStart(id, side) {
+    const S = typeof _tfById === 'function' ? _tfById(id) : null;
+    if (!S || !_tfShown(S) || !window.world || world.mode !== 'world') return;
+    if (typeof harborAuto !== 'undefined' && harborAuto.mode) { _apMsg('自動の離着岸の間は、他の船を追いかけられません'); return; }
+    if (typeof harborBerthedAt === 'function' && harborBerthedAt()) { _apMsg('岸壁に着いている間は、他の船を追いかけられません（先に離岸してください）'); return; }
+    if (S.dPl > AP_CHASE_MAX) { _apMsg(`${S.name} は遠すぎます（${Math.round(S.dPl / 1852)} 海里）`); return; }
+    if (autopilot.active || autopilot.planning) autopilotStop('');
+    autopilot.pendingDepart = null; autopilot.selfDepart = null;
+    autopilot.chase = { id: S.id, name: S.name, side: side === 1 || side === -1 ? side : _apChaseSideNow(S), I: 0, along: false, dist: S.dPl, phase: '', why: '' };
+    if (traffic.player) traffic.player.chaseId = S.id;
+    autopilot.lastOrder = null;
+    _apMsg('');
+    if (typeof worldMapRedraw === 'function') worldMapRedraw(true);
+}
+// 並走する舷を替える（相手の船尾の後ろを回って反対の舷へ）
+function apChaseSwapSide() { const C = autopilot.chase; if (C) { C.side = -C.side; renderAutopilotPanel(); } }
+// how：'keep' 機関はそのままの段（回転数にいちばん近いテレグラフ）で続ける（「やめる」のボタン）、
+//      'hands' テレグラフは手で動かしたまま、ほかは機関を止める
+function apChaseStop(msg, how) {
+    if (!autopilot.chase) return;
+    autopilot.chase = null;
+    const r = physics.apRpm;
+    physics.apRpm = null;
+    if (typeof traffic !== 'undefined' && traffic.player) traffic.player.chaseId = null;
+    let o = 0;
+    if (how === 'keep' && Number.isFinite(r)) { let bd = Infinity; for (const k of [-3, -2, -1, 0, 1, 2, 3]) { const d = Math.abs(ENG_RPM_OF_AP[k] - r); if (d < bd) { bd = d; o = k; } } }
+    autopilot.pendingOrder = undefined;
+    if (how !== 'hands') _apOrderNow(o);
+    autopilot.lastOrder = null;
+    if (typeof _br !== 'undefined') _br.autoHelm = false;
+    _apMsg(msg || '');
+    if (typeof worldMapRedraw === 'function') worldMapRedraw(true);
+}
+Object.assign(window, { apChaseStart, apChaseStop, apChaseSwapSide });
+const ENG_RPM_OF_AP = { 3: 1, 2: 0.6, 1: 0.3, 0: 0, '-1': -0.15, '-2': -0.3, '-3': -0.5 };
+function _apChaseKA(tau) { return 1 / (1.6 * tau); }
+function _apChaseVT(S) { return (S.st === 'go' || S.st === 'anchoring' || S.st === 'placed') ? Math.max(0, S.v || 0) : 0; }
+function _apChase(dt) {
+    const C = autopilot.chase, S = typeof _tfById === 'function' ? _tfById(C.id) : null;
+    if (!S || !_tfShown(S) || !traffic.on) { apChaseStop(`${C.name} が見えなくなったので、追いかけるのをやめました（機関停止）`); return; }
+    if (S.st === 'berthing' || S.st === 'berth' || S.st === 'unberth') { apChaseStop(`${S.name} が岸壁へ着けに入ったので、並走をやめました（機関停止）`); return; }
+    if (window.flood && flood.sunk) { apChaseStop(''); return; }
+    // 手でテレグラフを動かした：手で操船を引き継ぐ
+    if (autopilot.lastOrder !== null && autopilot.lastOrder !== undefined && ((physics.telegraphState || 0) !== autopilot.lastOrder || physics.telegraphSpecial)) {
+        apChaseStop('テレグラフを手で動かしたので、追いかけるのをやめました', 'hands'); return;
+    }
+    const me = worldShipLatLon(), rel = _tfEN(me, S), dist = Math.hypot(rel.e, rel.n);
+    if (dist > AP_CHASE_MAX) { apChaseStop(`${S.name} から遠く離れたので、追いかけるのをやめました（機関停止）`); return; }
+    C.dist = dist;
+    const Lo = apShipLen(), Bo = _apShipHalfBeam() * 2, Lt = S.L || 100, Bt = S.B || Lt / 8;
+    const h = S.hdg * _apRad, f = { e: Math.sin(h), n: Math.cos(h) }, r = { e: Math.cos(h), n: -Math.sin(h) };
+    // 自分の船の、相手から見た前後（pa：前が＋）・横（pc：右が＋）の位置
+    const pa = -(rel.e * f.e + rel.n * f.n), pc = -(rel.e * r.e + rel.n * r.n);
+    const off = (Bt + Bo) / 2 + _apChaseGap(S), clearA = (Lt + Lo) / 2;
+    // 持ち場：相手の真横（真ん中どうしをそろえる）。反対の舷にいて、横に近い（相手の前後に重なる・横切る）うちは、
+    // 相手の船尾の後ろ（船の長さの半分ずつ＋200m）へ下がってから、そちらの舷へ回る
+    let sa = 0, sc = C.side * off;
+    const wrong = Math.sign(pc || C.side) !== C.side && Math.abs(pc) < off + 600 && pa > -(clearA + 600);
+    if (wrong) {
+        sa = -(clearA + 200);
+        if (pa > -(clearA + 120)) sc = Math.sign(pc || -C.side) * Math.max(off, Math.abs(pc));       // まだ後ろへ出ていない：今の舷のまま下がる
+    }
+    // 相手の速さ（動いているとき）・自分の船の速さ（物理の速さの値が、そのまま 1 秒に進む m）
+    const vT = _apChaseVT(S);
+    const vMax = Math.max(1, (physics.maxSpeed || 20) * 0.97), v = physics.speed || 0;
+    const pf = (typeof enginePowerFactor === 'function') ? enginePowerFactor() : 1;
+    const tau = Math.max(20, Math.max(0.05, physics.mass || 1) / (0.3 * pf));     // 機関で速さが変わる時間[秒]（17-main-loop.js）
+    // 止まっている（ゆっくりの）相手：持ち場を通る相手と同じ向きの線（寄る線）に乗って、後ろからまっすぐ寄る。
+    // 寄る線より前にいるときは、外側（回れる広さの 2 倍だけ横）の線を逆向きに下がり、十分後ろへ出たら U ターンして寄る線へ。
+    //（点を目指すと、回れる広さより近い点のまわりを回り続けてしまう。線なら、どこからでも乗れる）
+    const rho = Math.min(2000, _apTurnRadius() / 1.4) * 1.15;          // 実際に回れる半径（少し余裕）
+    //（動き出したばかりの船は、これから出す速さで見る）
+    const vPlan = S.st === 'go' ? Math.max(_apChaseVT(S), (S.vSea || 0) * 0.6) : _apChaseVT(S);
+    const dH = Math.abs(((worldTrueCompass() - S.hdg + 540) % 360) - 180);
+    if (vPlan < 2 && !wrong) {
+        if (C.astern !== 'back' && C.astern !== 'final') C.astern = (pa < sa - clearA * 0.5 && dH < 60) ? 'final' : 'back';
+        if (C.astern === 'back' && pa < sa - (rho + clearA)) C.astern = 'final';
+        // 行き過ぎた・持ち場の横まで来たのに横へずれたまま止まりかけている：もう一度回ってやり直す
+        if (C.astern === 'final' && (pa > sa + Lo / 2 || (pa > sa - clearA && Math.abs(pc - sc) > Math.max(40, _apChaseGap(S)) && v < 1))) C.astern = 'back';
+    } else C.astern = false;
+    const ea = sa - pa, ec = sc - pc, eAll = Math.hypot(ea, ec);
+    // 寄る速さ：前後は機関の速さの変わりにくさから、横は向きを変えて（近いほど強く）
+    //（遠い間は前後・横とも同じ強さ：持ち場へまっすぐ向かう。近くでは横は向きを変える速さに合わせ、横へ寄る分も相手の針路から 40° まで）
+    const kA = 1 / (1.6 * tau), kCnear = 1 / 150;
+    const kC = eAll > 3000 ? kA : eAll < 1000 ? kCnear : kCnear + (kA - kCnear) * (eAll - 1000) / 2000;
+    // 横：近くで持ち場の横にいる間は、ずれの積み残しも足す（舵の癖・風で、少しずつ同じ側へずれるのを戻す）
+    //（持ち場のすぐ近くだけで積む：寄ってくる途中で積むと、着いてから反対へ押し続ける）
+    if (Math.abs(ea) < 120 && Math.abs(ec) < 40 && !wrong && C.astern !== 'back') C.Ic = Math.max(-0.2, Math.min(0.2, (C.Ic || 0) + kCnear * ec * dt / 300));
+    else C.Ic = (C.Ic || 0) * Math.max(0, 1 - dt / 60);
+    let cA = kA * ea, cC = kC * ec + C.Ic;
+    // 持ち場が後ろ（自分が前に出すぎ）：相手より遅く走って追いつかせる。相手と逆へ向かうほどは戻らない（向きをそろえたまま）
+    if (vT >= 2 && cA < -0.6 * vT) cA = -0.6 * vT;
+    if (eAll < 3000) { const lim = Math.max(1.5, Math.max(vT, Math.abs(cA)) * 0.84) * (eAll < 1000 ? 1 : 1 + (eAll - 1000) / 500); cC = Math.max(-lim, Math.min(lim, cC)); }
+    // 船体が重なりそう（相手の横にいて、間が狭い）：すぐ外へ
+    const tight = Math.abs(pa) < clearA + 20 && Math.abs(pc) < (Bt + Bo) / 2 + 15;
+    if (tight) { cC = Math.sign(pc || C.side) * Math.max(Math.abs(cC), 2); cA = Math.min(cA, 0); }
+    const w = { e: f.e * cA + r.e * cC, n: f.n * cA + r.n * cC };
+    // 相手の速さ＋寄る分。全体が自分の船の速さの上限を超えるときは、寄る分だけを縮める（向きは持ち場へ）
+    const ww = w.e * w.e + w.n * w.n, b = vT * (f.e * w.e + f.n * w.n), c0 = vT * vT - vMax * vMax;
+    let s = 1;
+    if (c0 >= 0) s = 0;
+    else if (vT * vT + 2 * b + ww > vMax * vMax) s = Math.max(0, (-b + Math.sqrt(Math.max(0, b * b - ww * c0))) / Math.max(1e-9, ww));
+    let Ve = vT * f.e + s * w.e, Vn = vT * f.n + s * w.n;
+    if (c0 >= 0) { Ve = f.e * vMax; Vn = f.n * vMax; }
+    let V = Math.hypot(Ve, Vn), crs = V > 0.4 ? (Math.atan2(Ve, Vn) / _apRad + 360) % 360 : S.hdg;
+    if (C.astern === 'back' || C.astern === 'final') {
+        // 線に沿って：線からのずれ ey（線の向きに右が＋）が大きいほど、線へ向けて最大 60° まで切り込む
+        const back = C.astern === 'back', lat = back ? sc + C.side * 2 * rho : sc;
+        //（寄る線は相手と同じ向き f なので右は r、下がる線は逆向きなので右は −r）
+        const ey = back ? (lat - pc) : (pc - lat);
+        const base = back ? S.hdg + 180 : S.hdg;
+        crs = ((base - 60 * (2 / Math.PI) * Math.atan(ey / Math.max(60, rho * 0.3))) % 360 + 360) % 360;
+        // 速さ：下がる線は半速ほど、寄る線は持ち場までの残りで落とす（向きを変えるための行き足は残す）
+        const rest = sa - pa;
+        V = back ? vMax * 0.5 : Math.max(0, Math.min(vMax * 0.6, _apChaseKA(tau) * rest + (Math.abs(ey) > 30 ? 1.5 : 0)));
+    }
+    // 他の船（追っている船のほかは、ふつうの自動航行と同じルールで）：持ち場から遠い間だけ
+    let rpmCap = 1, why = '';
+    if (dist > 1500 && typeof trafficAdvice === 'function') {
+        const adv = trafficAdvice({ dest: null, remain: dist, channel: false, narrow: false, course: crs, skip: S.id });
+        if (adv) {
+            if (Number.isFinite(adv.order) && adv.order < 3) rpmCap = Math.max(0, ENG_RPM_OF_AP[Math.max(-3, adv.order)] || 0);
+            if (adv.dc) crs = ((crs + adv.dc) % 360 + 360) % 360;
+            why = adv.why || '';
+        }
+    }
+    // 向きの差：大きく違う間は、回り切るまで速さを上げすぎない（回るにも行き足が要るので、少しは残す）
+    const own = worldTrueCompass(), eH = Math.abs(((crs - own + 540) % 360) - 180);
+    let want = V * Math.max(0, Math.cos(Math.min(90, eH) * _apRad));
+    if (eH > 30) want = Math.max(want, Math.min(V, vMax * 0.35));
+    // 浅い所：前（止まれる距離まで）が浅ければ、追いかけるのをやめて止める
+    if (typeof worldSeabedAt === 'function' && typeof worldShipDraft === 'function') {
+        const need = worldShipDraft() + 1.5, hd = physics.heading * _apRad, fx = Math.sin(hd), fz = Math.cos(hd);
+        const dStop = Math.min(3000, Math.max(0, v) * tau);
+        for (const d of [Lo / 2 + 20, Lo / 2 + dStop * 0.5 + 40, Lo / 2 + dStop + 80]) {
+            const y = worldSeabedAt(physics.cgWorldX + fx * d, physics.cgWorldZ + fz * d);
+            if (Number.isFinite(y) && -y < need) { apChaseStop(`この先が浅いので、${S.name} を追いかけるのをやめて機関を止めました`); return; }
+        }
+    }
+    // 機関の回転数：欲しい速さ＋（欲しい速さ−今の速さ）（速さが早く追いつくように）＋ずれの積み残し
+    const near = eAll < Math.max(300, Lt);
+    if (near && !wrong) C.I = Math.max(-0.15 * vMax, Math.min(0.15 * vMax, C.I + (want - v) * dt / 200));
+    else C.I *= Math.max(0, 1 - dt / 60);
+    let rpm = (want + (want - v) * 1.0 + C.I) / Math.max(1, physics.maxSpeed || 20);
+    // 速すぎて近い：後進もかけて落とす（遠いうちは機関を止めて惰性で）
+    const minR = (v - want > 1.5 && dist < 3 * Math.max(Lo, Lt)) ? -0.3 : 0;
+    rpm = Math.max(minR, Math.min(rpmCap, rpm));
+    physics.apRpm = rpm;
+    // テレグラフ：回転数にいちばん近い段を出しておく（替えるのは、今の段から 0.2 より離れたときだけ）
+    {
+        const cur = autopilot.lastOrder;
+        if (cur === null || cur === undefined || Math.abs((ENG_RPM_OF_AP[cur] ?? 0) - rpm) > 0.2) {
+            let o = 0, bd = Infinity;
+            for (const k of [-3, -2, -1, 0, 1, 2, 3]) { const d = Math.abs(ENG_RPM_OF_AP[k] - rpm); if (d < bd) { bd = d; o = k; } }
+            _apOrder(o);
+        }
+    }
+    // 舵
+    const wantH = _apHeadingForTrue(crs);
+    const e = ((wantH - physics.heading + 540) % 360) - 180;
+    const big = Math.abs(e) > 25;
+    const cmd = -(e * 1.2) + (physics.turnRate || 0) * 6;
+    if (v < -0.2) _apHelm(0, dt);
+    else _apHelm(Math.max(big ? -35 : -20, Math.min(big ? 35 : 20, cmd)), dt);
+    // 様子
+    const alongNow = !wrong && Math.abs(ea) < Math.max(30, 0.25 * Lt) && Math.abs(ec) < Math.max(25, 0.5 * off);
+    C.along = alongNow;
+    C.phase = alongNow ? (vT < 0.3 ? '横に並んで止まっています' : '並走しています') : wrong ? '相手の船尾の後ろを回って、反対の舷へ' : C.astern === 'back' ? '相手の後ろへ回って、同じ向きで寄ります' : dist > 2000 ? '追いかけています' : '横へ寄せています';
+    C.why = why; C.ea = ea; C.ec = ec; C.vT = vT; C.rpm = rpm; C.crs = crs;
+    autopilot.course = crs;
+}
+
 function updateAutopilot(t, dt) {
     _apOrderClock(dt);
-    if (!window.world || world.mode !== 'world') { if (autopilot.active) autopilotStop('世界を航海するモードではないので、自動航行を止めました'); return; }
+    if (!window.world || world.mode !== 'world') { if (autopilot.chase) apChaseStop(''); if (autopilot.active) autopilotStop('世界を航海するモードではないので、自動航行を止めました'); return; }
+    if (autopilot.chase) { _apChase(dt); return; }
     // タグなしの出港：岸壁から横へ離れる（ゆっくり加速し、離れたら航路を引いて出る）
     if (autopilot.selfDepart && autopilot.selfDepart.rudder) {
         // スラスターの無い船：スプリングで船首（後進なら船尾）を沖へ振り出し、後進なら船の長さほど下がって、舵で出る
@@ -1772,8 +1960,12 @@ function updateAutopilot(t, dt) {
     //  ずっと微速だった）
     {
         const vv = Math.max(0, physics.speed || 0), dSt = vv * Math.max(0.05, physics.mass || 1) / 0.3;
-        const prevCh = autopilot.leg === 0 || (R[autopilot.leg - 1] && R[autopilot.leg - 1].channel);     //（最初の区間：港の中から出ていく）
-        if (wp.channel && (prevCh || rc.dist < Math.max(3000, dSt * 1.5))) order = Math.min(order, 1);
+        //（最初の区間：港の中から出ていく。両端が航路の点でも、12km より長い区間は外海：前の点から 2km 出たら速く）
+        const legLen = legRc.dist, fromPrev = Math.max(0, legLen - rc.dist);
+        const prevCh = autopilot.leg === 0 || (R[autopilot.leg - 1] && R[autopilot.leg - 1].channel && (legLen < 12000 || fromPrev < 2000));
+        //（いったん微速にしたら、止まれる距離の 3 倍まで微速のまま：減速して止まれる距離が縮み、境目で全速と微速を行き来しないように）
+        const near = rc.dist < Math.max(3000, dSt * ((autopilot.lastOrder | 0) <= 1 ? 3 : 1.5));
+        if (wp.channel && (prevCh || near)) order = Math.min(order, 1);
         else if (remain < 5 * 1852) order = Math.min(order, 2);
     }
     if (wp.final && autopilot.finalSlow) order = Math.min(order, 1);
@@ -1805,10 +1997,14 @@ function updateAutopilot(t, dt) {
         }
         const v = Math.max(0, physics.speed || 0);
         const dStop = v * Math.max(0.05, physics.mass || 1) / 0.3;
-        const callDist = Math.max(3000, dStop * 2 + 1500);
+        // 呼ぶ距離は止まれる距離で決まるので、速い船は減速するほど短くなる。いったん呼んだら、呼んだときの距離（＋2km）の内は
+        // 呼んだままに（以前は、23 ノットで近づくと、止める → 呼ぶ距離が縮んで外れる → 全速 → また入る、を 12 秒ごとに
+        //  繰り返し、テレグラフが停止と全速を 40 回行き来していた）
+        let callDist = Math.max(3000, dStop * 2 + 1500);
+        if (tugEscort.active && tugEscort.callD) callDist = Math.max(callDist, tugEscort.callD + 2000);
         if (narrowNow || narrowAhead < callDist) {
             if (tugEscort.active && !tugEscortAlive()) tugEscort.active = false;     // いなくなったら呼び直す
-            if (!tugEscort.active) tugEscortStart();
+            if (!tugEscort.active) { tugEscortStart(); tugEscort.callD = callDist; }
             // 一度そろったら、途中でタグが付き直している間も止まらない（その間は付いているタグだけで助ける）
             if (tugEscortReady()) tugEscort.readyOnce = true;
             const ready = tugEscortReady() || !!tugEscort.readyOnce;
@@ -1900,7 +2096,7 @@ function renderAutopilotPanel() {
     _apEnsureDom();
     const el = document.getElementById('ap-panel');
     const ha = typeof harborAuto !== 'undefined' ? harborAuto : null;
-    const show = world.mode === 'world' && (autopilot.active || autopilot.planning || autopilot.pendingDepart || autopilot.selfDepart || autopilot.msg || autopilot.resume || (ha && (ha.mode || ha.msg || ha.resume)));
+    const show = world.mode === 'world' && (autopilot.active || autopilot.chase || autopilot.planning || autopilot.pendingDepart || autopilot.selfDepart || autopilot.msg || autopilot.resume || (ha && (ha.mode || ha.msg || ha.resume)));
     el.classList.toggle('open', !!show);
     el.classList.toggle('folded', !!autopilot.folded);
     if (!show) return;
@@ -1908,7 +2104,8 @@ function renderAutopilotPanel() {
     // 小さくたたんだとき：1行だけ
     if (autopilot.folded) {
         let line;
-        if (ha && ha.mode) line = `⚓ ${ha.mode === 'berth' ? '自動着岸' : '自動離岸'}中`;
+        if (autopilot.chase) line = `🚢 ${autopilot.chase.name}：${autopilot.chase.phase || '追いかけています'}（${_apFmtDist(autopilot.chase.dist || 0)}）`;
+        else if (ha && ha.mode) line = `⚓ ${ha.mode === 'berth' ? '自動着岸' : '自動離岸'}中`;
         else if (autopilot.active && autopilot.escort === 'wait') line = '🚢 タグを待っています';
         else if (autopilot.active && autopilot.trafficWhy) line = '⚠ ' + autopilot.trafficWhy;
         else if (autopilot.active) line = `${autopilot.escort === 'on' ? '🚢' : '🧭'} ${autopilot.dest ? autopilot.dest.name : ''}　${Math.round(autopilot.course || 0).toString().padStart(3, '0')}°・残り ${_apFmtDist(autopilot.remain || 0)}`;
@@ -1918,7 +2115,8 @@ function renderAutopilotPanel() {
         // 決めることが待っているとき（出港の用意・止まっている）は、たたんでいてもボタンを出す
         //（以前は 1 行の説明だけで、「今すぐ出港」「再開」などのボタンが出なかった）
         const acts = [];
-        if (!autopilot.active && !(ha && ha.mode)) {
+        if (autopilot.chase) acts.push('<button class="ap-off" onclick="apChaseStop(\'並走をやめました\', \'keep\')">やめる</button>');
+        else if (!autopilot.active && !(ha && ha.mode)) {
             if (autopilot.planning) acts.push('<button onclick="autopilotStop(\'\')">やめる</button>');
             else if (autopilot.pendingDepart) {
                 line = `⚓ ${autopilot.pendingDepart.name || ''} へ：STAND BY で出港`;
@@ -1929,6 +2127,18 @@ function renderAutopilotPanel() {
             }
         }
         uiSetHTML(el, `<div class="ap-line">${fold}<span>${line}</span></div>${acts.length ? `<div class="ap-row">${acts.join('')}</div>` : ''}`);
+        return;
+    }
+    if (autopilot.chase) {
+        const C = autopilot.chase, kn = (x) => (x / 0.514444).toFixed(1);
+        uiSetHTML(el, `<div class="ap-title">${fold}🚢 ${C.name} と並走</div>
+            <div class="ap-row"><b>${C.phase || '追いかけています'}</b>（相手の${C.side > 0 ? '右舷' : '左舷'}側）</div>
+            <div class="ap-row">相手まで ${C.dist < 2000 ? Math.round(C.dist) + ' m' : _apFmtDist(C.dist || 0)}・相手 ${kn(C.vT || 0)} ノット・針路 ${Math.round(C.crs || 0).toString().padStart(3, '0')}°</div>
+            <div class="ap-row">機関の回転 ${Math.round((C.rpm || 0) * 100)}%${Number.isFinite(C.ea) ? `・前後のずれ ${C.ea > 0 ? '前へ' : '後ろへ'} ${Math.round(Math.abs(C.ea))} m・横 ${Math.round(Math.abs(C.ec))} m` : ''}</div>
+            ${C.why ? `<div class="ap-row ap-escort">⚠ ${C.why}</div>` : ''}
+            <div class="ap-row"><button onclick="apChaseSwapSide()">反対の舷へ回る</button>
+            <button class="ap-off" onclick="apChaseStop('並走をやめました（機関はそのまま）', 'keep')">やめる</button></div>
+            ${autopilot.msg ? `<div class="ap-msg">${autopilot.msg}</div>` : ''}`);
         return;
     }
     if (ha && ha.mode) {
@@ -2009,7 +2219,7 @@ setInterval(() => {
         // それでも入らない分は、パネルの中でスクロール
         el.style.maxHeight = Math.max(90, Math.round(H - top - 8)) + 'px';
     }
-    if (autopilot.active || autopilot.planning || (typeof harborAuto !== 'undefined' && harborAuto.mode)) renderAutopilotPanel();
+    if (autopilot.active || autopilot.chase || autopilot.planning || (typeof harborAuto !== 'undefined' && harborAuto.mode)) renderAutopilotPanel();
 }, 500);
 
 // 地図に描く航路（緯度・経度の列。航程線は細かく分けて）
