@@ -129,16 +129,25 @@ const shipAOUniforms = { uAOStrength: { value: 0 }, uAODebug: { value: 0 }, uInd
     uSkyOccMap: { value: null }, uSkyOccMat: { value: new THREE.Matrix4() }, uSkyOccOn: { value: 0 }, uSkyOccR: { value: new THREE.Vector2(0.001, 0.001) },
     uSkyOccBias: { value: 0.002 }, uSkyOccMin: { value: 0.35 }, uSkyOccOff: { value: 1 } };    // uAODebug=1：空の見え方を白黒で表示（調整用）
 // 空の遮られ方を調べる（地図の 8 点：やわらかい縁）。上に何かある所は 0、空が見える所は 1
+// ・面の向きは、カメラから見えている側を外とする（厚さの無い一枚の面の、プロムナードの内側から見た面・内向きの法線の部品でも正しく）
+// ・地図を引く前後左右の位置は面の外へ少し出した所、比べる高さは面そのものの高さ（出しすぎて薄い天井を突き抜けて、
+//   天井のすぐ下の角が明るく残っていた）
+// ・下を向いた面は空が見えない
 const _SKY_OCC_GLSL = `
-uniform sampler2D uSkyOccMap; uniform float uSkyOccOn, uSkyOccBias, uSkyOccMin; uniform vec2 uSkyOccR;
-varying vec4 vSkyOcc;
+uniform sampler2D uSkyOccMap; uniform float uSkyOccOn, uSkyOccBias, uSkyOccMin, uSkyOccOff; uniform vec2 uSkyOccR;
+uniform mat4 uSkyOccMat;
+varying vec3 vSkyOccP, vSkyOccN;
 float skyOccTap(vec3 c, vec2 o) { return step(c.z - uSkyOccBias, texture2D(uSkyOccMap, c.xy + o * uSkyOccR).r); }
 float skyOccVis() {
-    vec3 c = vSkyOcc.xyz / vSkyOcc.w * 0.5 + 0.5;
+    vec3 n = normalize(vSkyOccN);
+    if (dot(n, cameraPosition - vSkyOccP) < 0.0) n = -n;
+    vec4 cp = uSkyOccMat * vec4(vSkyOccP, 1.0);
+    vec4 cq = uSkyOccMat * vec4(vSkyOccP + n * uSkyOccOff, 1.0);
+    vec3 c = vec3(cq.xy / cq.w, cp.z / cp.w) * 0.5 + 0.5;
     if (c.x <= 0.0 || c.x >= 1.0 || c.y <= 0.0 || c.y >= 1.0 || c.z >= 1.0 || c.z <= 0.0) return 1.0;
     float v = skyOccTap(c, vec2(0.0)) * 2.0 + skyOccTap(c, vec2(1.0, 0.0)) + skyOccTap(c, vec2(-1.0, 0.0)) + skyOccTap(c, vec2(0.0, 1.0)) + skyOccTap(c, vec2(0.0, -1.0))
             + skyOccTap(c, vec2(0.7, 0.7)) + skyOccTap(c, vec2(-0.7, 0.7)) + skyOccTap(c, vec2(0.7, -0.7)) + skyOccTap(c, vec2(-0.7, -0.7));
-    return v / 10.0;
+    return v / 10.0 * smoothstep(-0.9, -0.2, n.y);
 }
 `;
 // opts.skyOcc：自分の船のマテリアルだけ（他の船は、自分の船の地図を使えないので付けない：59-traffic.js）
@@ -154,9 +163,9 @@ function _aoPatchMaterial(mat, opts) {
         shader.uniforms.uAOStrength = shipAOUniforms.uAOStrength; shader.uniforms.uAODebug = shipAOUniforms.uAODebug;
         shader.uniforms.uIndirK = shipAOUniforms.uIndirK; shader.uniforms.uDirectK = shipAOUniforms.uDirectK;
         if (occ) for (const k of ['uSkyOccMap', 'uSkyOccMat', 'uSkyOccOn', 'uSkyOccR', 'uSkyOccBias', 'uSkyOccMin', 'uSkyOccOff']) shader.uniforms[k] = shipAOUniforms[k];
-        const occV = occ ? 'uniform mat4 uSkyOccMat;\nuniform float uSkyOccOff;\nvarying vec4 vSkyOcc;\n' : '';
-        // 地図を引く点は、面の外向きへ少し出した所（吹きさらしの壁・煙突の横は空が見える。張り出しの下の壁・甲板は見えない）
-        const occVM = occ ? '    { vec3 skw = (modelMatrix * vec4(transformed, 1.0)).xyz + normalize(mat3(modelMatrix) * objectNormal) * uSkyOccOff; vSkyOcc = uSkyOccMat * vec4(skw, 1.0); }\n' : '';
+        const occV = occ ? 'varying vec3 vSkyOccP, vSkyOccN;\n' : '';
+        // 世界の位置と法線（地図を引くのは画素ごと：_SKY_OCC_GLSL）
+        const occVM = occ ? '    vSkyOccP = (modelMatrix * vec4(transformed, 1.0)).xyz; vSkyOccN = mat3(modelMatrix) * objectNormal;\n' : '';
         shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nattribute float aSky;\nvarying float vSkyAO;\n' + occV)
             .replace(/\}\s*$/, '    vSkyAO = aSky;\n' + occVM + '}\n');
         // 間接光（半球光・環境光・光のプローブ・環境マップ）に掛ける。少し強めに効くよう曲げる
@@ -248,10 +257,10 @@ function _skyOccBuild() {
     skyOcc.A.multiplyMatrices(cam.projectionMatrix, new THREE.Matrix4().copy(L).invert());
     const U = shipAOUniforms, Lm = (box.max.z - box.min.z) * sc;
     U.uSkyOccMap.value = skyOcc.rt.depthTexture;
-    // やわらかい縁の幅 0.35m・奥行きの余裕 0.25m・面の外へ出す長さ（船の長さの 0.4％、0.3〜1.2m）
-    U.uSkyOccR.value.set(0.35 / sc / (2 * hx), 0.35 / sc / (2 * hz));
-    U.uSkyOccBias.value = 0.25 / sc / depth;
-    U.uSkyOccOff.value = Math.max(0.3, Math.min(1.2, Lm * 0.004));
+    // やわらかい縁の幅 0.25m・奥行きの余裕 0.2m・面の外へ出す長さ（船の長さの 0.2％、0.25〜0.6m）
+    U.uSkyOccR.value.set(0.25 / sc / (2 * hx), 0.25 / sc / (2 * hz));
+    U.uSkyOccBias.value = 0.2 / sc / depth;
+    U.uSkyOccOff.value = Math.max(0.25, Math.min(0.6, Lm * 0.002));
     skyOcc.ok = true;
     U.uSkyOccOn.value = 1;
     skyOccFollow();
