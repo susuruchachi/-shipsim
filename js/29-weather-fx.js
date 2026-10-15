@@ -166,8 +166,10 @@ function _buildRain() {
                 vAlpha = (1.0 - smoothstep(8.0, uBox.x * 0.5, dist)) * mix(1.0, 0.25, aEnd);
                 gl_Position = projectionMatrix * viewMatrix * vec4(world, 1.0);
                 #ifdef USE_LOGDEPTHBUF
-                    gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
-                    gl_Position.z *= gl_Position.w;
+                    if (projectionMatrix[2][3] == -1.0) {   // 透視カメラだけ（正投影のカメラでは普通の奥行き）
+                        gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
+                        gl_Position.z *= gl_Position.w;
+                    }
                 #endif
             }`,
         fragmentShader: `
@@ -318,8 +320,10 @@ const _boltVS = `
         vAcross = across;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         #ifdef USE_LOGDEPTHBUF
-            gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
-            gl_Position.z *= gl_Position.w;
+            if (projectionMatrix[2][3] == -1.0) {   // 透視カメラだけ（正投影のカメラでは普通の奥行き）
+                gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
+                gl_Position.z *= gl_Position.w;
+            }
         #endif
     }`;
 const _boltFS = `

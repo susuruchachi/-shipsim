@@ -98,7 +98,8 @@ function _uwHullLocal(p) {
 function _uwInsideHull(p) {
     const L = _uwHullLocal(p); if (!L) return null;
     const hp = window.hullProfile, shape = hp.shape;
-    if (Number.isFinite(hp.deckY) && L.y > hp.deckY) return null;
+    // 甲板（その場所の舷側の上の縁）より上は、船体の外（開いた甲板の上：水をかぶれば水の中）
+    if (L.y > (typeof hullDeckTopAt === 'function' ? hullDeckTopAt(hp, L.a) : hp.deckY)) return null;
     if (L.y < shape.levelY[shape.kFirst]) return null;
     hullShapeEndsAtY(shape, L.y, _uwEnds);
     if (!(L.a > _uwEnds.sternAlong && L.a < _uwEnds.bowAlong)) return null;

@@ -901,7 +901,7 @@ function _trFarWaterMesh() {
         vertexShader: `
             #ifdef USE_LOGDEPTHBUF
                 #ifdef USE_LOGDEPTHBUF_EXT
-                    varying float vFragDepthW;
+                    varying float vFragDepthW; varying float vFragPersp;
                 #else
                     uniform float logDepthBufFC;
                 #endif
@@ -912,7 +912,7 @@ function _trFarWaterMesh() {
                 gl_Position = projectionMatrix * viewMatrix * w;
                 #ifdef USE_LOGDEPTHBUF
                     #ifdef USE_LOGDEPTHBUF_EXT
-                        vFragDepthW = 1.0 + gl_Position.w;
+                        vFragDepthW = 1.0 + gl_Position.w; vFragPersp = projectionMatrix[2][3] == -1.0 ? 1.0 : 0.0;
                     #else
                     if (projectionMatrix[2][3] == -1.0) {
                         gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
@@ -927,12 +927,12 @@ function _trFarWaterMesh() {
             varying vec3 vW;
             #if defined( USE_LOGDEPTHBUF ) && defined( USE_LOGDEPTHBUF_EXT )
                 uniform float logDepthBufFC;
-                varying float vFragDepthW;
+                varying float vFragDepthW; varying float vFragPersp;
             #endif
             void main() {
                 // 近くの水面より 0.1% 奥（重なる所で近くの水面が勝つように）
                 #if defined( USE_LOGDEPTHBUF ) && defined( USE_LOGDEPTHBUF_EXT )
-                    gl_FragDepthEXT = log2(vFragDepthW * 1.001) * logDepthBufFC * 0.5;
+                    gl_FragDepthEXT = vFragPersp < 0.5 ? gl_FragCoord.z : log2(vFragDepthW * 1.001) * logDepthBufFC * 0.5;   // 正投影のカメラでは普通の奥行き
                 #endif
                 if (uBloomDark > 0.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
                 vec3 viewDir = normalize(cameraPosition - vW);

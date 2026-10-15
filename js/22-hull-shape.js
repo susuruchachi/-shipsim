@@ -406,6 +406,19 @@ function hullShapeDeckAt(shape, along) {
     return S.y[i] + (S.y[i + 1] - S.y[i]) * t;
 }
 
+// 前後 along での「船体本体の上の縁」の高さ（舷側の外板の上の縁＝ここより上に水が来ると甲板の上に水がのる）。
+// 舷側の上の縁（sheer）を、船体本体の上（hp.deckY：上部構造の上になっていることがある）で頭打ちにし、
+// 低く出すぎないよう（舷側の張り出し・バルジの上の縁を拾ったとき）喫水線と hp.deckY の間の 1/4 より下にはしない
+function hullDeckTopAt(hp, along) {
+    const shape = hp && hp.shape;
+    if (!shape || !shape.ready) return Infinity;
+    const top = Number.isFinite(hp.deckY) ? hp.deckY : shape.levelY[shape.nLevels - 1];
+    const s = hullShapeDeckAt(shape, along);
+    if (!Number.isFinite(s)) return top;
+    const wl = Number.isFinite(hp.designWaterlineY) ? hp.designWaterlineY : shape.levelY[shape.kFirst];
+    return Math.min(top, Math.max(wl + (top - wl) * 0.25, s));
+}
+
 // levelY配列からyを挟む下側インデックスを返す（二分探索）
 function hullShapeLevelIndexFor(levelY, y) {
     const M = levelY.length;

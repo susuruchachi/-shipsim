@@ -424,12 +424,14 @@ function _glowBuildProbe(modelRoot, pts, color) {
 //  にじみ全体を出す／隠す。
 //  あわせて「その灯りの面がカメラの方を向いているか」でも隠す。
 //  （ブルームを切っていて奥行きが無いときは、画素ごとの比較に戻す）
-const GLOW_HALO_SIZE_MUL   = 1.8;   // パネルの大きさに対するにじみの大きさ
-const GLOW_HALO_MIN_M      = 2.5;   // にじみの最小サイズ[m]
-const GLOW_HALO_MAX_M      = 7.0;   // にじみの最大サイズ[m]（大きいと船体の前に光の玉が浮いて見える）
+// にじみは「灯りの縁が少しぼやける」くらい：灯りの大きさの 1.35 倍（以前は 1.8 倍・最小 2.5m で、丸窓の 5〜10 倍の光の玉になっていた）。
+// 見た目の大きさは距離に比例する（遠いほど小さい）。ずっと遠くでも消えないよう、画面で数画素の点は残す
+const GLOW_HALO_SIZE_MUL   = 1.35;  // パネルの大きさに対するにじみの大きさ
+const GLOW_HALO_MIN_M      = 0.35;  // にじみの最小サイズ[m]
+const GLOW_HALO_MAX_M      = 3.0;   // にじみの最大サイズ[m]（大きいと船体の前に光の玉が浮いて見える）
 const GLOW_HALO_FADE_NEAR  = 25.0;  // これより近いと見えない[m]（本物の面光源に任せる）
 const GLOW_HALO_FADE_FAR   = 90.0;  // これより遠いと完全に見える[m]
-const GLOW_HALO_STRENGTH   = 0.55;
+const GLOW_HALO_STRENGTH   = 0.7;
 const GLOW_HALO_DRY_NEAR   = 300.0; // 霧・雨が無いとき、これより近いにじみは出さない[m]
 const GLOW_HALO_DRY_FAR    = 700.0; // 霧・雨が無いとき、これより遠いと遠景用の点として見える[m]
 
@@ -472,6 +474,10 @@ function _glowBuildHalos(modelRoot, panels) {
             uSceneDepth: { value: null },
             uHasDepth:   { value: 0 },
             uInvViewport:{ value: new THREE.Vector2(1 / 800, 1 / 600) },
+            // 船のまわりの水面（高さ＝ y0 + g·(xz − c)）：水面より下の灯り（沈んだ丸窓など）は、にじみを出さない
+            uWaterY0:    { value: -1e6 },
+            uWaterG:     { value: new THREE.Vector2(0, 0) },
+            uWaterC:     { value: new THREE.Vector2(0, 0) },
         },
         vertexShader: `
             attribute vec3 aColor;
@@ -482,6 +488,8 @@ function _glowBuildHalos(modelRoot, panels) {
             uniform sampler2D uSceneDepth;
             uniform float uHasDepth;
             uniform vec2 uInvViewport;
+            uniform float uWaterY0;
+            uniform vec2 uWaterG, uWaterC;
             varying vec3 vColor;
             varying float vAlpha;
             #ifdef USE_LOGDEPTHBUF
@@ -514,6 +522,9 @@ function _glowBuildHalos(modelRoot, panels) {
                 vec3 wn = normalize(mat3(modelMatrix) * aNormal);
                 float facing = dot(wn, normalize(cameraPosition - wp.xyz));
                 vAlpha *= smoothstep(-0.05, 0.3, facing);
+                // 水面より下の灯りは、水の上からはにじまない（水を突き抜けて光の玉が見えていた）
+                float wy = uWaterY0 + dot(uWaterG, wp.xz - uWaterC);
+                vAlpha *= smoothstep(wy - 0.05, wy + 0.35, wp.y);
                 // 灯りとカメラの間に壁などがあれば隠す（中心とその周り4点で調べ、
                 // 隠れている割合だけ薄くする）
                 #ifdef USE_LOGDEPTHBUF
@@ -521,14 +532,16 @@ function _glowBuildHalos(modelRoot, panels) {
                     vec2 uv = gl_Position.xy / gl_Position.w * 0.5 + 0.5;
                     if (uv.x > 0.0 && uv.x < 1.0 && uv.y > 0.0 && uv.y < 1.0) {
                         // 灯具の枠など、灯りのすぐ手前にある物では隠さない余裕
-                        float lim = dist - (0.6 + dist * 0.004);
-                        vec2 o = uInvViewport * gl_PointSize * 0.22;
-                        float vis = step(lim, sceneDistAt(uv))
-                                  + step(lim, sceneDistAt(uv + vec2(o.x, 0.0)))
-                                  + step(lim, sceneDistAt(uv - vec2(o.x, 0.0)))
-                                  + step(lim, sceneDistAt(uv + vec2(0.0, o.y)))
-                                  + step(lim, sceneDistAt(uv - vec2(0.0, o.y)));
-                        vAlpha *= vis / 5.0;
+                        float lim = dist - (0.35 + dist * 0.0025);
+                        vec2 o = uInvViewport * max(gl_PointSize * 0.22, 4.0);
+                        // 灯りの中心が壁などに隠れていれば、にじみは出さない（以前は 5 点の平均で、
+                        // 中心が隠れていても周りの 4 点が見えていると 8 割の明るさで壁を突き抜けて見えた）
+                        float c0 = step(lim, sceneDistAt(uv));
+                        float around = step(lim, sceneDistAt(uv + vec2(o.x, 0.0)))
+                                     + step(lim, sceneDistAt(uv - vec2(o.x, 0.0)))
+                                     + step(lim, sceneDistAt(uv + vec2(0.0, o.y)))
+                                     + step(lim, sceneDistAt(uv - vec2(0.0, o.y)));
+                        vAlpha *= c0 * (0.5 + 0.125 * around);
                     }
                 }
                 #endif
@@ -540,8 +553,8 @@ function _glowBuildHalos(modelRoot, panels) {
                 vec2 c = gl_PointCoord - 0.5;
                 float r2 = dot(c, c) * 4.0;           // 0（中心）〜1（縁）
                 if (r2 > 1.0) discard;
-                // 中心の芯＋ふんわりした裾
-                float a = exp(-r2 * 9.0) * 1.1 + exp(-r2 * 2.2) * 0.35;
+                // 中心の芯＋縁だけ少しぼやける裾（以前は裾が広く、ぼやけすぎていた）
+                float a = exp(-r2 * 6.0) * 1.1 + exp(-r2 * 2.5) * 0.12;
                 a *= (1.0 - r2);
                 gl_FragColor = vec4(vColor * a * vAlpha, 1.0);
             }`,
@@ -620,6 +633,8 @@ function _haloOccluders() {
     if (typeof hdState !== 'undefined' && hdState.group) roots.push(hdState.group);
     if (typeof lmState !== 'undefined') for (const [, o] of lmState.built) roots.push(o);
     if (window.tugs) for (const t of tugs) if (t.g) roots.push(t.g);
+    // 他の船（59-traffic.js）：手前を通る船の向こうの灯りが、船体を突き抜けて見えないように
+    if (typeof traffic !== 'undefined' && traffic.ships) for (const S of traffic.ships) if (S.mesh && S.mesh.visible) roots.push(S.mesh);
     for (const r of roots) r.traverse(o => {
         if (!o.isMesh || (o.layers.mask & (1 << HALO_DEPTH_LAYER))) return;
         const m = o.material;
@@ -644,8 +659,9 @@ function updateGlowHalos() {
     const wet = Math.min(1.5, haze * 0.04 + rain * 0.6 + fog * 1.0) * (1 - (window.shelterIndoor || 0));
     // にじみが大きくなるぶん面積で明るく見えるので、1点あたりの明るさはほぼ据え置く
     // （以前は大きさ2.8倍×明るさ2.4倍で、霧の中ではまぶしすぎた）
-    u.uStrength.value = glow * GLOW_HALO_STRENGTH * (1 + wet * 0.2);
-    u.uSizeMul.value = 1 + wet * 0.9;
+    u.uStrength.value = glow * GLOW_HALO_STRENGTH * (1 + wet * 0.25);
+    // 霧の中でも、灯りの縁が少し広くぼやけるだけ（以前は 1＋霧×0.9 倍で、灯りがぼやけすぎていた）
+    u.uSizeMul.value = 1 + wet * 0.3;
     u.uFogDensity.value = (typeof scene !== 'undefined' && scene && scene.fog && scene.fog.density) ? scene.fog.density : 0;
     u.uWet.value = THREE.MathUtils.smoothstep(wet, 0.05, 0.6);
     // シーンの奥行き（ブルーム抽出パス）があれば、それで隠れるかを調べる。
@@ -660,6 +676,15 @@ function updateGlowHalos() {
         const hPx = renderer.domElement.height, wPx = renderer.domElement.width;
         u.uInvViewport.value.set(1 / Math.max(1, wPx), 1 / Math.max(1, hPx));
     }
+    // 船のまわりの水面の傾き（船の真ん中・前・横の 3 点の波の高さから）。海面を隠しているときは見ない
+    if (typeof getWaveHeight === 'function' && typeof physics !== 'undefined' && !(typeof userWaterVisible !== 'undefined' && !userWaterVisible)) {
+        const hp = window.hullProfile, R = Math.max(5, (hp && hp.ready ? hp.halfLen : 6) * (physics.scale || 1) * 0.5);
+        const t = (typeof clock !== 'undefined') ? clock.getElapsedTime() : 0, cx = physics.cgWorldX || 0, cz = physics.cgWorldZ || 0;
+        const h0 = getWaveHeight(cx, cz, t, true);
+        u.uWaterY0.value = h0;
+        u.uWaterC.value.set(cx, cz);
+        u.uWaterG.value.set((getWaveHeight(cx + R, cz, t, true) - h0) / R, (getWaveHeight(cx, cz + R, t, true) - h0) / R);
+    } else u.uWaterY0.value = -1e6;
     // 水中からは見えない（水面の上の空気が光っているものなので）
     if ((window.underwaterAmount || 0) > 0.5) u.uStrength.value = 0;
     // 霧の中では近くでもにじみが見える
@@ -670,7 +695,7 @@ function updateGlowHalos() {
     if (typeof camera !== 'undefined' && camera && camera.isPerspectiveCamera && typeof renderer !== 'undefined') {
         const hPx = renderer.domElement.height;
         u.uPixelScale.value = hPx / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
-        u.uMinPx.value = 6 * Math.max(1, renderer.getPixelRatio());
+        u.uMinPx.value = 3 * Math.max(1, renderer.getPixelRatio());
     }
     // aSize は m 単位、距離もビュー空間（ワールド単位）で測るので、
     // 船体設定で船の拡大率を変えても補正は要らない。

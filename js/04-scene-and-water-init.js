@@ -851,12 +851,17 @@ function createWater() {
             // 濡れ具合。輪郭の上の点は定義上すべて水と接しているので、
             // 消すべきなのは「その断面がキールより上に出た＝空中にある」場合だけ。
             let wet = hullShapeWetness(shape, localWaterY);
-            // 水面が甲板（船体本体の上）より上：その断面は水をかぶっている。喫水線（泡帯・水面の穴）を真ん中へ縮める
-            //（船底が水から出たときに消えるのと同じように。甲板の上に水が見える）
-            //（泡帯・泡は、甲板が水に入ったらすぐ消す。以前は船体の高さの 8% 沈むまで細く残り、沈んだ船首の上に白い筋が伸びていた）
-            if (Number.isFinite(hp.deckY) && hp.hullHeight > 0 && localWaterY > hp.deckY) {
-                const k = Math.max(0, 1 - (localWaterY - hp.deckY) / (hp.hullHeight * 0.02));
-                hwLocal *= k; wet = 0;
+            const band = Math.max(1e-4, (hp.hullHeight > 0 ? hp.hullHeight : 1) * 0.02);
+            // 船底が水面から出た（波の上で船が浮き上がった・船の中ほどが波の谷の上に出た）：その断面には水面との交わりが無い。
+            // 喫水線（泡帯・水面の穴）を真ん中へ縮める（以前は泡だけ消えて、船の下の水面の穴が残っていた）
+            const keelY = shape.levelY[shape.kFirst];
+            if (localWaterY < keelY) hwLocal *= Math.max(0, 1 - (keelY - localWaterY) / band);
+            // 水面が甲板（その場所の舷側の上の縁：hullDeckTopAt）より上：その断面は水をかぶっている。喫水線を真ん中へ縮める
+            //（甲板の上に水が見え、甲板の上の煙突・甲板室のまわりに喫水線を引かない）
+            //（以前は船全体で 1 つの高さ hp.deckY を使っていて、上部構造の上になる船では、甲板が水に入っても穴が残っていた）
+            const deckTop = hullDeckTopAt(hp, alongLocal);
+            if (localWaterY > deckTop) {
+                hwLocal *= Math.max(0, 1 - (localWaterY - deckTop) / band); wet = 0;
             }
             return { alongLocal, hwLocal, wet };
         };
@@ -1051,6 +1056,7 @@ function createWater() {
             #ifdef USE_LOGDEPTHBUF
                 #ifdef USE_LOGDEPTHBUF_EXT
                     varying float vFragDepthW;
+                    varying float vFragPersp;   // 1：透視カメラ、0：正投影（船体設定の上面・正面・側面の図）
                 #else
                     uniform float logDepthBufFC;
                 #endif
@@ -1470,6 +1476,7 @@ function createWater() {
                 #ifdef USE_LOGDEPTHBUF
                     #ifdef USE_LOGDEPTHBUF_EXT
                         vFragDepthW = 1.0 + gl_Position.w;
+                        vFragPersp = isPerspectiveMatrix(projectionMatrix) ? 1.0 : 0.0;
                     #else
                     if (isPerspectiveMatrix(projectionMatrix)) {
                         gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
@@ -1541,6 +1548,7 @@ function createWater() {
                 uniform float logDepthBufFC;
                 #ifdef USE_LOGDEPTHBUF_EXT
                     varying float vFragDepthW;
+                    varying float vFragPersp;   // 1：透視カメラ、0：正投影（船体設定の上面・正面・側面の図）
                 #endif
             #endif
 
@@ -1681,7 +1689,9 @@ function createWater() {
                 // 画素ごとの対数深度（標準の材質と同じ式）。水面は 0.02% 奥へ（船体の水面下と際どいときに船体が勝つように。
                 // 画素ごとに奥行きを書くと polygonOffset は効かないので、その代わり）
                 #if defined( USE_LOGDEPTHBUF ) && defined( USE_LOGDEPTHBUF_EXT )
-                    gl_FragDepthEXT = log2(vFragDepthW * 1.0002) * logDepthBufFC * 0.5;
+                    // 正投影のカメラ（船体設定の上面などの図）では、標準の材質と同じく普通の奥行き（以前は対数の式のままで、
+                    // 海面がどこでも同じ手前の奥行きになり、喫水線の外へ張り出した外輪・構造物が海面に隠れていた）
+                    gl_FragDepthEXT = vFragPersp < 0.5 ? gl_FragCoord.z : log2(vFragDepthW * 1.0002) * logDepthBufFC * 0.5;
                 #endif
                 // 船の喫水線の輪郭の近くだけ、輪郭までの距離・内側かを求める（泡帯と、船の中の水面を消すのに使う）
                 float hullEdgeD = 1.0e6, hullEdgeWet = 0.0, hullInside = 0.0;

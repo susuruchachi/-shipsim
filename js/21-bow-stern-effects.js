@@ -341,10 +341,18 @@ function getPropellerEfficiency(t, physScale) {
 
     let sumEff = 0, count = 0;
     const worldPos = _propEffV;
+    // 外輪（組み込みの推進器の種類）：軸は水面より上。下の羽根の入り具合で見る（32-engine-propeller.js の paddleImmersionEff）
+    const paddle = typeof $ === 'function' && $('prop-type') && $('prop-type').value === 'paddlewheel' && typeof paddleImmersionEff === 'function';
     for (const p of propulsors) {
         worldPos.set(p.x, p.y, p.z).applyMatrix4(shipGroup.matrixWorld);
         const waveY = getWaveHeight(worldPos.x, worldPos.z, t, true);
         const depth = waveY - worldPos.y; // 正=没水、負=露出（プロペラが波面より上）
+        if (paddle) {
+            const rW = Math.max(0.1, (p.size || 1.0) * 0.8 * physScale);   // makePaddleWheel の半径 0.8×サイズ
+            sumEff += paddleImmersionEff(depth + rW, rW);
+            count++;
+            continue;
+        }
 
         // プロペラ半径相当（ローカルsize基準。makeScrew()のブレード半径0.3*sizeに準拠）
         const propRadiusWorld = Math.max(0.1, (p.size || 1.0) * 0.35 * physScale);

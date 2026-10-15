@@ -46,8 +46,10 @@ function _puffInit() {
                 vA = aAlpha * smoothstep(0.0, 0.08, aAge) * (1.0 - smoothstep(0.45, 1.0, aAge)) * (1.0 - smoothstep(220.0, 400.0, px));
                 gl_Position = projectionMatrix * mv;
                 #ifdef USE_LOGDEPTHBUF
-                    gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
-                    gl_Position.z *= gl_Position.w;
+                    if (projectionMatrix[2][3] == -1.0) {   // 透視カメラだけ（正投影のカメラでは普通の奥行き）
+                        gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
+                        gl_Position.z *= gl_Position.w;
+                    }
                 #endif
             }`,
         fragmentShader: `

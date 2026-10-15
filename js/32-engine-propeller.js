@@ -73,6 +73,18 @@ function getPropSpinRate() {
 //  スクリューが見つからない船は、舵の位置（physics.rudderOffset）に半径 2m のスクリューがあるとして見る。
 //  位置（船の座標）と半径は 1 秒ごとに調べ直し、深さは毎回（前のフレームの船の姿勢で）測る
 const _propIm = { t: -1e9, pts: [], v: 1 };
+// ── 外輪の効き（0〜1）：dip＝外輪のいちばん下が水面から入っている深さ[m]、r＝外輪の半径[m] ──
+//  外輪は軸が喫水線より上にあり、下の羽根だけが水をかく。スクリューのように「円盤の何割が水の中か」で見ると、
+//  ふだんの喫水でも 3 割ほどしか推力が出なかった。
+//  羽根の深さ（半径の 3 割ほど）まで入っていれば全部効き、それより浅いほど弱く、水から出れば 0。
+//  深く沈みすぎる（軸が水面の近く〜下）と、羽根が水を押し下げ・持ち上げてしまい効きが落ちる（軸が水面で 8 割ほど）
+function paddleImmersionEff(dip, r) {
+    r = Math.max(0.05, r);
+    const fin = Math.max(0, Math.min(1, dip / (0.3 * r)));
+    const over = 1 - 0.35 * Math.max(0, Math.min(1, (dip - 0.75 * r) / (0.5 * r)));
+    return fin * over;
+}
+window.paddleImmersionEff = paddleImmersionEff;
 function _propImPoints() {
     const pts = [];
     if (typeof shipGroup === 'undefined' || !shipGroup) return pts;
@@ -85,7 +97,7 @@ function _propImPoints() {
             const par = s.part.object.parent || shipGroup;
             const w = d.center.clone().applyMatrix4(par.matrixWorld);
             const rW = d.radius * (par.matrixWorld.getMaxScaleOnAxis() || 1);
-            pts.push({ p: w.applyMatrix4(inv), r: Math.max(0.3, rW) });
+            pts.push({ p: w.applyMatrix4(inv), r: Math.max(0.3, rW), paddle: s.part.key === 'paddle' });
         } else if (s.mesh) {
             // 半径：羽根の大きさ（船の座標での左右・上下の広がり。軸は船首尾の向き）
             const box = new THREE.Box3(), bb = new THREE.Box3(), m = new THREE.Matrix4();
@@ -97,7 +109,7 @@ function _propImPoints() {
             if (box.isEmpty()) continue;
             const c = new THREE.Vector3(), sz = new THREE.Vector3(); box.getCenter(c); box.getSize(sz);
             const k = shipGroup.matrixWorld.getMaxScaleOnAxis() || 1;
-            pts.push({ p: c, r: Math.max(0.3, Math.max(sz.x, sz.y) / 2 * k) });
+            pts.push({ p: c, r: Math.max(0.3, Math.max(sz.x, sz.y) / 2 * k), paddle: !!($('prop-type') && $('prop-type').value === 'paddlewheel') });
         }
     }
     if (!pts.length && physics.rudderOffset) {
@@ -119,7 +131,8 @@ function propImmersion(t) {
         const x = q.p.x, y = q.p.y, z = q.p.z;
         const wx = e[0] * x + e[4] * y + e[8] * z + e[12], wy = e[1] * x + e[5] * y + e[9] * z + e[13], wz = e[2] * x + e[6] * y + e[10] * z + e[14];
         const depth = getWaveHeight(wx, wz, t, true) - wy;               // 中心の深さ[m]（＋：水の中）
-        sum += Math.max(0, Math.min(1, (depth + q.r) / (2 * q.r)));       // 円盤の水に入っている割合（おおよそ）
+        if (q.paddle) sum += paddleImmersionEff(depth + q.r, q.r);        // 外輪：下の羽根の入り具合
+        else sum += Math.max(0, Math.min(1, (depth + q.r) / (2 * q.r)));  // スクリュー：円盤の水に入っている割合（おおよそ）
     }
     return (_propIm.v = sum / _propIm.pts.length);
 }
