@@ -124,24 +124,48 @@ function* _aoMeshes(G, F, list, root) {
         yield;
     }
 }
-const shipAOUniforms = { uAOStrength: { value: 0 }, uAODebug: { value: 0 }, uIndirK: { value: 1 }, uDirectK: { value: 1 } };    // uAODebug=1：空の見え方を白黒で表示（調整用）
-function _aoPatchMaterial(mat) {
+const shipAOUniforms = { uAOStrength: { value: 0 }, uAODebug: { value: 0 }, uIndirK: { value: 1 }, uDirectK: { value: 1 },
+    // 空の遮られ方（下の skyOcc：上から見た船の奥行きの地図）
+    uSkyOccMap: { value: null }, uSkyOccMat: { value: new THREE.Matrix4() }, uSkyOccOn: { value: 0 }, uSkyOccR: { value: new THREE.Vector2(0.001, 0.001) },
+    uSkyOccBias: { value: 0.002 }, uSkyOccMin: { value: 0.35 }, uSkyOccOff: { value: 1 } };    // uAODebug=1：空の見え方を白黒で表示（調整用）
+// 空の遮られ方を調べる（地図の 8 点：やわらかい縁）。上に何かある所は 0、空が見える所は 1
+const _SKY_OCC_GLSL = `
+uniform sampler2D uSkyOccMap; uniform float uSkyOccOn, uSkyOccBias, uSkyOccMin; uniform vec2 uSkyOccR;
+varying vec4 vSkyOcc;
+float skyOccTap(vec3 c, vec2 o) { return step(c.z - uSkyOccBias, texture2D(uSkyOccMap, c.xy + o * uSkyOccR).r); }
+float skyOccVis() {
+    vec3 c = vSkyOcc.xyz / vSkyOcc.w * 0.5 + 0.5;
+    if (c.x <= 0.0 || c.x >= 1.0 || c.y <= 0.0 || c.y >= 1.0 || c.z >= 1.0 || c.z <= 0.0) return 1.0;
+    float v = skyOccTap(c, vec2(0.0)) * 2.0 + skyOccTap(c, vec2(1.0, 0.0)) + skyOccTap(c, vec2(-1.0, 0.0)) + skyOccTap(c, vec2(0.0, 1.0)) + skyOccTap(c, vec2(0.0, -1.0))
+            + skyOccTap(c, vec2(0.7, 0.7)) + skyOccTap(c, vec2(-0.7, 0.7)) + skyOccTap(c, vec2(0.7, -0.7)) + skyOccTap(c, vec2(-0.7, -0.7));
+    return v / 10.0;
+}
+`;
+// opts.skyOcc：自分の船のマテリアルだけ（他の船は、自分の船の地図を使えないので付けない：59-traffic.js）
+function _aoPatchMaterial(mat, opts) {
     if (!mat || mat.userData.aoPatched) return;
     if (!(mat.isMeshStandardMaterial || mat.isMeshPhongMaterial || mat.isMeshLambertMaterial)) return;
     mat.userData.aoPatched = true;
+    const occ = !(opts && opts.skyOcc === false);
+    mat.userData.skyOcc = occ;
     const prev = mat.onBeforeCompile, prevKey = mat.customProgramCacheKey;
     mat.onBeforeCompile = function (shader, r) {
         if (typeof prev === 'function') prev.call(this, shader, r);
         shader.uniforms.uAOStrength = shipAOUniforms.uAOStrength; shader.uniforms.uAODebug = shipAOUniforms.uAODebug;
         shader.uniforms.uIndirK = shipAOUniforms.uIndirK; shader.uniforms.uDirectK = shipAOUniforms.uDirectK;
-        shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nattribute float aSky;\nvarying float vSkyAO;\n')
-            .replace(/\}\s*$/, '    vSkyAO = aSky;\n}\n');
+        if (occ) for (const k of ['uSkyOccMap', 'uSkyOccMat', 'uSkyOccOn', 'uSkyOccR', 'uSkyOccBias', 'uSkyOccMin', 'uSkyOccOff']) shader.uniforms[k] = shipAOUniforms[k];
+        const occV = occ ? 'uniform mat4 uSkyOccMat;\nuniform float uSkyOccOff;\nvarying vec4 vSkyOcc;\n' : '';
+        // 地図を引く点は、面の外向きへ少し出した所（吹きさらしの壁・煙突の横は空が見える。張り出しの下の壁・甲板は見えない）
+        const occVM = occ ? '    { vec3 skw = (modelMatrix * vec4(transformed, 1.0)).xyz + normalize(mat3(modelMatrix) * objectNormal) * uSkyOccOff; vSkyOcc = uSkyOccMat * vec4(skw, 1.0); }\n' : '';
+        shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nattribute float aSky;\nvarying float vSkyAO;\n' + occV)
+            .replace(/\}\s*$/, '    vSkyAO = aSky;\n' + occVM + '}\n');
         // 間接光（半球光・環境光・光のプローブ・環境マップ）に掛ける。少し強めに効くよう曲げる
-        shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uAOStrength;\nuniform float uAODebug;\nuniform float uIndirK;\nuniform float uDirectK;\nvarying float vSkyAO;\n')
-            .replace('#include <aomap_fragment>', '#include <aomap_fragment>\n    { float sk = mix(1.0, pow(clamp(vSkyAO * 1.15, 0.0, 1.0), 1.4), uAOStrength);\n      reflectedLight.indirectDiffuse *= sk * uIndirK; reflectedLight.indirectSpecular *= mix(1.0, sk, 0.7) * uIndirK;\n      reflectedLight.directDiffuse *= uDirectK; }\n')
+        const occF = occ ? '      if (uSkyOccOn > 0.5) { float so = mix(uSkyOccMin, 1.0, skyOccVis()); reflectedLight.indirectDiffuse *= so; reflectedLight.indirectSpecular *= mix(1.0, so, 0.6); }\n' : '';
+        shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uAOStrength;\nuniform float uAODebug;\nuniform float uIndirK;\nuniform float uDirectK;\nvarying float vSkyAO;\n' + (occ ? _SKY_OCC_GLSL : ''))
+            .replace('#include <aomap_fragment>', '#include <aomap_fragment>\n    { float sk = mix(1.0, pow(clamp(vSkyAO * 1.15, 0.0, 1.0), 1.4), uAOStrength);\n      reflectedLight.indirectDiffuse *= sk * uIndirK; reflectedLight.indirectSpecular *= mix(1.0, sk, 0.7) * uIndirK;\n' + occF + '      reflectedLight.directDiffuse *= uDirectK; }\n')
             .replace(/\}\s*$/, '    if (uAODebug > 0.5) gl_FragColor = vec4(vec3(vSkyAO), 1.0);\n}\n');
     };
-    mat.customProgramCacheKey = function () { return 'skyAO|' + ((typeof prevKey === 'function') ? prevKey.call(this) : ''); };
+    mat.customProgramCacheKey = function () { return 'skyAO' + (occ ? 'o' : '') + '|' + ((typeof prevKey === 'function') ? prevKey.call(this) : ''); };
     mat.defaultAttributeValues = Object.assign({}, mat.defaultAttributeValues || {}, { aSky: [1] });
     mat.needsUpdate = true;
 }
@@ -151,10 +175,95 @@ function _aoContrastUpdate() {
     const night = typeof lightingNightFactor === 'number' ? lightingNightFactor : 0;
     const sun = (window.weatherLightMul && Number.isFinite(weatherLightMul.sun)) ? Math.min(1, weatherLightMul.sun) : 1;
     const k = Math.max(0, Math.min(1, (1 - night * 1.5) * sun)) * shipAO.contrast;
-    // （晴れた昼の日陰は、間接光を 6 割減らして濃く。日なたは太陽の光を少し強めて、全体の明るさを保つ）
-    shipAOUniforms.uIndirK.value = 1 - 0.6 * k;
-    shipAOUniforms.uDirectK.value = 1 + 0.18 * k;
+    // （晴れた昼の日陰は、間接光を 7.5 割減らして濃く。日なたは太陽の光を強めて、全体の明るさを保つ。
+    //  以前は 6 割・1.18 倍で、白い上部構造の日陰が日なたの 7 割の明るさまでしか落ちず、写真のような陰影が出なかった）
+    shipAOUniforms.uIndirK.value = 1 - 0.75 * k;
+    shipAOUniforms.uDirectK.value = 1 + 0.3 * k;
 }
+// ── 空の遮られ方：船を真上から見た奥行きの地図（船の中の座標で 1 度だけ描く。船が動いても描き直さない）──
+//  空からの柔らかい光は、ほとんど上から来る。上に甲板・ボート・屋根がかぶさっている所（プロムナードの奥の壁・
+//  張り出しの下の甲板・ボート甲板の下）は空が見えないので、間接光を弱めて暗くする（写真のようなくっきりした陰影）。
+//  吹きさらしの舷側・煙突の横は、面の外へ少し出した所で地図を引くので空が見える。
+//  地図は船の中の座標（shipGroup）に置いたカメラで描くので、船が動いても・揺れても同じ。モデル・縮尺が変わったときだけ描き直す
+const SKY_OCC_LAYER = 9;
+const skyOcc = { rt: null, key: '', A: new THREE.Matrix4(), cam: null, mat: null, tmp: new THREE.Matrix4(), ok: false };
+function _skyOccKey() {
+    if (typeof importedModelGroup === 'undefined' || !importedModelGroup || typeof shipGroup === 'undefined' || !shipGroup) return '';
+    let n = 0, v = 0; importedModelGroup.traverse(o => { if (o.isMesh && o.visible && o.geometry && o.geometry.attributes.position) { n++; v += o.geometry.attributes.position.count; } });
+    const mo = typeof modelOffset !== 'undefined' && modelOffset ? [modelOffset.x, modelOffset.y, modelOffset.z, modelOffset.ry, modelOffset.scale].join(',') : '';
+    return importedModelGroup.uuid + ':' + n + ':' + v + ':' + (physics.scale || 1).toFixed(3) + ':' + mo;
+}
+function _skyOccBuild() {
+    shipAOUniforms.uSkyOccOn.value = 0;
+    if (typeof renderer === 'undefined' || !renderer || typeof scene === 'undefined') return;
+    if (!renderer.capabilities.isWebGL2 && !renderer.extensions.get('WEBGL_depth_texture')) return;
+    const list = typeof _ssMeshes === 'function' ? _ssMeshes() : [];
+    if (!list.length) return;
+    shipGroup.updateMatrixWorld(true);
+    const inv = new THREE.Matrix4().copy(shipGroup.matrixWorld).invert(), M = new THREE.Matrix4();
+    const box = new THREE.Box3(), b = new THREE.Box3();
+    for (const o of list) {
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+        b.copy(o.geometry.boundingBox).applyMatrix4(M.multiplyMatrices(inv, o.matrixWorld)); box.union(b);
+        o.layers.enable(SKY_OCC_LAYER);
+    }
+    if (box.isEmpty()) return;
+    const sc = physics.scale || 1, pad = 2 / sc;
+    const hx = (box.max.x - box.min.x) / 2 + pad, hz = (box.max.z - box.min.z) / 2 + pad, cx = (box.min.x + box.max.x) / 2, cz = (box.min.z + box.max.z) / 2;
+    const top = box.max.y + pad, depth = box.max.y - box.min.y + 2 * pad;
+    // 地図の大きさ：前後 2048（スマホ 1024）、左右は船の幅の割合で
+    const maxT = Math.min(renderer.capabilities.maxTextureSize || 2048, (typeof _texIsMobile === 'function' && _texIsMobile()) ? 1024 : 2048);
+    const H = maxT, W = Math.max(64, Math.min(maxT, Math.round(maxT * hx / hz)));
+    if (!skyOcc.rt || skyOcc.rt.width !== W || skyOcc.rt.height !== H) {
+        if (skyOcc.rt) { skyOcc.rt.depthTexture.dispose(); skyOcc.rt.dispose(); }
+        const rt = new THREE.WebGLRenderTarget(W, H, { depthBuffer: true });
+        rt.depthTexture = new THREE.DepthTexture(W, H);
+        rt.depthTexture.format = THREE.DepthFormat;
+        rt.depthTexture.type = renderer.capabilities.isWebGL2 ? THREE.UnsignedIntType : THREE.UnsignedShortType;
+        rt.depthTexture.minFilter = THREE.NearestFilter; rt.depthTexture.magFilter = THREE.NearestFilter;
+        skyOcc.rt = rt;
+    }
+    // 船の中の座標のカメラ：真上（船の上向き）から下を見る。画面の上が船首
+    const L = new THREE.Matrix4().lookAt(new THREE.Vector3(cx, top, cz), new THREE.Vector3(cx, top - 1, cz), new THREE.Vector3(0, 0, 1));
+    L.setPosition(cx, top, cz);
+    if (!skyOcc.cam) { skyOcc.cam = new THREE.OrthographicCamera(); skyOcc.cam.matrixAutoUpdate = false; }
+    const cam = skyOcc.cam;
+    Object.assign(cam, { left: -hx, right: hx, top: hz, bottom: -hz, near: 0.0001, far: depth });
+    cam.updateProjectionMatrix();
+    cam.layers.set(SKY_OCC_LAYER);
+    cam.matrix.multiplyMatrices(shipGroup.matrixWorld, L);
+    cam.updateMatrixWorld(true);
+    if (!skyOcc.mat) skyOcc.mat = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide });
+    const prevTarget = renderer.getRenderTarget(), prevOverride = scene.overrideMaterial, prevBg = scene.background;
+    const prevShadow = renderer.shadowMap.autoUpdate, prevNeeds = renderer.shadowMap.needsUpdate;
+    scene.overrideMaterial = skyOcc.mat; scene.background = null;
+    renderer.shadowMap.autoUpdate = false; renderer.shadowMap.needsUpdate = false;
+    renderer.setRenderTarget(skyOcc.rt);
+    renderer.clear(true, true, false);
+    renderer.render(scene, cam);
+    renderer.setRenderTarget(prevTarget);
+    scene.overrideMaterial = prevOverride; scene.background = prevBg;
+    renderer.shadowMap.autoUpdate = prevShadow; renderer.shadowMap.needsUpdate = prevNeeds;
+    // 船の中の座標 → 地図（クリップ座標）
+    skyOcc.A.multiplyMatrices(cam.projectionMatrix, new THREE.Matrix4().copy(L).invert());
+    const U = shipAOUniforms, Lm = (box.max.z - box.min.z) * sc;
+    U.uSkyOccMap.value = skyOcc.rt.depthTexture;
+    // やわらかい縁の幅 0.35m・奥行きの余裕 0.25m・面の外へ出す長さ（船の長さの 0.4％、0.3〜1.2m）
+    U.uSkyOccR.value.set(0.35 / sc / (2 * hx), 0.35 / sc / (2 * hz));
+    U.uSkyOccBias.value = 0.25 / sc / depth;
+    U.uSkyOccOff.value = Math.max(0.3, Math.min(1.2, Lm * 0.004));
+    skyOcc.ok = true;
+    U.uSkyOccOn.value = 1;
+    skyOccFollow();
+}
+// 毎フレーム（17-main-loop.js：船の位置・向きが決まった直後）：世界 → 船の中の座標 → 地図
+function skyOccFollow() {
+    if (!skyOcc.ok || typeof shipGroup === 'undefined' || !shipGroup) return;
+    const m = skyOcc.tmp.compose(shipGroup.position, shipGroup.quaternion, shipGroup.scale);
+    if (shipGroup.parent && shipGroup.parent !== scene) m.premultiply(shipGroup.parent.matrixWorld);
+    shipAOUniforms.uSkyOccMat.value.multiplyMatrices(skyOcc.A, m.invert());
+}
+window.skyOccFollow = skyOccFollow;
 function shipShadowContrast(v) { shipAO.contrast = Math.max(0, Math.min(1.5, v)); }
 window.shipShadowContrast = shipShadowContrast;
 function updateShipAO() {
@@ -164,7 +273,9 @@ function updateShipAO() {
         const now = performance.now();
         if (now - shipAO.checkT < 2000) return;
         shipAO.checkT = now;
-        for (const m of (typeof _ssMeshes === 'function' ? _ssMeshes() : [])) (Array.isArray(m.material) ? m.material : [m.material]).forEach(_aoPatchMaterial);
+        for (const m of (typeof _ssMeshes === 'function' ? _ssMeshes() : [])) (Array.isArray(m.material) ? m.material : [m.material]).forEach(x => _aoPatchMaterial(x));
+        // 空の遮られ方の地図：モデル・縮尺が変わったら描き直す（船の形の升目ができてから＝モデルの読み込みが落ち着いてから）
+        if (window.shipSolid && shipSolid.G) { const key = _skyOccKey(); if (key && key !== skyOcc.key) { skyOcc.key = key; try { _skyOccBuild(); } catch (e) { console.warn('空の遮られ方の地図を作れませんでした', e); shipAOUniforms.uSkyOccOn.value = 0; } } }
         return;
     }
     const G = window.shipSolid && shipSolid.G;

@@ -148,7 +148,9 @@ function updateDayNightCycle(dayProgress) {
     ambientLight.intensity += (ambientIntensity * lightSettings.ambientMult * wxMul.ambient - ambientLight.intensity) * 0.05;
     hemiLight.intensity += (hemiIntensity * lightSettings.hemiMult * wxMul.hemi - hemiLight.intensity) * 0.05;
     if (fillLight) {
-        const targetFill = lightIntensity * 0.3 * lightSettings.fillMult;
+        // 補助光（影を作らない、反対側からの光）は、晴れた昼は弱く：日陰を均一に明るくして、陰影が薄くなっていた
+        const clear = isNight ? 0 : Math.max(0, Math.min(1, wxMul.sun));
+        const targetFill = lightIntensity * 0.3 * lightSettings.fillMult * (1 - 0.7 * clear);
         fillLight.intensity += (targetFill - fillLight.intensity) * 0.05;
     }
 

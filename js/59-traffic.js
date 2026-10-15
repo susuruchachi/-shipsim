@@ -2159,7 +2159,7 @@ function _tfMats(S) {
     const M = { hull: mk(L.hull), boot: mk(L.boot), sup: mk(L.sup), fun: mk(L.fun), top: mk(L.top), deck: mk(L.deck || 0x8a7a60, { roughness: 0.9 }),
         dark: mk(0x2a2c2e), bands: mk(L.bands || L.top), win, gun: mk(0x55595c, { metalness: 0.3 }), box: [mk(0xb5452a), mk(0x2c5d8a), mk(0x3d7a3a), mk(0xc9a23a), mk(0x7a7f85)] };
     // 晴れた昼の影のくっきりさを、自分の船と同じに（61-ship-ao.js：空の見え方の焼き込みは無いので、その分は 1）
-    if (typeof _aoPatchMaterial === 'function') for (const k in M) for (const m of [].concat(M[k])) _aoPatchMaterial(m);
+    if (typeof _aoPatchMaterial === 'function') for (const k in M) for (const m of [].concat(M[k])) _aoPatchMaterial(m, { skyOcc: false });
     return M;
 }
 // いくつもの形を、材質ごとに 1 つにまとめる（描く回数を減らす）
@@ -3312,7 +3312,7 @@ async function _tfLoadProto(v) {
                 m.side = THREE.DoubleSide;
                 if (isGlow(m)) { win = true; if (!glow.has(m)) glow.set(m, m.emissiveIntensity != null ? m.emissiveIntensity : 1); }
                 // 晴れた昼の影のくっきりさ（間接光を弱める）を、自分の船と同じに（61-ship-ao.js）
-                if (typeof _aoPatchMaterial === 'function') _aoPatchMaterial(m);
+                if (typeof _aoPatchMaterial === 'function') _aoPatchMaterial(m, { skyOcc: false });   // （空の遮られ方の地図は自分の船だけ）
             }
             // 背中合わせに重なった面は表だけ描く（まだらに見えないように：08-model-loading-and-lighting.js）
             if (typeof splitTwinFaces === 'function' && splitTwinFaces(o, twinCache)) {

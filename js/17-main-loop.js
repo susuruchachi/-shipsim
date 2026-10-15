@@ -671,6 +671,7 @@ function animate() {
     const toCenter = pinOffsetScaled.clone().negate().applyEuler(finalEuler);
 
     shipGroup.position.set(physics.cgWorldX + toCenter.x, physics.y + toCenter.y, physics.cgWorldZ + toCenter.z);
+    if (typeof skyOccFollow === 'function') skyOccFollow();   // 空の遮られ方の地図を、今の船の位置・向きへ（61-ship-ao.js）
 
     // 見張り台視点カメラ: 船の位置・回転(横揺れ/縦揺れ込み)が確定した直後に計算する。
     if (!isDesignMode && cameraMode === 'viewpoint' && typeof updateViewpointCamera === 'function') {
