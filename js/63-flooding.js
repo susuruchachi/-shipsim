@@ -97,7 +97,7 @@ function _flWidthAt(D, a, y, lo, hi) {
 function _flKey() {
     const Lay = typeof wtLayout === 'function' ? wtLayout() : null;
     if (!Lay) return '';
-    return JSON.stringify([Lay.cuts.map(v => +v.toFixed(4)), shipWT.th, shipWT.lx, shipWT.lh, shipWT.sA, shipWT.sB, shipWT.lN, shipWT.db, physics.scale, Lay.D.yDeck, Lay.D.yBot]);
+    return JSON.stringify([Lay.cuts.map(v => +v.toFixed(4)), shipWT.th, shipWT.lx, shipWT.lh, shipWT.sA, shipWT.sB, shipWT.lN, shipWT.db, shipWT.lid, physics.scale, Lay.D.yDeck, Lay.D.yBot]);
 }
 function _flBuild() {
     flood.dirty = false;
@@ -113,11 +113,14 @@ function _flBuild() {
     const parts = (s) => (Lay.lN && s >= Lay.sA && s <= Lay.sB) ? Lay.lN + 1 : 1;
     const fOf = (s, p) => parts(s) === 1 ? [-Infinity, Infinity] : [p === 0 ? -Infinity : Lay.lx[p - 1], p === Lay.lN ? Infinity : Lay.lx[p]];
     const first = [];
+    // 区画の蓋（62-watertight.js）：蓋のある区画は、蓋の高さまでの閉じた箱（波・沈んだ甲板・となりからあふれた水は入らない）
+    const lidY = [];
+    for (let s = 0; s < nSec; s++) { const y = typeof wtLidY === 'function' ? wtLidY(s, Lay) : null; lidY[s] = y !== null ? Math.min(D.yDeck, y) : null; }
     for (let s = 0; s < nSec; s++) {
         first[s] = flood.comps.length;
         for (let p = 0; p < parts(s); p++) {
             const [fLo, fHi] = fOf(s, p);
-            flood.comps.push(_flTable({ kind: 'c', s, p, np: parts(s), a0: Lay.cuts[s], a1: Lay.cuts[s + 1], fLo, fHi, y0: yIB, y1: D.yDeck }, D, dA, 24));
+            flood.comps.push(_flTable({ kind: 'c', s, p, np: parts(s), a0: Lay.cuts[s], a1: Lay.cuts[s + 1], fLo, fHi, y0: yIB, y1: lidY[s] !== null ? lidY[s] : D.yDeck, lid: lidY[s] !== null }, D, dA, 24));
         }
     }
     flood.nMain = flood.comps.length;
@@ -126,6 +129,8 @@ function _flBuild() {
     if (shipWT.db > 0) for (let s = 0; s < nSec; s++) flood.comps.push(_flTable({ kind: 'db', s, p: 0, np: 1, a0: Lay.cuts[s], a1: Lay.cuts[s + 1], fLo: -Infinity, fHi: Infinity, y0: D.yBot, y1: yIB }, D, dA, 6));
     // つながり：横隔壁の上の縁（前後のとなり）
     for (let j = 0; j < Lay.n; j++) {
+        // （どちらかの区画に蓋があれば、この隔壁の上を越えて行き来しない：蓋が隔壁の上をふさいでいる）
+        if (lidY[j] !== null || lidY[j + 1] !== null) continue;
         const a = Lay.cuts[j + 1], yTop = D.yBot + D.H * shipWT.th[j];
         const pa = parts(j), pb = parts(j + 1);
         for (let p = 0; p < pa; p++) for (let q = 0; q < pb; q++) {
@@ -207,6 +212,9 @@ function _flAssign(h) {
         h.c = _flCompAt(h.a, h.p, h.y, true);
         if (h.inner) h.c2 = _flCompAt(h.a, h.p, yIB + 0.01, false);
     } else h.c = _flCompAt(h.a, h.p, h.y, false);
+    // 蓋のある区画の、蓋より上の穴：蓋の下の区画には入らない（蓋の上の水は数えない）
+    const c = flood.comps[h.c];
+    if (c && c.lid && h.y > c.y1) h.c = -1;
 }
 
 // ── 穴（64-damage.js から）──
@@ -307,7 +315,7 @@ function updateFlooding(t, dt) {
         let greenIn = false;
         for (let i = 0; i < flood.nMain; i++) {
             const c = flood.comps[i];
-            c.greenH = flood.greenT > 0 && !noIn ? _flGreenHead(c, e, t, flood.D) : 0;
+            c.greenH = flood.greenT > 0 && !noIn && !c.lid ? _flGreenHead(c, e, t, flood.D) : 0;   // （蓋のある区画には大波は入らない）
             if (c.greenH > 0.05) greenIn = true;
         }
         if (greenIn && !flood.greenMsg) {
@@ -345,7 +353,7 @@ function updateFlooding(t, dt) {
             // 波の山が甲板を越えるだけのとき（甲板は海面より上）は、下の大波の分（開口から一部だけ）
             for (let i = 0; i < flood.nMain; i++) {
                 const c = flood.comps[i];
-                if (noIn || !(c.deckOut > c.deckY) || !(wl0 > c.deckY)) continue;
+                if (noIn || c.lid || !(c.deckOut > c.deckY) || !(wl0 > c.deckY)) continue;   // （蓋のある区画は、上から水が入らない）
                 const top = Math.max(c.deckY, c.Yw);
                 if (c.deckOut > top) c.dv += FL_CD * Math.max(2, c.deckA * sc2 * 0.03) * Math.sqrt(2 * FL_G * (c.deckOut - top)) * hdt;
             }

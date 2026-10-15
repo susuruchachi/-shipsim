@@ -14,7 +14,7 @@
 //  喫水線の半幅、高さは船底〜主甲板に対する割合で持つ（模型の大きさ・縮尺を変えても同じ配置）。
 //  区画の容積・浸水は 63-flooding.js。
 
-const WT_DEF = { tN: null, tz: [], th: [], lN: 0, lx: [], lSym: true, lh: 1, sA: null, sB: null, db: null, show: false };
+const WT_DEF = { tN: null, tz: [], th: [], lN: 0, lx: [], lSym: true, lh: 1, sA: null, sB: null, db: null, lid: [], show: false };
 const shipWT = JSON.parse(JSON.stringify(WT_DEF));
 window.shipWT = shipWT;
 const _wt = { root: null, key: '', dirty: true, meshes: [], marks: {}, proxies: {}, mats: {}, sph: null, D: null, rev: 0 };
@@ -176,6 +176,9 @@ function _wtEnsure() {
     shipWT.sB = Math.max(shipWT.sA, Math.min(n, Math.round(shipWT.sB)));
     if (typeof shipWT.db !== 'number' || !Number.isFinite(shipWT.db)) shipWT.db = +Math.max(0.9, Math.min(2.0, 0.12 * _wtDraft(D))).toFixed(2);
     shipWT.db = Math.max(0, Math.min(_wtDraft(D) * 0.6, shipWT.db));
+    // 区画の蓋（区画ごと：船尾から 0〜n）
+    const lid0 = Array.isArray(shipWT.lid) ? shipWT.lid : [];
+    shipWT.lid = Array.from({ length: n + 1 }, (_, i) => !!lid0[i]);
     return D;
 }
 // 区画の並び：前後の区切り（船尾の端・横隔壁・船首の端）、縦隔壁のある区切りの範囲
@@ -185,6 +188,21 @@ function wtLayout() {
     return { D, cuts, n: shipWT.tN, lN: shipWT.lN, lx: shipWT.lx.slice(), sA: shipWT.sA, sB: shipWT.sB };
 }
 window.wtLayout = wtLayout;
+// ── 区画の蓋（水密の甲板）：区画 s（船尾から 0〜）に蓋があれば、その高さ（模型の座標）。無ければ null ──
+//  前後の横隔壁のうち低い方の上の縁に置く。隔壁が甲板を越えていれば甲板の高さ（区画の前後でいちばん低い甲板）
+function _wtBulkTop(D, Lay, j) { return Math.min(D.yBot + D.H * shipWT.th[j], _wtDeckAt(D, Lay.cuts[j + 1])); }
+function wtLidY(s, Lay) {
+    Lay = Lay || wtLayout();
+    if (!Lay || !shipWT.lid || !shipWT.lid[s]) return null;
+    const D = Lay.D, a0 = Lay.cuts[s], a1 = Lay.cuts[s + 1];
+    let y = D.yDeck;
+    for (let i = 0; i <= 8; i++) y = Math.min(y, _wtDeckAt(D, a0 + (a1 - a0) * i / 8));
+    if (s >= 1) y = Math.min(y, _wtBulkTop(D, Lay, s - 1));
+    if (s <= Lay.n - 1) y = Math.min(y, _wtBulkTop(D, Lay, s));
+    const sc = physics.scale || 1, yIB = D.yBot + (shipWT.db || 0) / sc;
+    return Math.max(yIB + D.H * 0.03, y);
+}
+window.wtLidY = wtLidY;
 window.wtDims = () => { const hp = _wtHull(); return hp ? _wtDims(hp) : null; };
 window.wtHW = _wtHW;
 window.wtHWRef = _wtHWRef;
@@ -193,11 +211,11 @@ window.wtAlpha = () => { const hp = _wtHull(); return hp ? _wtAlpha(hp) : 0; };
 // ── 形 ──
 function _wtMat(kind) {
     if (_wt.mats[kind]) return _wt.mats[kind];
-    const col = { t: 0x33ccff, l: 0xffaa33, db: 0xb8c0c8, mk: 0x33ccff, ml: 0xffaa33, ma: 0xffffff, md: 0xb8c0c8 }[kind.replace('E', '')] || 0xffffff;
+    const col = { t: 0x33ccff, l: 0xffaa33, db: 0xb8c0c8, lid: 0x55dd88, mk: 0x33ccff, ml: 0xffaa33, ma: 0xffffff, md: 0xb8c0c8 }[kind.replace('E', '')] || 0xffffff;
     let m;
     if (kind.endsWith('E')) m = new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false });
     else if (kind[0] === 'm') m = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false });
-    else m = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: kind === 'db' ? 0.16 : 0.24, side: THREE.DoubleSide, depthTest: false, depthWrite: false });
+    else m = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: kind === 'db' ? 0.16 : kind === 'lid' ? 0.3 : 0.24, side: THREE.DoubleSide, depthTest: false, depthWrite: false });
     m.toneMapped = false;
     return (_wt.mats[kind] = m);
 }
@@ -250,6 +268,14 @@ function _wtDbGeo(D, yDb) {
     for (let i = 0; i <= NA; i++) { const a = aLo + (aHi - aLo) * i / NA, w = _wtHWv(yDb, a); pos.push(-w, yDb, a, w, yDb, a); }
     for (let i = 0; i < NA; i++) { const q = i * 2; idx.push(q, q + 1, q + 3, q, q + 3, q + 2); }
     return _wtGeo(pos, idx);
+}
+// 区画の蓋（前後 a0〜a1・高さ y の水平な面）と縁取り
+function _wtLidGeo(D, a0, a1, y) {
+    const NA = 40, pos = [], idx = [], L = [], R = [];
+    for (let i = 0; i <= NA; i++) { const a = a0 + (a1 - a0) * i / NA, w = _wtHWv(y, a); pos.push(-w, y, a, w, y, a); L.push(-w, y, a); R.push(w, y, a); }
+    for (let i = 0; i < NA; i++) { const q = i * 2; idx.push(q, q + 1, q + 3, q, q + 3, q + 2); }
+    const e = R.slice(); for (let i = NA; i >= 0; i--) e.push(L[i * 3], L[i * 3 + 1], L[i * 3 + 2]); e.push(R[0], R[1], R[2]);
+    return { face: _wtGeo(pos, idx), edge: _wtGeo(e) };
 }
 // 縦隔壁の範囲（前後）と、置く前後の真ん中
 function _wtLongSpan(D, cuts) {
@@ -315,6 +341,12 @@ function _wtBuild() {
     // 二重底
     const sc = physics.scale || 1, yDb = D.yBot + shipWT.db / sc;
     if (shipWT.db > 0) { add(_wtDbGeo(D, yDb), 'db'); mark('db', 'md', 0, yDb, D.aS + (D.aB - D.aS) * 0.3); }
+    // 区画の蓋（緑）
+    for (let s = 0; s <= Lay.n; s++) {
+        const y = wtLidY(s, Lay); if (y === null) continue;
+        const g = _wtLidGeo(D, Lay.cuts[s], Lay.cuts[s + 1], y);
+        add(g.face, 'lid'); add(g.edge, 'lid', true);
+    }
     _wt.rev++;
 }
 // 船体（模型・縮尺・向き）が変わったら作り直す
@@ -461,7 +493,7 @@ function _wtChanged(rerender) {
 function wtSet(key, v) {
     const Lay = wtLayout(); if (!Lay) return;
     const D = Lay.D, sc = physics.scale || 1;
-    if (key === 'tN') { shipWT.tN = Math.max(0, Math.min(40, Math.round(+v || 0))); shipWT.tz = []; shipWT.sA = null; shipWT.sB = null; }
+    if (key === 'tN') { shipWT.tN = Math.max(0, Math.min(40, Math.round(+v || 0))); shipWT.tz = []; shipWT.sA = null; shipWT.sB = null; shipWT.lid = []; }
     else if (key === 'lN') { shipWT.lN = Math.max(0, Math.min(8, Math.round(+v || 0))); shipWT.lx = []; }
     else if (key === 'lSym') { shipWT.lSym = !!v; if (shipWT.lSym) { const n = shipWT.lN; for (let k = 0; k < Math.floor(n / 2); k++) { const f = (Math.abs(shipWT.lx[k]) + Math.abs(shipWT.lx[n - 1 - k])) / 2; shipWT.lx[k] = -f; shipWT.lx[n - 1 - k] = f; } if (n % 2) shipWT.lx[(n - 1) / 2] = 0; } }
     else if (key === 'avg') { const avg = Lay.n ? shipWT.th.reduce((s, x) => s + x, 0) / Lay.n : 1, d = (+v) - avg; shipWT.th = shipWT.th.map(h => +Math.max(0.05, Math.min(1.5, h + d)).toFixed(4)); }
@@ -494,6 +526,14 @@ function wtSetOne(kind, i, v) {
     _wtChanged(false);
     _wtSyncPanelValues();
 }
+// 区画の蓋を付ける・外す（s：船尾から 0〜。'all'・'none' で全部）
+function wtSetLid(s, on) {
+    const Lay = wtLayout(); if (!Lay) return;
+    if (s === 'all' || s === 'none') shipWT.lid = shipWT.lid.map(() => s === 'all');
+    else shipWT.lid[s] = !!on;
+    _wtChanged();
+}
+window.wtSetLid = wtSetLid;
 function wtEqual(kind) {
     const Lay = wtLayout(); if (!Lay) return;
     if (kind === 't') shipWT.tz = _wtEqualT(Lay.D, shipWT.tN);
@@ -530,7 +570,7 @@ function renderWTPanel() {
     el.innerHTML = `<div class="sp-section-title">🧱 水密隔壁・区画</div>
         <div style="font-size:10px;color:#888;margin-bottom:6px;">
           船を仕切る水密隔壁です。魚雷・砲弾・衝突・座礁で船体に穴があくと、その区画に水が入り、水の量と区画の位置で船が沈み・傾きます。
-          水が隔壁の上の縁を越えると、となりの区画へあふれます。船の中に、隔壁が透けて見えます（青＝横隔壁・橙＝縦隔壁・灰＝二重底）。<br>
+          水が隔壁の上の縁を越えると、となりの区画へあふれます。船の中に、隔壁が透けて見えます（青＝横隔壁・橙＝縦隔壁・灰＝二重底・緑＝区画の蓋）。<br>
           全長 ${_wtFmt(Lm, 1)}m・船底から主甲板まで ${_wtFmt(Hm, 1)}m・喫水 ${_wtFmt(_wtDraft(D), 1)}m　区画の数 <b class="wt-ncomp">${nComp}</b>
         </div>
         <div class="sp-row" style="gap:6px;flex-wrap:wrap;">
@@ -595,6 +635,18 @@ function renderWTPanel() {
           ${btn('wt_db', 0, '↕ ギズモで高さ', '二重底（内底板）の高さを上下する')}
         </div>
         <div style="font-size:10px;color:#888;">軽い座礁・衝突で船底に穴があいても、水は二重底の中までで、区画には入りません（強い座礁・魚雷は内底板まで破ります）。0 で二重底なし。</div>
+        <div class="sp-section-title" style="margin-top:8px;">区画の蓋（水密の甲板）</div>
+        <div style="font-size:10px;color:#888;margin-bottom:4px;">区画の上に蓋（緑）をします。前後の横隔壁のうち低い方の上の縁（隔壁が甲板を越えていれば甲板の高さ）に付きます。
+          蓋のある区画は、蓋より下には波・沈んだ甲板・となりの区画からあふれた水が入りません（船体の穴からは入ります）。</div>
+        <div class="sp-row" style="gap:6px;flex-wrap:wrap;align-items:center;">
+          <button class="sp-gizmo-btn" onclick="wtSetLid('all')">全部に付ける</button>
+          <button class="sp-gizmo-btn" onclick="wtSetLid('none')">全部外す</button>
+        </div>
+        <div class="wt-lidlist" style="display:flex;flex-wrap:wrap;gap:4px 10px;">${shipWT.lid.map((on, s) => {
+            const y = wtLidY(s, Lay);
+            return `<label class="sp-toggle" style="font-size:11px;white-space:nowrap;"><input type="checkbox" ${on ? 'checked' : ''} onchange="wtSetLid(${s}, this.checked)"> ${s + 1}${y !== null ? `（${_wtFmt((y - D.yBot) * sc, 1)}m）` : ''}</label>`;
+        }).join('')}</div>
+        <div style="font-size:10px;color:#888;">番号は船尾からの区画。（ ）は蓋の高さ（船底から）。</div>
         <div class="wt-vol" style="font-size:10px;color:#9ab;margin-top:6px;"></div>
         <div class="sp-section-title" style="margin-top:8px;">試しに穴をあける</div>
         <div class="sp-row" style="gap:6px;flex-wrap:wrap;align-items:center;">
