@@ -46,6 +46,99 @@ function _wtDims(hp) {
 }
 // 高さ y・前後 a での船体の半幅（模型の座標）
 function _wtHW(y, a) { return hullShapeHalfWidthAtAlong(window.hullProfile.shape, y, a); }
+// ── 実際の船の形（60-ship-solid.js の升目：モデルの面が通る所と、その中）──
+//  船体の形（22-hull-shape.js）は、高さの段ごとの輪郭を上下につないだもので、船首のバルバスバウとその上のくぼみ、
+//  大きく反り返った船首・船尾のように、高さで形が急に変わる所では、段の間で実際の船体より外へふくらむことがある。
+//  隔壁の面・破口の位置は、升目で確かめた実際の外板の内側に収める
+function _wtSolid() { return (typeof shipSolid !== 'undefined' && shipSolid.G) ? shipSolid.G : null; }
+function _wtRot() { if (!_wt.rotM) { const hp = _wtHull(); if (hp) _wt.rotM = new THREE.Matrix4().makeRotationY(_wtAlpha(hp)); } return _wt.rotM; }
+// 船体の座標 (p, y, a) が、升目で船の中（面の上も）か
+function _wtSolidAt(G, p, y, a) {
+    const e = _wtRot().elements;
+    const x = e[0] * p + e[8] * a, z = e[2] * p + e[10] * a;
+    const i = Math.floor((x - G.lo.x) / G.v), j = Math.floor((y - G.lo.y) / G.v), k = Math.floor((z - G.lo.z) / G.v);
+    if (i < 0 || j < 0 || k < 0 || i >= G.nx || j >= G.ny || k >= G.nz) return false;
+    return G.data[(k * G.ny + j) * G.nx + i] === 1;
+}
+// 左右どこまで探すか（船体の形のいちばん広い半幅の 1.4 倍）
+function _wtPMax(G) {
+    const S = window.hullProfile.shape;
+    if (!_wt.pMax || _wt.pMaxS !== S) { let m = 0; for (let i = 0; i < S.hw.length; i++) if (S.hw[i] > m) m = S.hw[i]; _wt.pMax = m * 1.4; _wt.pMaxS = S; }
+    return _wt.pMax + 2 * G.v;
+}
+// 高さ y・前後 a での、実際の外板の半幅（side：+1 左舷・−1 右舷。外から内へたどって最初に当たった所。無ければ 0）
+function _wtSolidSide(G, y, a, side) {
+    const st = G.v * 0.5;
+    for (let p = _wtPMax(G); p > 0; p -= st) if (_wtSolidAt(G, side * p, y, a)) return p;
+    return 0;
+}
+// 隔壁の面に使う半幅：船体の形の半幅を、実際の外板（升目）より外へは出さない（升目がまだ無ければ船体の形のまま）
+function _wtHWv(y, a) {
+    const w = _wtHW(y, a), G = _wtSolid();
+    if (!G || !(w > 0)) return w;
+    return Math.min(w, Math.max(_wtSolidSide(G, y, a, 1), _wtSolidSide(G, y, a, -1)));
+}
+// ── 外板の上の点：(a, p, y) のいちばん近くの、実際の外板の上の点と、外向きの向き（船体の座標）──
+//  mode 'side'：舷側（p の側の外から内へたどる）、'bottom'：船底（下から上へたどる）。
+//  その場所に船体が無い（船首の曲線の外・バルバスバウの前の空中など）ときは、船の真ん中の方へ寄せて探す
+function wtSurfacePoint(a, p, y, mode) {
+    const hp = _wtHull(); if (!hp) return null;
+    const D = _wtDims(hp), G = _wtSolid();
+    const side = p >= 0 ? 1 : -1, mid = (D.aS + D.aB) / 2, sa = a >= mid ? -1 : 1;
+    const out = { a, p, y, n: new THREE.Vector3(side, 0, 0) };
+    if (!G) {
+        // 升目がまだ無い：船体の形で、その高さの前後の端の内側に収める
+        const S = hp.shape, e = {}; hullShapeEndsAtY(S, y, e);
+        const m = (D.aB - D.aS) * 0.004;
+        out.a = Math.max(e.sternAlong + m, Math.min(e.bowAlong - m, a));
+        out.p = side * _wtHW(y, out.a);
+        if (mode === 'bottom') { out.y = D.yBot; out.n.set(0, -1, 0); }
+        return out;
+    }
+    const v = G.v, R = Math.ceil((D.aB - D.aS) * 0.2 / v);
+    if (mode === 'bottom') {
+        // 船底：下から上へたどる（その列に船体が無ければ、真ん中の線・船の真ん中の方へ寄せる）
+        // （船底が高い所で見つかった列（船首の先の、喫水線より上の反り返り）は使わず、さらに真ん中の方を探す）
+        const yLo = G.lo.y, yHi = D.yDeck, yOk = Math.max(y, D.yBot) + (D.yWL - D.yBot) * 0.3;
+        const B = (pp, aa) => { for (let yy = yLo; yy < yHi; yy += v * 0.5) if (_wtSolidAt(G, pp, yy, aa)) return yy; return null; };
+        let found = null, low = null;
+        for (let k = 0; k <= R && found === null; k++) {
+            const aa = a + sa * k * v;
+            for (const f of [1, 0.6, 0.3, 0]) {
+                const yb = B(p * f, aa); if (yb === null) continue;
+                if (yb <= yOk) { found = { a: aa, p: p * f, y: yb }; break; }
+                if (!low || yb < low.y) low = { a: aa, p: p * f, y: yb };
+            }
+        }
+        if (!found) found = low;
+        if (!found) return out;
+        out.a = found.a; out.p = found.p; out.y = found.y;
+        const h = v * 1.5, bz = (pp, aa) => { const r = B(pp, aa); return r === null ? found.y + h : r; };
+        const dBa = (bz(found.p, found.a + h) - bz(found.p, found.a - h)) / (2 * h), dBp = (bz(found.p + h, found.a) - bz(found.p - h, found.a)) / (2 * h);
+        out.n.set(dBp, -1, dBa).normalize();
+        return out;
+    }
+    // 舷側：p の側の外から内へたどる。その高さ・前後に船体が無ければ、船の真ん中の方へ前後をずらし、次に喫水線の方へ高さをずらす
+    const W = (yy, aa) => _wtSolidSide(G, yy, aa, side);
+    let found = null;
+    const sy = y < D.yWL ? 1 : -1;
+    for (let k = 0; k <= R && found === null; k++) {
+        for (const dy of [0, 1, 2, 3]) {
+            const yy = y + sy * dy * v, aa = a + sa * k * v, w = W(yy, aa);
+            if (w > 0) { found = { a: aa, y: yy, w }; break; }
+        }
+    }
+    if (!found) return out;
+    out.a = found.a; out.y = found.y; out.p = side * found.w;
+    // 外向きの向き：外板の面 |p| = W(y, a) の傾きから（船首の先では前向き・船尾の先では後ろ向きになる）
+    const h = v * 1.5;
+    const dWa = (W(found.y, found.a + h) - W(found.y, found.a - h)) / (2 * h), dWy = (W(found.y + h, found.a) - W(found.y - h, found.a)) / (2 * h);
+    out.n.set(side, -dWy, -dWa);
+    if (!(out.n.lengthSq() > 1e-9)) out.n.set(side, 0, 0);
+    out.n.normalize();
+    return out;
+}
+window.wtSurfacePoint = wtSurfacePoint;
 // 前後 a での甲板（舷側の外板の上の縁）の高さ。隔壁の面は、舷側と同じく甲板からもはみ出さない（22-hull-shape.js）
 function _wtDeckAt(D, a) { const y = typeof hullShapeDeckAt === 'function' ? hullShapeDeckAt(window.hullProfile.shape, a) : Infinity; return Math.max(D.yBot + D.H * 0.1, Math.min(D.yDeck, y)); }
 // 縦隔壁を置く割合の基準の半幅：喫水線の半幅（喫水線の無い船首尾の端では、いちばん広い所）
@@ -117,7 +210,7 @@ function _wtGeo(pos, idx) {
 // 横隔壁（前後 a・上の縁 yTop）：外板に沿った面と縁取り
 function _wtTransGeo(D, a, yTop) {
     const N = 24, pos = [], idx = [], edge = [];
-    for (let k = 0; k <= N; k++) { const y = D.yBot + (yTop - D.yBot) * k / N, w = _wtHW(y, a); pos.push(-w, y, a, w, y, a); }
+    for (let k = 0; k <= N; k++) { const y = D.yBot + (yTop - D.yBot) * k / N, w = _wtHWv(y, a); pos.push(-w, y, a, w, y, a); }
     for (let k = 0; k < N; k++) { const i = k * 2; idx.push(i, i + 1, i + 3, i, i + 3, i + 2); }
     for (let k = 0; k <= N; k++) edge.push(pos[k * 6 + 3], pos[k * 6 + 4], a);
     for (let k = N; k >= 0; k--) edge.push(pos[k * 6], pos[k * 6 + 1], a);
@@ -131,9 +224,9 @@ function _wtLongGeo(D, f, a0, a1, yTop) {
         const a = a0 + (a1 - a0) * i / NA, p = f * _wtHWRef(D, a);
         yTop = Math.min(yTop0, _wtDeckAt(D, a));
         let yLow = yTop;
-        for (let k = 0; k <= 40; k++) { const y = D.yBot + (yTop - D.yBot) * k / 40; if (_wtHW(y, a) >= Math.abs(p) - 1e-6) { yLow = y; break; } }
+        for (let k = 0; k <= 40; k++) { const y = D.yBot + (yTop - D.yBot) * k / 40; if (_wtHWv(y, a) >= Math.abs(p) - 1e-6) { yLow = y; break; } }
         for (let j = 0; j <= NY; j++) {
-            const y = yLow + (yTop - yLow) * j / NY, w = _wtHW(y, a);
+            const y = yLow + (yTop - yLow) * j / NY, w = _wtHWv(y, a);
             pos.push(Math.sign(p) * Math.min(Math.abs(p), w), y, a);
         }
         top.push(pos[pos.length - 3], pos[pos.length - 2], a);
@@ -151,7 +244,10 @@ function _wtLongGeo(D, f, a0, a1, yTop) {
 // 二重底の内底板（高さ yDb の水平な面）
 function _wtDbGeo(D, yDb) {
     const NA = 60, pos = [], idx = [];
-    for (let i = 0; i <= NA; i++) { const a = D.aS + (D.aB - D.aS) * i / NA, w = _wtHW(yDb, a); pos.push(-w, yDb, a, w, yDb, a); }
+    // その高さで船体がある前後の範囲だけ（両端で幅 0 の点まで細く伸びて、船首・船尾の外へはみ出さないように）
+    let aLo = D.aS, aHi = D.aB;
+    { const st = (D.aB - D.aS) / 240; let i0 = -1, i1 = -1; for (let i = 0; i <= 240; i++) if (_wtHWv(yDb, D.aS + st * i) > 0) { if (i0 < 0) i0 = i; i1 = i; } if (i0 >= 0) { aLo = D.aS + st * Math.max(0, i0 - 0.5); aHi = D.aS + st * Math.min(240, i1 + 0.5); } }
+    for (let i = 0; i <= NA; i++) { const a = aLo + (aHi - aLo) * i / NA, w = _wtHWv(yDb, a); pos.push(-w, yDb, a, w, yDb, a); }
     for (let i = 0; i < NA; i++) { const q = i * 2; idx.push(q, q + 1, q + 3, q, q + 3, q + 2); }
     return _wtGeo(pos, idx);
 }
@@ -251,6 +347,8 @@ function updateWatertight() {
     if (!hp || typeof shipGroup === 'undefined' || !shipGroup) { if (_wt.root) _wt.root.visible = false; return; }
     const key = _wtHullKey(hp);
     if (key !== _wt.key) { _wt.key = key; _wt.dirty = true; if (shipWT._auto) { shipWT.tN = null; } }
+    // 実際の船の形の升目（60-ship-solid.js）ができたら、隔壁の面を外板の内側に収め直す
+    if (_wtSolid() !== _wt.solidG) { _wt.solidG = _wtSolid(); _wt.dirty = true; }
     if (_wt.dirty || !_wt.root || (typeof scene !== 'undefined' && _wt.root.parent !== scene)) _wtBuild();
     if (!_wt.root) return;
     _wtFollow();

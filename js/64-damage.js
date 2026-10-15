@@ -14,10 +14,11 @@ const damage = { decals: [], group: null, tex: {}, lastGround: -1e9, lastHit: {}
 window.damage = damage;
 const DM_RHO = 1025;
 
-// ── 無敵モード：座礁・衝突で船体が傷つかない（自分の船も、他の船も）。ぶつかって跳ね返る・乗り上げるのはそのまま ──
-//  （魚雷・砲弾は当たる。左のメニューのいちばん上のボタン。端末に覚えておく）
+// ── 無敵モード：座礁・衝突・攻撃（魚雷・砲弾）で船体が傷つかず、荒波でも浸水しない（自分の船も、他の船も）。
+//  ぶつかって跳ね返る・乗り上げる・弾が当たって爆発する見た目はそのまま（左のメニューのいちばん上のボタン。端末に覚えておく）
+//  （水密区画の「試しに穴をあける」だけは、設計の確認のためにそのまま使える）
 try { damage.invincible = localStorage.getItem('susuru_invincible') === '1'; } catch (e) { /* ignore */ }
-function damageInvincible(kind) { return damage.invincible && (!kind || kind === 'collision' || kind === 'ground' || kind === 'dent'); }
+function damageInvincible(kind) { return damage.invincible && kind !== 'test'; }
 function invincibleSyncUI() {
     const b = document.getElementById('invincible-btn');
     if (!b) return;
@@ -30,7 +31,7 @@ function invincibleToggle(on) {
     damage.invincible = on === undefined ? !damage.invincible : !!on;
     try { localStorage.setItem('susuru_invincible', damage.invincible ? '1' : '0'); } catch (e) { /* ignore */ }
     invincibleSyncUI();
-    _dmMsg(damage.invincible ? '無敵モード：座礁・衝突で船体が傷つきません（自分の船・他の船とも）' : '無敵モード：切りました（座礁・衝突で穴があきます）');
+    _dmMsg(damage.invincible ? '無敵モード：座礁・衝突・攻撃で船体が傷つかず、荒波でも浸水しません（自分の船・他の船とも）' : '無敵モード：切りました（座礁・衝突・攻撃で穴があき、荒波で浸水します）');
 }
 window.invincibleToggle = invincibleToggle;
 window.invincibleSyncUI = invincibleSyncUI;
@@ -50,10 +51,19 @@ function _dmToHull(x, y, z) {
     _dmV.set(x, y, z).applyMatrix4(_dmM);
     return { p: _dmV.x, y: _dmV.y, a: _dmV.z };
 }
-// 船体の外板の上の点（高さ y・前後 a の、p の側の舷）
-function _dmOnHull(a, p, y) {
+// 船体の外板の上の点（高さ y・前後 a の、p の側の舷）と、外板の外向きの向き n（船体の座標）。
+// 実際の船の形（62-watertight.js の wtSurfacePoint：升目で確かめた外板）の上に置く。その場所に船体が無い
+//（船首の曲線の外・バルバスバウの前の空中など）ときは、いちばん近い外板へ寄せる（以前はそのまま空中に穴があいていた）
+// mode：'side' 舷側・'bottom' 船底（省くと、船底の近くの真ん中寄りなら船底）
+function _dmOnHull(a, p, y, mode) {
+    if (!mode) {
+        const D = typeof wtDims === 'function' ? wtDims() : null;
+        mode = (D && y < D.yBot + (D.yWL - D.yBot) * 0.12 && Math.abs(p) < (typeof wtHW === 'function' ? wtHW(D.yWL, a) : 1) * 0.7) ? 'bottom' : 'side';
+    }
+    const q = typeof wtSurfacePoint === 'function' ? wtSurfacePoint(a, p, y, mode) : null;
+    if (q) return q;
     const w = typeof wtHW === 'function' ? wtHW(y, a) : 0;
-    return { a, y, p: (p < 0 ? -1 : 1) * w };
+    return { a, y, p: (p < 0 ? -1 : 1) * w, n: new THREE.Vector3(p < 0 ? -1 : 1, 0, 0) };
 }
 
 // ── 穴の見た目 ──
@@ -94,12 +104,13 @@ function _dmGroup() {
     if (typeof scene !== 'undefined' && scene && damage.group.parent !== scene) scene.add(damage.group);
     return damage.group;
 }
-// 穴の絵を、船体の座標の (a, p, y) の外板に貼る。area[m²]
-function damageDecalAt(a, p, y, area, kind) {
+// 穴の絵を、船体の座標の (a, p, y) の外板に貼る。area[m²]。mode：_dmOnHull と同じ
+const _dmBX = new THREE.Vector3(), _dmBY = new THREE.Vector3(), _dmBM = new THREE.Matrix4();
+function damageDecalAt(a, p, y, area, kind, mode) {
     const root = typeof wtRoot === 'function' ? wtRoot() : null;
     if (!root) return null;
     const sc = physics.scale || 1;
-    const q = _dmOnHull(a, p, y);
+    const q = _dmOnHull(a, p, y, mode);
     const tk = kind === 'dent' ? 'dent' : kind === 'scorch' ? 'scorch' : 'hole';
     const mat = new THREE.MeshStandardMaterial({ map: _dmTexture(tk), transparent: true, depthWrite: false, roughness: 0.9, metalness: 0.1 });
     if (typeof depthBiasMaterial === 'function') depthBiasMaterial(mat, -0.0008);      // 船体の面より手前に（ちらつかないように）
@@ -107,11 +118,12 @@ function damageDecalAt(a, p, y, area, kind) {
     const size = Math.max(1.2, Math.sqrt(Math.max(0.05, area)) * (tk === 'hole' ? 2.2 : 1.6)) / sc;
     const geo = new THREE.PlaneGeometry(size * 1.25, size);
     const m = new THREE.Mesh(geo, mat);
-    // 外板の向き：舷側は外向き（左舷は +perp）。船底は下向き
-    const D = typeof wtDims === 'function' ? wtDims() : null;
-    const bottom = D && y < D.yBot + (D.yWL - D.yBot) * 0.12 && Math.abs(q.p) < (typeof wtHW === 'function' ? wtHW(D.yWL, a) : 1) * 0.7;
-    if (bottom) { m.rotation.x = Math.PI / 2; m.position.set(p, D.yBot - 0.01 / sc, a); }
-    else { m.rotation.y = q.p >= 0 ? Math.PI / 2 : -Math.PI / 2; m.position.set(q.p + Math.sign(q.p || 1) * 0.03 / sc, y, a); }
+    // 外板の向きに貼る（舷側は外向き、船底は下向き、船首・船尾の先では前・後ろ向き）。絵の上は、なるべく上（船底では船首）へ
+    const n = q.n;
+    const up = Math.abs(n.y) < 0.9 ? _dmBY.set(0, 1, 0) : _dmBY.set(0, 0, 1);
+    _dmBX.crossVectors(up, n).normalize(); _dmBY.crossVectors(n, _dmBX);
+    m.quaternion.setFromRotationMatrix(_dmBM.makeBasis(_dmBX, _dmBY, n));
+    m.position.set(q.p + n.x * 0.03 / sc, q.y + n.y * 0.03 / sc, q.a + n.z * 0.03 / sc);
     m.renderOrder = 2; m.userData = { noLightBake: true, noSolid: true };
     m.castShadow = false; m.receiveShadow = true;
     _dmGroup().add(m);
@@ -131,7 +143,7 @@ function damageHole(a, p, y, area, kind, inner) {
     if (damageInvincible(kind)) return;
     const q = _dmOnHull(a, p, y);
     if (typeof floodAddHole === 'function') floodAddHole(q.a, q.p, q.y, area, kind, inner);
-    damageDecalAt(q.a, q.p, q.y, area, kind);
+    damageDecalAt(q.a, q.p, q.y, area, kind, Math.abs(q.n.y) > 0.7 ? 'bottom' : 'side');
 }
 window.damageHole = damageHole;
 
@@ -209,18 +221,21 @@ function damageGround(hits, v) {
     const kn = v / 0.514444;
     const db = (typeof shipWT !== 'undefined' && shipWT.db > 0);
     const yB = D.yBot + 0.15 / sc;
+    // 当たった所の、実際の船底の外板（船首・船尾の先で船底が上がっている所でも、空中に穴をあけない）
+    const qB = _dmOnHull(h.a, h.p, yB, 'bottom');
     if (v < 2.5) {
         // 外板だけ破れる：二重底の中まで
         const area = 0.2 + 0.6 * (v - 1);
-        if (typeof floodAddHole === 'function') floodAddHole(h.a, h.p, yB, area, 'ground', false);
-        damageDecalAt(h.a, h.p, yB, area, 'hole');
+        if (typeof floodAddHole === 'function') floodAddHole(qB.a, qB.p, Math.max(yB, qB.y + 0.1 / sc), area, 'ground', false);
+        damageDecalAt(qB.a, qB.p, qB.y, area, 'hole', 'bottom');
         _dmMsg(db ? `座礁（${kn.toFixed(1)} kn）：船底の外板が破れましたが、二重底で止まっています` : `座礁（${kn.toFixed(1)} kn）：船底に穴があき、浸水しています（二重底なし）`);
     } else {
         // 内底板まで破れる。当たった所から後ろへ裂ける
         const area = Math.min(12, 0.8 + 1.2 * (v - 2.5));
         const along = Math.min((D.aB - D.aS) * 0.15, (8 + 6 * (v - 2.5)) / sc);
-        if (typeof floodAddHole === 'function') { floodAddHole(h.a, h.p, yB, area, 'ground', true); floodAddHole(h.a - along, h.p, yB, area * 0.6, 'ground', true); }
-        damageDecalAt(h.a, h.p, yB, area, 'hole'); damageDecalAt(h.a - along, h.p, yB, area * 0.6, 'hole');
+        const qB2 = _dmOnHull(h.a - along, h.p, yB, 'bottom');
+        if (typeof floodAddHole === 'function') { floodAddHole(qB.a, qB.p, Math.max(yB, qB.y + 0.1 / sc), area, 'ground', true); floodAddHole(qB2.a, qB2.p, Math.max(yB, qB2.y + 0.1 / sc), area * 0.6, 'ground', true); }
+        damageDecalAt(qB.a, qB.p, qB.y, area, 'hole', 'bottom'); damageDecalAt(qB2.a, qB2.p, qB2.y, area * 0.6, 'hole', 'bottom');
         _dmMsg(`座礁（${kn.toFixed(1)} kn）！ 船底が裂けて内底板まで破れ、浸水しています`);
     }
 }

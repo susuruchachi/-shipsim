@@ -109,6 +109,8 @@ window.trafficHitSeg = trafficHitSeg;
 
 // 魚雷が当たった（54-submarine.js から）：喫水線の下に大きな穴（区画 1〜2 つ）と火災
 function trafficTorpedoHit(h) {
+    // 無敵モード（64-damage.js）：当たっても傷つかない
+    if (typeof damageInvincible === 'function' && damageInvincible('torpedo')) { if (typeof _tfMsg === 'function') _tfMsg(`${h.S.name} に魚雷が命中（無敵モード：無傷）`); return h.S; }
     const S = h.S, M = _tfdInit(S);
     const y = Math.max(0.5, Math.min(h.yk, S.d - 1));
     const area = S.L < 90 ? 10 : 18;
@@ -124,6 +126,7 @@ window.trafficTorpedoHit = trafficTorpedoHit;
 // 砲弾が当たった（55-ship-types.js から）：舷側なら穴（口径で大きさ）、上部構造なら火災。大口径の弾は甲板を貫いて下で炸裂することも
 //（uw：海面を叩いて水の中を進んできた弾＝水中弾。喫水線の下の舷側に穴があく）
 function trafficShellHit(h, cal, uw) {
+    if (typeof damageInvincible === 'function' && damageInvincible('shell')) { if (typeof _tfMsg === 'function') _tfMsg(`${h.S.name} に砲弾が命中（無敵モード：無傷）`); return h.S; }
     const S = h.S, k = (cal || 200) / 1000, area = Math.max(0.4, 60 * k * k) * (uw ? 1.3 : 1);
     if (uw && h.yk < h.deck) trafficDamage(S, h.a, h.s, Math.max(0.3, h.yk), area, 'shell');
     else if (h.yk < h.deck && Math.abs(h.s) > _tfShapeHW(S, h.a) * 0.6) trafficDamage(S, h.a, h.s, h.yk, area, 'shell');
@@ -192,10 +195,12 @@ function _tfdStep(S, dt) {
         return;
     }
     const n = Math.min(40, Math.max(1, Math.ceil(dt / 0.5))), h = dt / n, tg = (x) => Math.tan(x);
+    // 無敵モード（64-damage.js）：前からある穴からも水は入らない
+    const noIn = typeof damageInvincible === 'function' && damageInvincible('wave');
     for (let it = 0; it < n; it++) {
         const dAt = (a) => M.d + M.sink + a * tg(M.trim);
         for (const c of M.comps) { c.lv = c.v / c.A; c.dv = 0; }
-        for (const H of M.holes) {
+        if (!noIn) for (const H of M.holes) {
             const c = M.comps[H.c];
             const out = dAt(H.a) + H.side * (M.B / 2) * Math.sin(M.heel), top = Math.max(H.y, c.lv);
             if (out > top) c.dv += 0.6 * H.A * Math.sqrt(2 * TFD_G * (out - top)) * h;

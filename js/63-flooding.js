@@ -301,11 +301,13 @@ function updateFlooding(t, dt) {
             c.deckY = yd;
         }
         for (const h of flood.holes) h.out = _flOut(e, h.p, h.y, h.a, t);
+        // 無敵モード（64-damage.js）：外から水が入らない（荒波・穴・沈んだ甲板。中の水は排水ポンプ・穴から出ていく）
+        const noIn = typeof damageInvincible === 'function' && damageInvincible('wave');
         // 甲板を越える大波：打ち込んでいる区画と、その高さ
         let greenIn = false;
         for (let i = 0; i < flood.nMain; i++) {
             const c = flood.comps[i];
-            c.greenH = flood.greenT > 0 ? _flGreenHead(c, e, t, flood.D) : 0;
+            c.greenH = flood.greenT > 0 && !noIn ? _flGreenHead(c, e, t, flood.D) : 0;
             if (c.greenH > 0.05) greenIn = true;
         }
         if (greenIn && !flood.greenMsg) {
@@ -323,7 +325,7 @@ function updateFlooding(t, dt) {
                 for (const ci of [h.c, h.c2]) {
                     const c = flood.comps[ci]; if (!c) continue;
                     const top = Math.max(yw, c.Yw);
-                    if (h.out > top) c.dv += FL_CD * A * Math.sqrt(2 * FL_G * (h.out - top)) * hdt;
+                    if (h.out > top) { if (!noIn) c.dv += FL_CD * A * Math.sqrt(2 * FL_G * (h.out - top)) * hdt; }
                     else if (c.vol > 0 && c.Yw > Math.max(yw, h.out)) c.dv -= FL_CD * A * Math.sqrt(2 * FL_G * (c.Yw - Math.max(yw, h.out))) * hdt;
                 }
             }
@@ -343,7 +345,7 @@ function updateFlooding(t, dt) {
             // 波の山が甲板を越えるだけのとき（甲板は海面より上）は、下の大波の分（開口から一部だけ）
             for (let i = 0; i < flood.nMain; i++) {
                 const c = flood.comps[i];
-                if (!(c.deckOut > c.deckY) || !(wl0 > c.deckY)) continue;
+                if (noIn || !(c.deckOut > c.deckY) || !(wl0 > c.deckY)) continue;
                 const top = Math.max(c.deckY, c.Yw);
                 if (c.deckOut > top) c.dv += FL_CD * Math.max(2, c.deckA * sc2 * 0.03) * Math.sqrt(2 * FL_G * (c.deckOut - top)) * hdt;
             }
