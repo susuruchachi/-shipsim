@@ -3167,6 +3167,105 @@ function emitHullWakeParticles(t, dt) {
 
 window.getWakeHeightVisual = getWakeHeightVisual;
 
+// ─────────────────────────────────────────
+//  emitTrafficWakeParticles(t, dt)
+//  他の船（59-traffic.js）にも、自分の船と同じ喫水線からの泡・船首のしぶきを出す（他の船の引き波の代わり）。
+//  ・喫水線全体の泡（船体に沿って後ろへ流れる）・船首の先の泡と水しぶき・船首が海面をめくり上げるしぶき・
+//    船尾から後ろへ広がる白い泡（スクリューでかき回された水：引き波の筋になる）
+//  ・粒は自分の船と同じもの（03-particle-systems.js のリング）。カメラに近い、動いている船を 3 隻まで。
+//    遠いほど少なく（粒を自分の船から奪いすぎないように）
+//  ・船体の形は他の船の簡単な形（_tfShapeHW：長さ・幅から）
+// ─────────────────────────────────────────
+const _tfwAcc = new WeakMap();
+function emitTrafficWakeParticles(t, dt) {
+    if (!wakeParticleGeo || !(dt > 0) || typeof traffic === 'undefined' || !traffic.on || !traffic.ships || typeof _tfHullOf !== 'function') return;
+    if (typeof camera === 'undefined' || !camera) return;
+    const cand = [];
+    for (const S of traffic.ships) {
+        if (!S.mesh || !S.mesh.visible || S.st === 'gone' || S.st === 'off' || S.st === 'damaged') continue;
+        if (!(Math.abs(S.v || 0) > 0.35)) continue;
+        const d = Math.hypot(S.mesh.position.x - camera.position.x, S.mesh.position.z - camera.position.z);
+        if (d > 1800 + S.L) continue;
+        cand.push([d, S]);
+    }
+    if (!cand.length) return;
+    cand.sort((a, b) => a[0] - b[0]);
+    const posAttr = wakeParticleGeo.attributes.position, ageAttr = wakeParticleGeo.attributes.age;
+    const typeAttr = wakeParticleGeo.attributes.ptype, velAttr = wakeParticleGeo.attributes.velocity;
+    const spawn = (x, z, yOff, type, vx, vy, vz, sz) => {
+        const ii = wakeParticleIdx;
+        const y = (typeof getWaveHeight === 'function') ? getWaveHeight(x, z, t, false) : 0;
+        posAttr.array[ii * 3] = x; posAttr.array[ii * 3 + 1] = y + yOff; posAttr.array[ii * 3 + 2] = z;
+        ageAttr.array[ii] = 0; typeAttr.array[ii] = type;
+        const D = wakeParticleData[ii];
+        D.vx = vx; D.vy = vy; D.vz = vz;
+        velAttr.array[ii * 3] = vx; velAttr.array[ii * 3 + 1] = vy; velAttr.array[ii * 3 + 2] = vz;
+        D.rand = Math.random(); D.type = type; D.wakeBonus = undefined; D.spawnTime = t; D.sizeScale = sz;
+        wakeParticleIdx = (wakeParticleIdx + 1) % MAX_WAKE_PARTICLES;
+    };
+    let any = false;
+    for (let k = 0; k < Math.min(3, cand.length); k++) {
+        const [dist, S] = cand[k];
+        const H = _tfHullOf(S); if (!H) continue;
+        const v = S.v || 0, dir = v >= 0 ? 1 : -1, kn = Math.abs(v) / 0.514444;
+        const L = S.L, HL = L / 2;
+        // 粒の大きさの基準（自分の船の sizeScale と同じくらい。船の長さで少しだけ変える）
+        const sz = Math.max(0.15, Math.min(0.8, 0.38 * Math.sqrt(L / 150)));
+        const hug = sz * 0.10;
+        const spdF = Math.min(kn / 12, 1);
+        // 遠いほど少なく（300m までは全部、1800m で 2 割）
+        const f = Math.max(0.2, Math.min(1, 1 - (dist - 300) / 1500 * 0.8)) * (k === 0 ? 1 : 0.7);
+        const A = _tfwAcc.get(S) || { wl: 0, tip: 0, curl: 0, st: 0 };
+        A.wl += kn * 6.0 * f * dt; A.tip += kn * 5.0 * f * dt; A.curl += (kn > 4 ? kn * kn * 0.22 : 0) * f * dt; A.st += kn * 4.0 * f * dt;
+        const ex = (a, side, out) => { const w = H.hw(a) + hug + (out || 0); return [H.x + H.fx * a + H.sx * side * w, H.z + H.fz * a + H.sz * side * w]; };
+        const vShipX = H.fx * v, vShipZ = H.fz * v;
+        const tipA = HL * 0.97 * dir, sternA = -HL * 0.97 * dir;        // （後進のときは前後を入れ替える）
+        // 喫水線全体の泡：船体に沿って後ろへ流れる
+        let n = Math.floor(A.wl); A.wl -= n;
+        for (; n > 0; n--) {
+            const a = (Math.random() * 1.9 - 0.95) * HL, side = Math.random() < 0.5 ? -1 : 1;
+            const [x, z] = ex(a, side);
+            const back = (0.12 + 0.28 * spdF) * sz * (0.3 + 0.7 * Math.min(1, (a * dir / HL + 1) * 0.5 + 0.3));
+            const out = (0.02 + 0.04 * spdF) * sz;
+            spawn(x, z, Math.pow(Math.random(), 2) * sz * 0.7, 0, -H.fx * back * dir + H.sx * side * out, 0.005 * sz, -H.fz * back * dir + H.sz * side * out, sz);
+        }
+        // 船首の先：泡と水しぶき
+        n = Math.floor(A.tip); A.tip -= n;
+        for (; n > 0; n--) {
+            const side = Math.random() < 0.5 ? -1 : 1, spray = Math.random() < 0.3;
+            const a = tipA - dir * Math.random() * HL * 0.04;
+            const [x, z] = ex(a, side);
+            const out = (0.10 + 0.22 * spdF) * sz;
+            if (spray) spawn(x, z, sz * 0.08, 1, vShipX * 0.05 + H.sx * side * out * 1.2, (0.35 + Math.random()) * sz * spdF, vShipZ * 0.05 + H.sz * side * out * 1.2, sz);
+            else spawn(x, z, 0, 0, vShipX * 0.06 + H.sx * side * out * 0.55, 0.015 * sz, vShipZ * 0.06 + H.sz * side * out * 0.55, sz);
+        }
+        // 船首が海面をめくり上げるしぶき（速いときほど多く・高く）
+        n = Math.floor(A.curl); A.curl -= n;
+        for (; n > 0; n--) {
+            const tipNear = Math.random(), side = Math.random() < 0.5 ? -1 : 1;
+            const a = tipA - dir * (1 - tipNear) * HL * 0.45;
+            const [x, z] = ex(a, side, sz * 0.05 * Math.random());
+            const p = (0.5 + tipNear * 1.3) * spdF;
+            spawn(x, z, sz * 0.05, 1,
+                vShipX * 0.08 + H.sx * side * (0.5 + 0.5 * spdF) * sz * p + H.fx * dir * 0.15 * sz * p,
+                (0.5 + Math.random() * 1.3) * sz * p,
+                vShipZ * 0.08 + H.sz * side * (0.5 + 0.5 * spdF) * sz * p + H.fz * dir * 0.15 * sz * p, sz);
+        }
+        // 船尾：スクリューでかき回された白い泡が、船の幅ほどに広がって後ろに残る（引き波の筋）
+        n = Math.floor(A.st); A.st -= n;
+        for (; n > 0; n--) {
+            const lat = (Math.random() - 0.5) * S.B * 0.9, a = sternA - dir * Math.random() * L * 0.03;
+            const x = H.x + H.fx * a + H.sx * lat, z = H.z + H.fz * a + H.sz * lat;
+            const spread = (Math.random() - 0.5) * 0.2 * sz;
+            spawn(x, z, 0, 0, vShipX * 0.15 + H.sx * spread, 0.008 * sz, vShipZ * 0.15 + H.sz * spread, sz);
+        }
+        _tfwAcc.set(S, A);
+        any = true;
+    }
+    if (any) { posAttr.needsUpdate = true; ageAttr.needsUpdate = true; typeAttr.needsUpdate = true; velAttr.needsUpdate = true; }
+}
+window.emitTrafficWakeParticles = emitTrafficWakeParticles;
+
 // ============================================================
 //  幾何的GM（メタセンタ高さ）自動計算
 // ============================================================

@@ -1239,8 +1239,11 @@ function createWater() {
                     float waveLength = waveLenBase * sqrt(fullness);
                     if (absDistToWaveFront < waveLength * 1.5) {
                         // v122: 「今の倍くらい」の要望でv121の値からさらに2倍(0.033→0.066, 0.024→0.048)
-                        float ampFactor = isBow ? 0.066 : 0.048;
-                        float amp = absSpeed * ampFactor * fullness * scaleRatio * (1.0 - d / (90.0 * scaleRatio)) * (1.0 - dt / 15.0);
+                        // 0.03.016.012: 大きすぎた（270m の船が 21kn で船首の近くの振幅 3m・山から谷まで 6m）ので、
+                        // 0.028・0.020 に。速さによる伸びは少し急に（遅いときほど小さく）：20kn を基準に √(速さ/20)
+                        // （CPU 版 02-utils-and-wave-physics.js の getWakeHeight と同じ式にすること）
+                        float ampFactor = isBow ? 0.028 : 0.020;
+                        float amp = absSpeed * ampFactor * clamp(sqrt(absSpeed / 20.0), 0.45, 1.4) * fullness * scaleRatio * (1.0 - d / (90.0 * scaleRatio)) * (1.0 - dt / 15.0);
                         if (amp > 0.0) {
                             float k = 6.283 / waveLength;
                             float phase = distanceToWaveFront * k;

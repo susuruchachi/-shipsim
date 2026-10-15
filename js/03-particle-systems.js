@@ -324,7 +324,7 @@ function createBubbleSystem() {
 //  WAKE FOAM & SPRAY PARTICLE SYSTEM
 // ====================================================
 let wakeParticleGeo, wakeParticleMat, wakeParticlePoints;
-const MAX_WAKE_PARTICLES = 3600; // waterline foam追加のため増量
+const MAX_WAKE_PARTICLES = 4800; // waterline foam追加のため増量（他の船の喫水線の泡も同じ粒を使う：18-hull-wake-physics.js の emitTrafficWakeParticles）
 let wakeParticleIdx = 0;
 let wakeParticleData = [];
 let wakeEmitAccum = 0;

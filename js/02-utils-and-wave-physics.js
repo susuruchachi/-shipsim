@@ -337,8 +337,9 @@ function getWakeHeight(x, z, t) {
 
             if (absDistToWaveFront < waveLength * 1.5) {
                 // v122: 「今の倍くらい」の要望でv121の値からさらに2倍(0.033→0.066, 0.024→0.048)
-                const ampFactor = srcIsBow ? 0.066 : 0.048;
-                const amp = absSpeed * ampFactor * fullness * scaleRatio * (1.0 - d / (90.0 * scaleRatio)) * (1.0 - dt / 15.0);
+                // （GPU 版 04-scene-and-water-init.js の wakeContribution と同じ式：0.03.016.012 で小さく）
+                const ampFactor = srcIsBow ? 0.028 : 0.020;
+                const amp = absSpeed * ampFactor * Math.min(1.4, Math.max(0.45, Math.sqrt(absSpeed / 20.0))) * fullness * scaleRatio * (1.0 - d / (90.0 * scaleRatio)) * (1.0 - dt / 15.0);
                 if (amp <= 0) continue;
 
                 const k = 6.283 / waveLength;

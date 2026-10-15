@@ -653,6 +653,7 @@ function animate() {
     animateBubbles(t, dt);
     animateWakeParticles(t, dt);
     if (typeof emitHullWakeParticles === 'function' && !(typeof subSurfaceFxOff === 'function' && subSurfaceFxOff())) emitHullWakeParticles(t, dt);
+    if (typeof emitTrafficWakeParticles === 'function') emitTrafficWakeParticles(t, dt);   // 他の船の喫水線の泡・しぶき（18-hull-wake-physics.js）
     updateNavLightsVisibility();
     updateDeckLightPool();
     updateFunnelUplights();
