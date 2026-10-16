@@ -382,7 +382,11 @@
 //               太陽の影が同じシェーダーに入ると壊れると分かった（GPU のドライバーの不具合）。Adreno の GPU では、この仕掛けを自動で
 //               止める（影はそのまま。設定に「自動で止めています」と出る）。軽い作り（地図を引く位置を頂点で求め、画素ごとには 5 点だけ）
 //               も作り、切り分けの ⑪ で試せるようにした（⑫ はふつうの作り）
-var APP_VERSION = '0.03.016.023';
+// 0.03.016.024 Xperia 5 III の真っ青を根本から直す：実機の検査（claude.ai の検査用ページで、スマホの画面を撮って調べた）で、
+//               屋根の下を暗くする仕掛けが自前で余分に渡していた値（世界の位置と向き）を画素で読むと壊れると分かった。
+//               three.js がもともと渡している値（カメラから見た位置・面の向き）から求める作りに直したので、Adreno の GPU でも
+//               自動で止めずに屋根の下が暗くなる。切り分けの ⑪・⑫ と「自動で止めています」の表示は無くした
+var APP_VERSION = '0.03.016.024';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

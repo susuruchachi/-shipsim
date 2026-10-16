@@ -167,8 +167,9 @@ const PERF_PRESETS = {
 //   bake：照明の焼き込み（40-light-bake.js）を止める　env：空の映り込み（環境マップ）を止める
 //   dir2：2つめの平行光（青白い補助の光）を止める　pad：船のシェーダーにダミーの値を足して、値の並びを変える
 //   allpatch：船の材質に足した仕掛け（ao・fill・bake）を全部止める（これで直らなければ three.js 本体の側）
-//   skyocclite・skyoccfull：屋根の下を暗くする仕掛けを、軽い作り・ふつうの作りで使う（Adreno の GPU ではふだん止めている：61-ship-ao.js）
-//  結果（Xperia 5 III）：①③④⑩で直る。⑤⑥は青が黒に変わる。ほかは青いまま → 屋根の下を暗くする仕掛けと太陽の影が同じシェーダーに入ると壊れる
+//  結果（Xperia 5 III）：①③④⑩で直る。⑤⑥は青が黒に変わる。ほかは青いまま → 屋根の下を暗くする仕掛けと太陽の影が同じシェーダーに入ると壊れる。
+//  さらに実機の検査（claude.ai の検査用ページ）で、その仕掛けが余分に渡していた値（varying）を画素で読むと壊れると分かったので、
+//  もともと渡されている値から求める作りに直した（61-ship-ao.js）
 window.gpuDbg = '';
 try { window.gpuDbg = localStorage.getItem('susuru_gpudbg') || ''; } catch (e) { /* 保存できない環境 */ }
 // 船の材質のシェーダーを作り分ける鍵（切り分けを変えたら作り直す）
@@ -199,12 +200,7 @@ function gpuDbgApply() {
 }
 window.setGpuDbg = setGpuDbg;
 window.gpuDbgApply = gpuDbgApply;
-function gpuDbgNote() {
-    const el = document.getElementById('gpu-dbg-note');
-    if (!el) return;
-    const adreno = typeof gpuIsAdreno === 'function' && gpuIsAdreno();
-    el.textContent = adreno ? 'この端末の GPU（' + (window.gpuName || '') + '）では、屋根の下を暗くする仕掛けを自動で止めています（船の色が青くなる不具合の回避）。' : '';
-}
+function gpuDbgNote() { /* 端末ごとの回避の表示（今は無し） */ }
 document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('gpu-dbg'); if (el) el.value = window.gpuDbg; gpuDbgNote(); });
 
 function applyPerfPreset(name) {
