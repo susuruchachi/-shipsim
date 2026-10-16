@@ -51,6 +51,7 @@ function init() {
         window.gpuName = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
         document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('gpu-info'); if (el) el.textContent = window.gpuName || '—'; });
         const el = document.getElementById('gpu-info'); if (el) el.textContent = window.gpuName || '—';
+        if (typeof gpuDbgNote === 'function') { gpuDbgNote(); document.addEventListener('DOMContentLoaded', gpuDbgNote); }   // 不具合の回避の表示（01-state-and-config.js）
     } catch (e) { /* ignore */ }
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, perf.pixelRatio));

@@ -150,6 +150,40 @@ float skyOccVis() {
     return v / 10.0 * smoothstep(-0.9, -0.2, n.y);
 }
 `;
+// 軽い作り：地図を引く位置（面の外へ少し出した所）と下向きの面の暗さは頂点ごとに求めて渡し、画素ごとには 5 点だけ引く
+const _SKY_OCC_LITE_V = `
+uniform mat4 uSkyOccMat; uniform float uSkyOccOff;
+varying vec4 vSkyOccC;
+`;
+const _SKY_OCC_LITE_VM = `    { vec3 sp = (modelMatrix * vec4(transformed, 1.0)).xyz; vec3 sn = normalize(mat3(modelMatrix) * objectNormal);
+      if (dot(sn, cameraPosition - sp) < 0.0) sn = -sn;
+      vec4 cp = uSkyOccMat * vec4(sp, 1.0); vec4 cq = uSkyOccMat * vec4(sp + sn * uSkyOccOff, 1.0);
+      vSkyOccC = vec4(vec3(cq.xy / cq.w, cp.z / cp.w) * 0.5 + 0.5, smoothstep(-0.9, -0.2, sn.y)); }
+`;
+const _SKY_OCC_LITE_GLSL = `
+uniform sampler2D uSkyOccMap; uniform float uSkyOccOn, uSkyOccBias, uSkyOccMin; uniform vec2 uSkyOccR;
+varying vec4 vSkyOccC;
+float skyOccTap(vec3 c, vec2 o) { return step(c.z - uSkyOccBias, texture2D(uSkyOccMap, c.xy + o * uSkyOccR).r); }
+float skyOccVis() {
+    vec3 c = vSkyOccC.xyz;
+    if (c.x <= 0.0 || c.x >= 1.0 || c.y <= 0.0 || c.y >= 1.0 || c.z >= 1.0 || c.z <= 0.0) return 1.0;
+    float v = skyOccTap(c, vec2(0.0)) * 2.0 + skyOccTap(c, vec2(1.0, 0.0)) + skyOccTap(c, vec2(-1.0, 0.0)) + skyOccTap(c, vec2(0.0, 1.0)) + skyOccTap(c, vec2(0.0, -1.0));
+    return v / 6.0 * vSkyOccC.w;
+}
+`;
+// 空の遮られ方の仕掛けの作り：0＝使わない・1＝ふつう・2＝軽い作り。
+// Adreno の GPU（Xperia 5 III で確認）では、ふつうの作りと太陽の影が同じシェーダーに入ると、船の白い所などが真っ青になる
+// （GPU のドライバーの不具合。0.03.016.022 の「不具合の切り分け」で、この仕掛けを止めるか太陽の影を止めると直ると分かった）。
+// その GPU では使わない（切り分けの ⑪・⑫ で、軽い作り・ふつうの作りを試せる）
+function _skyOccMode() {
+    const d = window.gpuDbg;
+    if (d === 'skyocc' || d === 'ao' || d === 'allpatch') return 0;
+    if (d === 'skyocclite') return 2;
+    if (d === 'skyoccfull') return 1;
+    return gpuIsAdreno() ? 0 : 1;
+}
+function gpuIsAdreno() { return /adreno/i.test(window.gpuName || ''); }
+window.gpuIsAdreno = gpuIsAdreno;
 // opts.skyOcc：自分の船のマテリアルだけ（他の船は、自分の船の地図を使えないので付けない：59-traffic.js）
 function _aoPatchMaterial(mat, opts) {
     if (!mat || mat.userData.aoPatched) return;
@@ -166,22 +200,22 @@ function _aoPatchMaterial(mat, opts) {
                 .replace(/\}\s*$/, '    if (uGpuPad.w > 1.0e9) gl_FragColor = vec4(uGpuPad.rgb, 1.0);\n}\n');
         }
         if (window.gpuDbg === 'ao' || window.gpuDbg === 'allpatch') return;   // 船の陰影の仕掛けを止める
-        const occ = mat.userData.skyOcc && window.gpuDbg !== 'skyocc';
+        const occMode = mat.userData.skyOcc ? _skyOccMode() : 0, occ = occMode > 0, lite = occMode === 2;
         shader.uniforms.uAOStrength = shipAOUniforms.uAOStrength; shader.uniforms.uAODebug = shipAOUniforms.uAODebug;
         shader.uniforms.uIndirK = shipAOUniforms.uIndirK; shader.uniforms.uDirectK = shipAOUniforms.uDirectK;
         if (occ) for (const k of ['uSkyOccMap', 'uSkyOccMat', 'uSkyOccOn', 'uSkyOccR', 'uSkyOccBias', 'uSkyOccMin', 'uSkyOccOff']) shader.uniforms[k] = shipAOUniforms[k];
-        const occV = occ ? 'varying vec3 vSkyOccP, vSkyOccN;\n' : '';
-        // 世界の位置と法線（地図を引くのは画素ごと：_SKY_OCC_GLSL）
-        const occVM = occ ? '    vSkyOccP = (modelMatrix * vec4(transformed, 1.0)).xyz; vSkyOccN = mat3(modelMatrix) * objectNormal;\n' : '';
+        const occV = !occ ? '' : lite ? _SKY_OCC_LITE_V : 'varying vec3 vSkyOccP, vSkyOccN;\n';
+        // 世界の位置と法線（地図を引くのは画素ごと：_SKY_OCC_GLSL）。軽い作りでは地図の上の位置まで頂点で
+        const occVM = !occ ? '' : lite ? _SKY_OCC_LITE_VM : '    vSkyOccP = (modelMatrix * vec4(transformed, 1.0)).xyz; vSkyOccN = mat3(modelMatrix) * objectNormal;\n';
         shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nattribute float aSky;\nvarying float vSkyAO;\n' + occV)
             .replace(/\}\s*$/, '    vSkyAO = aSky;\n' + occVM + '}\n');
         // 間接光（半球光・環境光・光のプローブ・環境マップ）に掛ける。少し強めに効くよう曲げる
         const occF = occ ? '      if (uSkyOccOn > 0.5) { float so = mix(uSkyOccMin, 1.0, skyOccVis()); reflectedLight.indirectDiffuse *= so; reflectedLight.indirectSpecular *= mix(1.0, so, 0.6); }\n' : '';
-        shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uAOStrength;\nuniform float uAODebug;\nuniform float uIndirK;\nuniform float uDirectK;\nvarying float vSkyAO;\n' + (occ ? _SKY_OCC_GLSL : ''))
+        shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uAOStrength;\nuniform float uAODebug;\nuniform float uIndirK;\nuniform float uDirectK;\nvarying float vSkyAO;\n' + (!occ ? '' : lite ? _SKY_OCC_LITE_GLSL : _SKY_OCC_GLSL))
             .replace('#include <aomap_fragment>', '#include <aomap_fragment>\n    { float sk = mix(1.0, pow(clamp(vSkyAO * 1.15, 0.0, 1.0), 1.4), uAOStrength);\n      reflectedLight.indirectDiffuse *= sk * uIndirK; reflectedLight.indirectSpecular *= mix(1.0, sk, 0.7) * uIndirK;\n' + occF + '      reflectedLight.directDiffuse *= uDirectK; }\n')
             .replace(/\}\s*$/, '    if (uAODebug > 0.5) gl_FragColor = vec4(vec3(vSkyAO), 1.0);\n}\n');
     };
-    mat.customProgramCacheKey = function () { return 'skyAO' + (mat.userData.skyOcc ? 'o' : '') + (typeof gpuDbgKey === 'function' ? gpuDbgKey() : '') + '|' + ((typeof prevKey === 'function') ? prevKey.call(this) : ''); };
+    mat.customProgramCacheKey = function () { return 'skyAO' + (mat.userData.skyOcc ? 'o' + _skyOccMode() : '') + (typeof gpuDbgKey === 'function' ? gpuDbgKey() : '') + '|' + ((typeof prevKey === 'function') ? prevKey.call(this) : ''); };
     mat.defaultAttributeValues = Object.assign({}, mat.defaultAttributeValues || {}, { aSky: [1] });
     mat.needsUpdate = true;
 }

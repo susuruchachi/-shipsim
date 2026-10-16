@@ -378,7 +378,11 @@
 //               仕掛け（太陽の影・船の影の受け取り・船の陰影・屋根の下を暗くする仕掛け・遠くの灯りの簡易照明・照明の焼き込み・
 //               空の映り込み・青白い補助の光・シェーダーの値の並び・足した仕掛け全部）を一つずつ止めて、どれで直るかを実機で調べられる
 //               ようにする（端末ごとに保存。ふだんは「通常」）
-var APP_VERSION = '0.03.016.022';
+// 0.03.016.023 Xperia 5 III で船の白・バフ色の所が真っ青になる不具合を回避：切り分けの結果、屋根の下を暗くする仕掛け（空の遮られ方）と
+//               太陽の影が同じシェーダーに入ると壊れると分かった（GPU のドライバーの不具合）。Adreno の GPU では、この仕掛けを自動で
+//               止める（影はそのまま。設定に「自動で止めています」と出る）。軽い作り（地図を引く位置を頂点で求め、画素ごとには 5 点だけ）
+//               も作り、切り分けの ⑪ で試せるようにした（⑫ はふつうの作り）
+var APP_VERSION = '0.03.016.023';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

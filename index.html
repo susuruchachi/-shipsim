@@ -1305,11 +1305,14 @@
             <option value="dir2">⑧ 青白い補助の光を止める</option>
             <option value="pad">⑨ シェーダーの値の並びを変える</option>
             <option value="allpatch">⑩ 船の材質に足した仕掛けを全部止める（③⑤⑥）</option>
+            <option value="skyocclite">⑪ 屋根の下を暗くする仕掛けを軽い作りで使う（試験）</option>
+            <option value="skyoccfull">⑫ 屋根の下を暗くする仕掛けをふつうの作りで使う（試験）</option>
           </select>
         </div>
         <div style="font-size:10px;color:#888;margin-top:4px;">
           一部のスマホで、船の白い所などが真っ青になるときに、どれを止めると直るかを調べるためのものです。直ったら番号を教えてください。
         </div>
+        <div id="gpu-dbg-note" style="font-size:10px;color:#9cd;margin-top:4px;"></div>
         <div class="sp-row" style="margin-top:8px;">
           <span class="sp-label">描画の上限:</span>
           <select id="perf-fps-cap" style="flex:1;background:#0a1932;color:#00ffcc;border:1px solid #00ffcc;border-radius:4px;padding:4px 8px;font-family:inherit;font-size:11px;" onchange="setFpsCap(this.value)">
