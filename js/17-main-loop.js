@@ -7,19 +7,19 @@ function animate() {
     const _frameNow = performance.now();
     if (typeof perfShouldRenderFrame === 'function' && !perfShouldRenderFrame(_frameNow)) return;
     if (typeof perfRecordFrame === 'function') perfRecordFrame(_frameNow);
-    // 1フレームで進める時間の上限。止まった直後に巨大な一歩を踏まないための
-    // もの。描画の上限を30fpsにしたときは1フレームが0.033秒になるので、
-    // それに合わせて広げる（広げないとゲーム内の時間がスローになる）。
-    // 物理はこの中で0.02秒刻みのサブステップに分けて計算する。
-    const _dtCap = (typeof perfGovernor !== 'undefined' && perfGovernor.fpsCap)
-        ? Math.max(0.02, 1.1 / perfGovernor.fpsCap) : 0.02;
-    const dt = Math.min(clock.getDelta(), _dtCap);
+    // 1フレームで進める時間の上限。止まった直後・タブを戻した直後に巨大な一歩を踏まないためのもの。
+    // 以前は 0.02 秒（50fps ぶん）で切っていて、それより重い端末（スマホの 30fps など）では、時計も船も
+    // 実際の時間より遅く進んでいた（30fps なら 6 割の速さ：×10 で 6 秒たっても 1 分進まない）。
+    // 0.1 秒（10fps）までは実際の時間どおりに進める。物理はこの中で0.02秒刻みのサブステップに分けて計算する。
+    const dt = Math.min(clock.getDelta(), 0.1);
     if (dt <= 0) return;
     const t = clock.getElapsedTime();
     // 時間速度（時刻と物理を同じ倍率で：以前の物理早送り倍率は時間速度にまとめた）
     physicsSpeed = TIME_SPEED_STEPS[timeSpeedIndex] || 1;
-    // 時間速度を適用したdt（船の動き・加速・揺れ・他の船など。見た目の動き（波の模様など）は dt のまま）
-    const physicsDt = dt * physicsSpeed;
+    // 時間速度を適用したdt（船の動き・加速・揺れ・他の船など。見た目の動き（波の模様など）は dt のまま）。
+    // 1フレームで進める物理の時間は 5 秒まで（他の船・タグ・浸水などを 1 回の計算で進める上限。×100 で 20fps を
+    // 下回るときだけ効き、そのときは時計も船も同じだけゆっくりになる）
+    const physicsDt = Math.min(dt * physicsSpeed, 5.0);
 
     // 時刻も同じ倍率で進める（固定時は進めない。等速(×1)は実時間1日=24h）
     if (!timeFrozen) {

@@ -346,7 +346,11 @@
 //               手前の自分の船の排煙・泡・しぶきが、奥の他の船の排煙に隠れていたのを直す：半透明の粒は後に描いたものが
 //               手前に見えるので、他の船・タグの排煙を別の層にして、カメラから見て自分の船より奥の粒が多ければ
 //               自分の船の効果より先に（奥として）、手前に多ければ後に描く
-var APP_VERSION = '0.03.016.018';
+// 0.03.016.019 時間倍率どおりに時計と船が進むように：1フレームで進める時間を 0.02 秒（50fps ぶん）で切っていたため、
+//               それより重い端末では時計も船も遅れていた（30fps なら 6 割：×10 で 6 秒たっても 1 分進まない）。
+//               0.1 秒（10fps）までは実際の時間どおりに進める（物理は今まで通り 0.02 秒刻みで計算）。
+//               時間倍率を掛けた一歩は 5 秒まで（×100 で 20fps を下回るときだけ、時計も船も同じだけゆっくりに）
+var APP_VERSION = '0.03.016.019';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
