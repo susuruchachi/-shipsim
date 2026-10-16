@@ -58,7 +58,7 @@ function animate() {
     }
 
     if (skyMesh && skyMesh.material.uniforms) {
-        const isNightNow = (physics.dayProgress > 0.75 || physics.dayProgress < 0.25);
+        const isNightNow = Number.isFinite(physics.sunElev) ? physics.sunElev < -0.1 : (physics.dayProgress > 0.75 || physics.dayProgress < 0.25);
         if (t >= nextMeteorTime && isNightNow) {
             skyMesh.material.uniforms.meteorTime.value = t;
             nextMeteorTime = t + 20.0 + Math.random() * 70.0;
@@ -73,7 +73,7 @@ function animate() {
                 if (auroraActive <= 0.0) nextAuroraDay = totalDays2 + 25.0 + Math.random() * 9.0;
             }
         }
-        const sunH2 = Math.sin((physics.dayProgress - 0.25) * Math.PI * 2);
+        const sunH2 = Number.isFinite(physics.sunElev) ? physics.sunElev : Math.sin((physics.dayProgress - 0.25) * Math.PI * 2);
         const nightF2 = Math.max(0.0, -sunH2);
         skyMesh.material.uniforms.auroraStrength.value += (auroraActive * nightF2 - skyMesh.material.uniforms.auroraStrength.value) * 0.05;
     }

@@ -121,10 +121,10 @@ function setupUIControls() {
         physics.gameTime = (Math.floor(physics.gameTime / physics.dayDuration) + physics.dayProgress) * physics.dayDuration;
         updateDayNightCycle(physics.dayProgress);
         // 手動操作時は固定モードでも位置を即反映（lerpターゲットをリセット）
-        if (sunLight && sunLight.userData.currentPos) {
-            const sA = physics.dayProgress * Math.PI * 2 - Math.PI * 0.5;
-            const sd = 400;
-            sunLight.userData.currentPos.set(Math.cos(sA)*sd, Math.sin(sA)*sd*Math.cos(0.4), -Math.sin(sA)*sd*Math.sin(0.4));
+        if (sunLight && sunLight.userData.currentPos && typeof skyBodyDirections === 'function') {
+            // 太陽（夜は月）の位置へすぐ移す（16-daynight-and-telegraph.js の天文の式）
+            const b = skyBodyDirections(physics.dayProgress);
+            sunLight.userData.currentPos.copy(b.sun.y >= 0 ? b.sun : b.moon).multiplyScalar(400);
         }
     });
     // 月齢：元の日付にいちばん近い、その月齢の日にする（16-daynight-and-telegraph.js の暦）

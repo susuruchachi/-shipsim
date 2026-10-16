@@ -8,6 +8,8 @@ function createSkyDome() {
             sunDirection: { value: sunLight.position.clone().sub(camera.position).normalize() },
             moonDirection: { value: new THREE.Vector3() },
             moonPhase: { value: physics.moonPhase },
+            // 月明かりの強さ（満ち欠け・高さ・雲。16-daynight-and-telegraph.js の skyMoonLight）
+            moonLight: { value: 0.0 },
             meteorTime: { value: -999.0 },
             auroraStrength: { value: 0.0 },
             // v83b: 空だけ今まで生値のまま出力していた（トーンマッピング/sRGB出力とも
@@ -42,6 +44,7 @@ function createSkyDome() {
             uniform vec3 sunDirection;
             uniform vec3 moonDirection;
             uniform float moonPhase;
+            uniform float moonLight;
             uniform float meteorTime;
             uniform float auroraStrength;
             uniform float skyExposure;
@@ -75,8 +78,10 @@ function createSkyDome() {
                 float dawnFactor   = smoothstep(-0.25, 0.0, sunH) * (1.0 - smoothstep(0.0, 0.25, sunH));
                 float nightFactor  = 1.0 - smoothstep(-0.18, 0.10, sunH);
 
-                vec3 zenithNight  = vec3(0.008, 0.012, 0.045);
-                vec3 horizNight   = vec3(0.015, 0.025, 0.065);
+                // 夜空：月明かりがあるほど青く明るく、月の無い夜はほとんど黒（水面に映る色は 16 で同じ式）
+                float nightSkyK = 0.55 + 0.6 * moonLight;
+                vec3 zenithNight  = vec3(0.008, 0.012, 0.045) * nightSkyK;
+                vec3 horizNight   = vec3(0.015, 0.025, 0.065) * nightSkyK;
                 vec3 zenithDawn   = vec3(0.18, 0.30, 0.55);
                 vec3 horizDawn    = vec3(0.85, 0.48, 0.22);
                 vec3 zenithDay    = vec3(0.16, 0.42, 0.76);
@@ -128,7 +133,12 @@ function createSkyDome() {
                     float cloudLight = dot(dir, sunDirection) * 0.5 + 0.5;
                     vec3 cloudColor = mix(cloudShad, cloudLit, cloudLight);
                     cloudColor = mix(cloudColor, vec3(0.95, 0.52, 0.20), dawnFactor * cloudLight * 0.7);
-                    skyColor = mix(skyColor, cloudColor, cloud * (dayFactor * 0.85 + dawnFactor * 0.6 + nightFactor * 0.05));
+                    // 夜の雲：夜空より少し暗い影（星・月を隠す）。月明かりがあれば、月の側ほど灰色に照らされる
+                    vec3 cloudNight = horizNight * 0.7 + vec3(0.07, 0.08, 0.10) * moonLight * (0.35 + 0.65 * pow(max(0.0, dot(dir, moonDirection)), 3.0));
+                    cloudColor = mix(cloudColor, cloudNight, nightFactor);
+                    // 混ぜる割合は 1 を超えないように（朝夕は昼と朝焼けの割合を足すと 1 を超え、太陽の円盤の明るさから
+                    // 雲の色へ「行き過ぎて」引かれて、雲の陰の太陽が黒い円になっていた）
+                    skyColor = mix(skyColor, cloudColor, clamp(cloud * (dayFactor * 0.85 + dawnFactor * 0.6 + nightFactor * 0.85), 0.0, 0.95));
                     cloudCover = cloud;
                 }
 
@@ -153,8 +163,8 @@ function createSkyDome() {
                     float twinkle = 0.75 + 0.25 * sin(time * (2.0 + starRaw * 5.0) + starRaw * 6.28);
                     float star = step(0.987, starRaw) * twinkle;
                     float bigStar = step(0.9985, starRaw) * (1.5 + starRaw * 2.0) * twinkle;
-                    float moonPhaseGlow = sin(moonPhase * 3.14159);
-                    float starBright = (star * 0.7 + bigStar) * (0.4 + 0.6 * moonPhaseGlow);
+                    // 月が明るいほど、暗い星は見えにくい
+                    float starBright = (star * 0.7 + bigStar) * (1.0 - 0.55 * moonLight);
                     skyColor += vec3(0.85, 0.90, 1.0) * starBright * starVis;
                     float milkyWay = fbm(dir.xz * 1.8 + vec2(0.5)) * 0.5;
                     milkyWay = smoothstep(0.52, 0.72, milkyWay) * smoothstep(-0.05, 0.3, h);
@@ -243,17 +253,16 @@ function createSkyDome() {
                     vec3 moonLitColor  = vec3(0.93, 0.93, 0.97) * crater * (0.7 + 0.3 * phaseBrightness);
                     // Dark side: fully transparent — blend to sky so no dark disc is visible.
                     // 暗い側（影）は完全に空と同化させ、黒い円が見えないようにする。
-                    vec3 moonColor = mix(skyColor, moonLitColor, litSide);
+                    // 雲の向こうの月は隠れる（以前は雲の上に描いていて、明るい雲より暗い円盤が浮いて見えた）
+                    float moonVis = (1.0 - cloudCover * 0.92) * (1.0 - overcast * 0.8);
 
                     // Soft glow around the moon disc
                     float moonGlow = pow(max(0.0, moonDot), 300.0) * 0.35 * phaseBrightness * nightFactor;
-                    skyColor += vec3(0.65, 0.72, 0.92) * moonGlow;
+                    skyColor += vec3(0.65, 0.72, 0.92) * moonGlow * (1.0 - cloudCover * 0.6);
 
-                    // Only render the lit side — dark side alpha is 0 so it's invisible.
-                    // 明るい側だけを描画し、暗い側のalphaを0にする。
+                    // 明るい側だけを空に「足す」（空より暗くはならない。昼の月は空に溶けて淡く）
                     float litAlpha = smoothstep(-0.05, 0.25, litSide);
-                    float diskAlpha = moonMask * litAlpha;
-                    skyColor = mix(skyColor, moonColor, diskAlpha);
+                    skyColor += moonLitColor * litSide * litAlpha * moonMask * moonVis * mix(1.0, 0.45, dayFactor);
                 }
 
                 // 霧・雨：空の上の方まで霞で覆う（地平線ほど濃い）。

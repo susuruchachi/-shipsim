@@ -42,26 +42,74 @@ function updateWindowGlow(factor) {
     if (windowGlowLightProbe) windowGlowLightProbe.intensity = 1.2 * eff;
 }
 
+// ── 太陽・月の位置（天文の式：船のいる緯度・経度と、日付・時刻から）──
+// 地軸の傾き（23.44°）で、太陽の通り道の高さが季節で変わり、緯度が高いほど低くなる
+// （夏の北の海は夜が短く、冬は昼が短い。赤道の近くでは真上を通る）。
+// 時計（physics.dayProgress）は船のいる所の地方時：太陽がほぼ真南（南半球では真北）に来るのが 12 時ごろ
+// （昔の船の時計と同じく、経度が変わっても正午は正午。均時差で ±16 分ずれる）。
+// 「世界」を航海していないとき（外洋）は、北緯 40°・西経 30°（北大西洋）として計算する。
+// 月：黄経は太陽から月齢ぶん東（満ち欠けが画面の月齢とそろうように）、黄緯は白道の傾き（5.1°）で上下する。
+// 以前は緯度・季節に関係なく、毎日同じ通り道（いつも東から昇って最高 67°）だった。
+const SKY_OCEAN_LATLON = { lat: 40, lon: -30 };
+const _SKY_RAD = Math.PI / 180;
+function skyObserverLatLon() {
+    if (window.world && window.world.mode === 'world' && typeof worldShipLatLon === 'function') {
+        const ll = worldShipLatLon();
+        if (Number.isFinite(ll.lat) && Number.isFinite(ll.lon)) return ll;
+    }
+    return SKY_OCEAN_LATLON;
+}
+// 黄道座標（黄経・黄緯）→ 赤道座標（赤経・赤緯）
+function _skyEquatorial(lam, beta, eps) {
+    const sl = Math.sin(lam), cl = Math.cos(lam), sb = Math.sin(beta), cb = Math.cos(beta);
+    return {
+        ra: Math.atan2(sl * Math.cos(eps) * cb - sb * Math.sin(eps), cl * cb),
+        dec: Math.asin(Math.max(-1, Math.min(1, sb * Math.cos(eps) + cb * Math.sin(eps) * sl))),
+    };
+}
+// 赤経・赤緯 → 空の向き（three.js の座標：+x 西・+y 上・+z 北）。lst＝地方恒星時、lat＝緯度（ラジアン）
+function _skyHorizon(q, lst, lat, out) {
+    const H = lst - q.ra;   // 時角（正＝南中を過ぎて西へ）
+    const sd = Math.sin(q.dec), cd = Math.cos(q.dec), sp = Math.sin(lat), cp = Math.cos(lat);
+    const east = -cd * Math.sin(H), north = cp * sd - sp * cd * Math.cos(H), up = sp * sd + cp * cd * Math.cos(H);
+    return out.set(-east, up, north).normalize();
+}
+const _skySunDir = new THREE.Vector3(), _skyMoonDir = new THREE.Vector3();
+function skyBodyDirections(dayProgress) {
+    const ll = skyObserverLatLon();
+    const day = (typeof calDayNow === 'function') ? calDayNow() : 0;
+    // 2000 年 1 月 1 日 12 時（世界時）からの日数。世界時＝地方時 − 経度/15 時間
+    const n = CAL_JD0 + day + dayProgress - ll.lon / 360 - 2451545.0;
+    const L = 280.460 + 0.9856474 * n, g = (357.528 + 0.9856003 * n) * _SKY_RAD;
+    const lamS = (L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * _SKY_RAD;
+    const eps = (23.439 - 0.0000004 * n) * _SKY_RAD;       // 地軸の傾き
+    const lst = (280.46061837 + 360.98564736629 * n + ll.lon) * _SKY_RAD;
+    const lat = ll.lat * _SKY_RAD;
+    _skyHorizon(_skyEquatorial(lamS, 0, eps), lst, lat, _skySunDir);
+    const F = (93.272 + 13.229350 * n) * _SKY_RAD;
+    _skyHorizon(_skyEquatorial(lamS + (physics.moonPhase || 0) * 2 * Math.PI, 5.128 * _SKY_RAD * Math.sin(F), eps), lst, lat, _skyMoonDir);
+    return { sun: _skySunDir, moon: _skyMoonDir, lat: ll.lat, lon: ll.lon };
+}
+window.skyBodyDirections = skyBodyDirections;
+// 月明かりの強さ（満月が高く昇った晴れの夜を 1）。
+// 満ち欠け：月の等級 m = −12.73 + 0.026|ψ| + 4×10⁻⁹ψ⁴（ψ＝満月からの角度）。半月で満月の約 1/10、三日月で約 1/50。
+// 高さ：地平線の近くは斜めに当たる上に大気で弱まる。雲が厚いほど暗く
+function skyMoonLight(phase, moonUp, cloud) {
+    const psi = Math.abs(((phase % 1) + 1) % 1 - 0.5) * 360;
+    const ph = Math.pow(10, -0.4 * (0.026 * psi + 4e-9 * Math.pow(psi, 4)));
+    const alt = smoothstep(-0.015, 0.06, moonUp) * (0.35 + 0.65 * Math.min(1, Math.max(0, moonUp) / 0.5));
+    return ph * alt * (1 - 0.8 * Math.max(0, Math.min(1, cloud || 0)));
+}
+window.skyMoonLight = skyMoonLight;
+
 function updateDayNightCycle(dayProgress) {
-    const sunAngle = dayProgress * Math.PI * 2 - Math.PI * 0.5;
-    const tilt = 0.4; 
     const sunDistance = 400;
-
-    // 世界の座標は +x が西（43-world.js）。東から昇って南を通り、西へ沈むよう、x は -cos
-    const sunX = -Math.cos(sunAngle) * sunDistance;
-    const sunY = Math.sin(sunAngle) * sunDistance * Math.cos(tilt);
-    const sunZ = -Math.sin(sunAngle) * sunDistance * Math.sin(tilt);
-
-    const sunPos = new THREE.Vector3(sunX, sunY, sunZ);
-
-    // 月の位置は太陽との位相差（月齢）で決まる。
-    // moonPhase=0→新月(太陽と同方向), 0.5→満月(太陽の反対側)
-    // 月は太陽より「遅れて」公転するので、moonPhaseが増えるほど太陽より後方（西）へ移動する
-    const moonAngle = sunAngle - physics.moonPhase * Math.PI * 2;
-    const moonX = -Math.cos(moonAngle) * sunDistance;
-    const moonY = Math.sin(moonAngle) * sunDistance * Math.cos(tilt);
-    const moonZ = -Math.sin(moonAngle) * sunDistance * Math.sin(tilt);
-    const moonPos = new THREE.Vector3(moonX, moonY, moonZ);
+    const bodies = skyBodyDirections(dayProgress);
+    const sunPos = bodies.sun.clone().multiplyScalar(sunDistance);
+    const moonPos = bodies.moon.clone().multiplyScalar(sunDistance);
+    const sunY = sunPos.y;
+    physics.sunElev = bodies.sun.y;      // 太陽の高さ（sin）：航海灯・流れ星・オーロラが夜かどうかに使う
+    physics.moonElev = bodies.moon.y;
 
     let lightIntensity = 0.0;
     let lightColor = new THREE.Color();
@@ -78,7 +126,11 @@ function updateDayNightCycle(dayProgress) {
     updateWindowGlow(lightingNightFactor);
     applyGlbLightIntensities();
 
-    const moonPhaseFactor = Math.sin(physics.moonPhase * Math.PI);
+    // 月明かり（満ち欠け・月の高さ・雲）。夜の明るさ・空・自動露出（30-auto-exposure.js）に使う
+    const moonLight = skyMoonLight(physics.moonPhase, bodies.moon.y, window.weather ? weather.cloud : 0);
+    window.skyMoonLightNow = moonLight;
+    // 薄明：日没後も太陽が地平線の下 12° くらいまでは、空からの光が少し残る
+    const twilight = smoothstep(-0.21, 0.0, sunElevRatio);
 
     let ambientIntensity = 0.0;
     let hemiIntensity = 0.0;
@@ -89,7 +141,8 @@ function updateDayNightCycle(dayProgress) {
         
         if (sunHeightRatio < 0.15) {
             const t = Math.max(0.0, sunHeightRatio / 0.15);
-            lightIntensity = 0.2 + t * 1.0;
+            // 地平線に沈む直前は直射が消えていく（夜の月明かりへなめらかにつながるように）
+            lightIntensity = (0.2 + t * 1.0) * smoothstep(-0.01, 0.04, sunHeightRatio);
             lightColor.setRGB(1.0, 0.4 + t * 0.56, 0.15 + t * 0.7); 
             background.setRGB(0.4 * t + 0.35 * (1-t), 0.55 * t + 0.2 * (1-t), 0.75 * t + 0.15 * (1-t));
             fogColor.copy(background);
@@ -104,21 +157,18 @@ function updateDayNightCycle(dayProgress) {
             hemiIntensity = 0.8;
         }
     } else {
+        // 夜：月明かり（満ち欠けと高さで）＋ 星明かり ＋ 日没直後の薄明。
+        // 以前は半月でも満月の半分ほどの明るさがあり、月が沈んでいても空からの光がかなり残っていて、夜が明るかった
         activeLightPos.copy(moonPos);
-        const moonY = moonPos.y;
-        const moonHeightRatio = moonY / sunDistance;
-        const baseMoonIntensity = 0.25 * moonPhaseFactor;
-        
-        // Moon above horizon: full light; below horizon: fade out quickly
-        const moonAbove = smoothstep(-0.05, 0.08, moonHeightRatio);
-        lightIntensity = baseMoonIntensity * moonAbove;
-        const mc = baseMoonIntensity * 4 * moonAbove;
-        lightColor.setRGB(0.35 * mc, 0.45 * mc, 0.65 * mc);
-        const bgBright = 0.01 + 0.04 * moonPhaseFactor * moonAbove;
-        background.setRGB(bgBright, bgBright * 1.5, bgBright * 3.0);
+        lightIntensity = 0.20 * moonLight;
+        lightColor.setRGB(0.55, 0.66, 0.90);
+        const tw2 = twilight * twilight;
+        const bgBright = 0.004 + 0.03 * moonLight;
+        // 薄明のうちは、日の入り直後の空の色（昼の側の朝夕の色）から夜の色へ
+        background.setRGB(bgBright + (0.35 - bgBright) * tw2, bgBright * 1.5 + (0.2 - bgBright * 1.5) * tw2, bgBright * 3.0 + (0.15 - bgBright * 3.0) * tw2);
         fogColor.copy(background);
-        ambientIntensity = 0.04 + 0.08 * moonPhaseFactor * moonAbove;
-        hemiIntensity = 0.03 + 0.12 * moonPhaseFactor * moonAbove;
+        ambientIntensity = 0.012 + 0.07 * moonLight + 0.15 * tw2;
+        hemiIntensity = 0.012 + 0.10 * moonLight + 0.2 * tw2;
     }
 
     if (!sunLight.userData.currentPos) sunLight.userData.currentPos = activeLightPos.clone();
@@ -156,7 +206,14 @@ function updateDayNightCycle(dayProgress) {
 
     if (waterMesh && waterMesh.material.uniforms) {
         waterMesh.material.uniforms.sunDir.value.copy(activeLightPos).sub(camera.position).normalize();
-        waterMesh.material.uniforms.sunColor.value.copy(sunLight.color);
+        // 水面の照り返しの色：昼は太陽の色、夜は月明かりの強さぶん（以前は月が出ていれば満ち欠けによらず明るく、
+        // 月明かりの照り返しが明るすぎた）。日の入り・日の出で急に変わらないよう少しずつ寄せる
+        {
+            const sc = waterMesh.material.uniforms.sunColor.value;
+            if (isNight) _dnWaterSun.setRGB(0.35, 0.45, 0.65).multiplyScalar(0.55 * moonLight);
+            else _dnWaterSun.copy(sunLight.color);
+            sc.lerp(_dnWaterSun, 0.05);
+        }
 
         const u = waterMesh.material.uniforms;
         if (!isNight) {
@@ -176,18 +233,19 @@ function updateDayNightCycle(dayProgress) {
             );
             u.foamColor.value.setRGB(0.92, 0.97, 1.00);
         } else {
-            const b = 0.005 + 0.03 * moonPhaseFactor;
+            const b = 0.003 + 0.02 * moonLight;
             u.deepColor.value.setRGB(b * 0.5, b * 0.8, b * 2.0);
             u.shallowColor.value.setRGB(b * 1.0, b * 2.0, b * 4.5);
-            // 夜の泡は月明かりの分だけ（白波が暗い海に明るく浮きすぎないように）
-            u.foamColor.value.setRGB(0.2 + moonPhaseFactor * 0.2, 0.23 + moonPhaseFactor * 0.23, 0.26 + moonPhaseFactor * 0.26);
+            // 夜の泡は月明かりの分だけ（白波が暗い海に明るく浮きすぎないように。月が無ければほとんど見えない）
+            const fm = 0.06 + 0.3 * moonLight;
+            u.foamColor.value.setRGB(fm, fm * 1.12, fm * 1.28);
         }
         // 水面に映る空の色：水平線の近くの空（05-sky-dome.js と同じ昼・朝夕・夜の混ぜ方）。以前は昼の空色のままで、
         // 夕方や夜に、遠くの海（斜めに見るので空がよく映る）だけ明るい青に見えていた
         if (u.skyReflColor) {
             const sh = sunY / sunDistance, ss = (a, b, x) => { const k = Math.max(0, Math.min(1, (x - a) / (b - a))); return k * k * (3 - 2 * k); };
             const dayF = ss(-0.18, 0.18, sh), dawnF = ss(-0.25, 0.0, sh) * (1 - ss(0.0, 0.25, sh));
-            const mb = 0.6 + 0.8 * moonPhaseFactor;
+            const mb = 0.55 + 0.6 * moonLight;   // 05-sky-dome.js の夜の地平線の色と同じ（月明かりで明るく）
             const nr = 0.010 * mb, ng = 0.016 * mb, nb = 0.040 * mb;
             const r0 = nr + (0.42 - nr) * dawnF, g0 = ng + (0.26 - ng) * dawnF, b0 = nb + (0.16 - nb) * dawnF;
             u.skyReflColor.value.setRGB(r0 + (0.30 - r0) * dayF, g0 + (0.52 - g0) * dayF, b0 + (0.82 - b0) * dayF);
@@ -206,8 +264,10 @@ function updateDayNightCycle(dayProgress) {
         skyMesh.material.uniforms.sunDirection.value.copy(sunPos).normalize();
         skyMesh.material.uniforms.moonDirection.value.copy(moonPos).normalize();
         skyMesh.material.uniforms.moonPhase.value = physics.moonPhase;
+        if (skyMesh.material.uniforms.moonLight) skyMesh.material.uniforms.moonLight.value = moonLight;
     }
 }
+const _dnWaterSun = new THREE.Color();
 
 
 // ════════════════════════════════════════════════════════════════

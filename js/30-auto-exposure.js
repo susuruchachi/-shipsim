@@ -27,7 +27,9 @@ const AE_INTERVAL = 0.4;          // 明るさを測る間隔[秒]
 const AE_MUL_MIN = 0.55;          // 露出倍率の下限（明るい所で絞る限度）
 const AE_MUL_MAX = 2.4;           // 露出倍率の上限（暗い所で開ける限度）
 const AE_TARGET_DAY = 0.40;       // 目標の画面の明るさ（0〜1、表示上の値）
-const AE_TARGET_NIGHT = 0.20;     // 夜は暗めを目標にする（夜が昼のように明るくならないように）
+const AE_TARGET_NIGHT = 0.07;     // 夜は暗めを目標にする（月の無い夜。月明かりがあるほど明るく：_aeConsume）
+const AE_TARGET_MOON = 0.10;      // 満月が高く昇った晴れの夜に足す明るさ
+const AE_MUL_MAX_NIGHT = 1.5;     // 夜に露出を開ける限度（暗さに慣れても、夜は夜らしく暗いまま）
 const AE_ADAPT_DARKEN = 1 / 0.8;  // 明るい所に慣れる速さ[1/秒]（まぶしさにはすぐ慣れる）
 const AE_ADAPT_BRIGHTEN = 1 / 2.5;// 暗い所に慣れる速さ[1/秒]（暗さに慣れるのはゆっくり）
 
@@ -129,12 +131,16 @@ function _aeConsume(buf) {
     const meas = Math.exp(sl / sw) - 0.02;
     A.measured = meas;
     // 夜は暗めを目標に（窓の発光を自動点灯させる昼夜係数と同じもの）
+    // 夜は月明かり（満ち欠け・月の高さ・雲。16-daynight-and-telegraph.js）に応じた明るさを目標に。
+    // 以前は月が無くても明るさ 0.20 を目標に露出を 2.4 倍まで開けていて、どの夜も同じくらい明るく見えていた
     const night = (typeof lightingNightFactor === 'number') ? lightingNightFactor : 0;
-    const target = AE_TARGET_DAY + (AE_TARGET_NIGHT - AE_TARGET_DAY) * night;
+    const moon = Number.isFinite(window.skyMoonLightNow) ? window.skyMoonLightNow : 0.5;
+    const target = AE_TARGET_DAY + (AE_TARGET_NIGHT + AE_TARGET_MOON * moon - AE_TARGET_DAY) * night;
+    const mulMax = AE_MUL_MAX + (AE_MUL_MAX_NIGHT - AE_MUL_MAX) * night;
     // 表示上の明るさは露出の 1/2.2 乗くらいで効くので、比を 1.5 乗して直す。
     // 1回で直しすぎないよう、1回あたりの修正は 0.6〜1.7 倍に抑える。
     const ratio = Math.min(1.7, Math.max(0.6, Math.pow(target / Math.max(0.01, meas), 1.5)));
-    A.desired = Math.min(AE_MUL_MAX, Math.max(AE_MUL_MIN, A.mul * ratio));
+    A.desired = Math.min(mulMax, Math.max(AE_MUL_MIN, A.mul * ratio));
 }
 
 // 予約しておいた非同期読み出しが終わっていれば受け取る（WebGL2）

@@ -128,7 +128,8 @@ function updateNavLights3D() {
 
 const _nlCam = new THREE.Vector3();
 function updateNavLightsVisibility() {
-    const isNight = physics.dayProgress > 0.78 || physics.dayProgress < 0.22;
+    // 太陽が地平線から 3° より低ければ点ける（緯度・季節で日の入りの時刻が変わる。16-daynight-and-telegraph.js）
+    const isNight = Number.isFinite(physics.sunElev) ? physics.sunElev < 0.05 : (physics.dayProgress > 0.78 || physics.dayProgress < 0.22);
     // カメラの位置（船の中の座標）：灯ごとに、法規の範囲の中から見ているか
     let camOK = false;
     if (isNight && navLightsEnabled && typeof camera !== 'undefined' && camera && shipGroup) {
