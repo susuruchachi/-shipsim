@@ -375,7 +375,8 @@ function applyMaterialsToModel(model) {
         // 特定のパーツ（例: ガラス窓）で影の見え方が不自然な場合は、そのメッシュだけ
         // 後から child.castShadow=false 等で個別に上書きすればよい。
         child.castShadow = true;
-        child.receiveShadow = true;
+        child.userData._rs0 = true;
+        child.receiveShadow = window.gpuDbg !== 'shadow';   // （表示の不具合の切り分け：01-state-and-config.js）
         const mats = Array.isArray(child.material) ? child.material : [child.material];
         const newMats = mats.map((mat) => {
             if (!mat) return mat;

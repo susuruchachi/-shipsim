@@ -333,7 +333,7 @@ function initEnvironmentLighting() {
 
 function updateEnvironmentMap() {
     if (!envPmremGenerator || !envProxyScene) return;
-    if (lightSettings.envMult <= 0) { scene.environment = null; return; }
+    if (lightSettings.envMult <= 0 || window.gpuDbg === 'env') { scene.environment = null; return; }   // （表示の不具合の切り分け：01-state-and-config.js）
     try {
         const prev = envRenderTarget;
         envRenderTarget = envPmremGenerator.fromScene(envProxyScene, 0, 1, 2000);

@@ -155,11 +155,18 @@ function _aoPatchMaterial(mat, opts) {
     if (!mat || mat.userData.aoPatched) return;
     if (!(mat.isMeshStandardMaterial || mat.isMeshPhongMaterial || mat.isMeshLambertMaterial)) return;
     mat.userData.aoPatched = true;
-    const occ = !(opts && opts.skyOcc === false);
-    mat.userData.skyOcc = occ;
+    mat.userData.skyOcc = !(opts && opts.skyOcc === false);
     const prev = mat.onBeforeCompile, prevKey = mat.customProgramCacheKey;
     mat.onBeforeCompile = function (shader, r) {
         if (typeof prev === 'function') prev.call(this, shader, r);
+        // 表示の不具合の切り分け（01-state-and-config.js）：pad＝ダミーの値を一つ足して、シェーダーの値の並びを変える
+        if (window.gpuDbg === 'pad') {
+            shader.uniforms.uGpuPad = { value: new THREE.Vector4(0, 0, 0, 0) };
+            shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform vec4 uGpuPad;')
+                .replace(/\}\s*$/, '    if (uGpuPad.w > 1.0e9) gl_FragColor = vec4(uGpuPad.rgb, 1.0);\n}\n');
+        }
+        if (window.gpuDbg === 'ao' || window.gpuDbg === 'allpatch') return;   // 船の陰影の仕掛けを止める
+        const occ = mat.userData.skyOcc && window.gpuDbg !== 'skyocc';
         shader.uniforms.uAOStrength = shipAOUniforms.uAOStrength; shader.uniforms.uAODebug = shipAOUniforms.uAODebug;
         shader.uniforms.uIndirK = shipAOUniforms.uIndirK; shader.uniforms.uDirectK = shipAOUniforms.uDirectK;
         if (occ) for (const k of ['uSkyOccMap', 'uSkyOccMat', 'uSkyOccOn', 'uSkyOccR', 'uSkyOccBias', 'uSkyOccMin', 'uSkyOccOff']) shader.uniforms[k] = shipAOUniforms[k];
@@ -174,7 +181,7 @@ function _aoPatchMaterial(mat, opts) {
             .replace('#include <aomap_fragment>', '#include <aomap_fragment>\n    { float sk = mix(1.0, pow(clamp(vSkyAO * 1.15, 0.0, 1.0), 1.4), uAOStrength);\n      reflectedLight.indirectDiffuse *= sk * uIndirK; reflectedLight.indirectSpecular *= mix(1.0, sk, 0.7) * uIndirK;\n' + occF + '      reflectedLight.directDiffuse *= uDirectK; }\n')
             .replace(/\}\s*$/, '    if (uAODebug > 0.5) gl_FragColor = vec4(vec3(vSkyAO), 1.0);\n}\n');
     };
-    mat.customProgramCacheKey = function () { return 'skyAO' + (occ ? 'o' : '') + '|' + ((typeof prevKey === 'function') ? prevKey.call(this) : ''); };
+    mat.customProgramCacheKey = function () { return 'skyAO' + (mat.userData.skyOcc ? 'o' : '') + (typeof gpuDbgKey === 'function' ? gpuDbgKey() : '') + '|' + ((typeof prevKey === 'function') ? prevKey.call(this) : ''); };
     mat.defaultAttributeValues = Object.assign({}, mat.defaultAttributeValues || {}, { aSky: [1] });
     mat.needsUpdate = true;
 }

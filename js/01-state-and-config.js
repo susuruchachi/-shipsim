@@ -159,6 +159,45 @@ const PERF_PRESETS = {
     ultralow:{ smokeCap: 150,  normalsInterval: 8, historyMax: 10, pixelRatio: 0.55, shadowsEnabled: false, shadowMapSize: 512,  foamUpdateInterval: 8 }
 };
 
+// ── 表示の不具合の切り分け（設定の「グラフィック品質」の下。端末ごとに保存）──
+//  一部のスマホ（Xperia 5 III：Adreno）で、昼に船の白・バフ色の所だけ真っ青になる（超低画質・夜は出ない）。
+//  手元の環境では出ないので、疑わしい仕掛けを一つずつ止めて、どれで直るかを実機で調べられるようにする。
+//   sunshadow：太陽の影を止める　shadow：船だけ影を受けない　ao：船の陰影の仕掛け（61-ship-ao.js）を止める
+//   skyocc：上に屋根がある所を暗くする仕掛けだけ止める　fill：遠くの灯りの簡易照明（25-area-lights.js）を止める
+//   bake：照明の焼き込み（40-light-bake.js）を止める　env：空の映り込み（環境マップ）を止める
+//   dir2：2つめの平行光（青白い補助の光）を止める　pad：船のシェーダーにダミーの値を足して、値の並びを変える
+//   allpatch：船の材質に足した仕掛け（ao・fill・bake）を全部止める（これで直らなければ three.js 本体の側）
+window.gpuDbg = '';
+try { window.gpuDbg = localStorage.getItem('susuru_gpudbg') || ''; } catch (e) { /* 保存できない環境 */ }
+// 船の材質のシェーダーを作り分ける鍵（切り分けを変えたら作り直す）
+function gpuDbgKey() { return window.gpuDbg ? '|gd:' + window.gpuDbg : ''; }
+function setGpuDbg(v) {
+    window.gpuDbg = v || '';
+    try { if (window.gpuDbg) localStorage.setItem('susuru_gpudbg', window.gpuDbg); else localStorage.removeItem('susuru_gpudbg'); } catch (e) { /* 保存できない環境 */ }
+    gpuDbgApply();
+}
+function gpuDbgApply() {
+    const d = window.gpuDbg;
+    if (typeof applyShadowQualityFromPerf === 'function') applyShadowQualityFromPerf();
+    if (typeof fillLight !== 'undefined' && fillLight) fillLight.visible = d !== 'dir2';
+    if (typeof updateEnvironmentMap === 'function') updateEnvironmentMap();
+    if (typeof scene === 'undefined' || !scene) return;
+    scene.traverse(o => {
+        if (!o.isMesh || !o.material) return;
+        for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
+            if (m && (m.userData.aoPatched || m.userData.fillLightPatched || m.userData.lightBakePatched)) m.needsUpdate = true;
+        }
+    });
+    if (typeof importedModelGroup !== 'undefined' && importedModelGroup) importedModelGroup.traverse(o => {
+        if (!o.isMesh) return;
+        if (o.userData._rs0 === undefined) o.userData._rs0 = o.receiveShadow;
+        o.receiveShadow = d === 'shadow' ? false : o.userData._rs0;
+    });
+}
+window.setGpuDbg = setGpuDbg;
+window.gpuDbgApply = gpuDbgApply;
+document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('gpu-dbg'); if (el) el.value = window.gpuDbg; });
+
 function applyPerfPreset(name) {
     const preset = PERF_PRESETS[name];
     if (!preset) return;
@@ -189,8 +228,9 @@ function applyPerfPreset(name) {
 // 新しい解像度で再生成させる（Three.js側は自動では再生成してくれないため）。
 function applyShadowQualityFromPerf() {
     if (!renderer || !sunLight) return;
-    renderer.shadowMap.enabled = !!perf.shadowsEnabled;
-    sunLight.castShadow = !!perf.shadowsEnabled;
+    const _shOn = !!perf.shadowsEnabled && window.gpuDbg !== 'sunshadow';
+    renderer.shadowMap.enabled = _shOn;
+    sunLight.castShadow = _shOn;
     if (sunLight.shadow && sunLight.shadow.mapSize.width !== perf.shadowMapSize) {
         sunLight.shadow.mapSize.set(perf.shadowMapSize, perf.shadowMapSize);
         if (sunLight.shadow.map) {

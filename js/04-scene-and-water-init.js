@@ -146,6 +146,7 @@ function init() {
     // 「凹んでいる」ように見えるのを和らげる
     fillLight = new THREE.DirectionalLight(0xaaccff, 0.8);
     fillLight.position.set(-150, 120, 180);
+    fillLight.visible = window.gpuDbg !== 'dir2';   // （表示の不具合の切り分け：01-state-and-config.js）
     scene.add(fillLight);
 
     createSkyDome();

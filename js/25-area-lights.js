@@ -520,6 +520,7 @@ function _fillPatchMaterial(mat) {
     const prevKey = mat.customProgramCacheKey;
     mat.onBeforeCompile = function (shader, r) {
         if (typeof prev === 'function') prev.call(this, shader, r);
+        if (window.gpuDbg === 'fill' || window.gpuDbg === 'allpatch') return;   // 表示の不具合の切り分け（01-state-and-config.js）
         shader.uniforms.uFillTex = fillLightUniforms.uFillTex;
         shader.uniforms.uFillCount = fillLightUniforms.uFillCount;
         shader.fragmentShader = shader.fragmentShader
@@ -552,7 +553,7 @@ uniform int uFillCount;`)
         const base = (typeof prevKey === 'function') ? prevKey.call(this) : '';
         // 後から別のパッチ（船体曲げなど）がこの上に被さっても区別できるよう、
         // 今の onBeforeCompile も鍵に含める（three.js はこの鍵でシェーダーを使い回す）
-        return 'fillLight|' + String(this.onBeforeCompile) + '|' + (typeof prev === 'function' ? prev.toString() : '') + '|' + base;
+        return 'fillLight|' + (typeof gpuDbgKey === 'function' ? gpuDbgKey() : '') + String(this.onBeforeCompile) + '|' + (typeof prev === 'function' ? prev.toString() : '') + '|' + base;
     };
     mat.needsUpdate = true;
 }

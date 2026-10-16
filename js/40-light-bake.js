@@ -1481,7 +1481,7 @@ function _lbPatchMaterial(mat) {
     mat.onBeforeCompile = function (shader, r) {
         if (typeof prev === 'function') prev.call(this, shader, r);
         const set = lightBake.channelSet;
-        if (!set) return;
+        if (!set || window.gpuDbg === 'bake' || window.gpuDbg === 'allpatch') return;   // （表示の不具合の切り分け：01-state-and-config.js）
         shader.uniforms.uBakeScale = lightBakeUniforms.uBakeScale;
         let decl = '\nuniform vec4 uBakeScale;\nvarying vec3 vBakeLight;\n';
         let expr = '\n    // 焼き込んだ船の照明（40-light-bake.js）\n    vBakeLight = vec3(0.0);\n';
@@ -1497,7 +1497,7 @@ function _lbPatchMaterial(mat) {
     };
     mat.customProgramCacheKey = function () {
         const base = (typeof prevKey === 'function') ? prevKey.call(this) : '';
-        return 'lightBake:' + lightBake.channelSet + '|' + base;
+        return 'lightBake:' + lightBake.channelSet + (typeof gpuDbgKey === 'function' ? gpuDbgKey() : '') + '|' + base;
     };
     const zero = [0, 0, 0, 0];
     mat.defaultAttributeValues = Object.assign({}, mat.defaultAttributeValues || {}, { bakeG: zero, bakeL: zero, bakeF: zero, bakeD: zero });
