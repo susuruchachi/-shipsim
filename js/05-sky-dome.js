@@ -23,6 +23,7 @@ function createSkyDome() {
             // 天候の見た目（24-weather.js / 29-weather-fx.js が毎フレーム書き込む）
             overcast: { value: 0.0 },                        // どんより暗い空（0〜1）
             fogVeil: { value: 0.0 },                         // 霧・雨で空が霞む割合（0〜1）
+            fogExtraDensity: { value: 0.0 },                 // 天候で濃くなった霧の濃さ（FogExp2。晴れの霞のぶんは除く）
             fogTintColor: { value: new THREE.Color(0.5, 0.55, 0.6) }, // 霞の色（＝霧の色）
             lightningFlash: { value: 0.0 },                  // 雷の閃光（0〜数）
             lightningDir: { value: new THREE.Vector3(0, 0.3, 1).normalize() } // 雷の方向
@@ -51,6 +52,7 @@ function createSkyDome() {
             uniform float cloudAmount;
             uniform float overcast;
             uniform float fogVeil;
+            uniform float fogExtraDensity;
             uniform vec3  fogTintColor;
             uniform float lightningFlash;
             uniform vec3  lightningDir;
@@ -267,8 +269,16 @@ function createSkyDome() {
 
                 // 霧・雨：空の上の方まで霞で覆う（地平線ほど濃い）。
                 // 空ドームは scene.fog の影響を受けないので、ここで霧の色へ寄せる。
-                if (fogVeil > 0.001) {
-                    float veil = fogVeil * mix(1.0, 0.72, smoothstep(0.0, 0.8, h));
+                // 霧・雨・しぶきの霞：その向きで霞の層（厚さ約 400m）を通り抜ける長さを、船・海と同じ FogExp2 の式で。
+                // 水平線の近くは霞の中をどこまでも見通すので、霧に溶けた遠くの船・海とちょうど同じ色になる
+                // （以前は空の霞が一定の割合だけで、昼は霧に溶けた遠くの船・海が空より白く浮いて、輪郭が見えていた）
+                float veilPhys = 0.0;
+                if (fogExtraDensity > 0.0) {
+                    float fl = fogExtraDensity * 400.0 / max(h, 0.012);
+                    veilPhys = 1.0 - exp(-fl * fl);
+                }
+                float veil = max(fogVeil * mix(1.0, 0.72, smoothstep(0.0, 0.8, h)), veilPhys);
+                if (veil > 0.001) {
                     skyColor = mix(skyColor, fogTintColor / max(skyExposure, 0.01), clamp(veil, 0.0, 1.0));
                 }
                 gl_FragColor = vec4(max(skyColor * skyExposure, vec3(0.0)), 1.0);

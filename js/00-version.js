@@ -338,7 +338,10 @@
 //               いれば星明かりだけ。自動露出も夜はその明るさを目標にし、開ける限度を 2.4 倍 → 1.5 倍に。水面の月の照り返し・
 //               泡・夜空の色・夜の雲（星と月を隠す）も月明かりに合わせる。月が明るい夜は暗い星が見えにくく。日没後は薄明で
 //               なめらかに暗くなる
-var APP_VERSION = '0.03.016.016';
+// 0.03.016.017 霧・雨・嵐の昼に、霧に溶けた船が空より白く浮いて輪郭が見えていたのを直す：空の霞を、船・海と同じ霧の式
+//               （霞の層を通り抜ける長さで。水平線の近くはどこまでも見通すので霧の色そのもの）にした。以前は空の霞が
+//               一定の割合だけで、曇天の暗い空のまま残り、霧の色に溶けた遠くの船・海のほうが明るかった（夜は両方暗く目立たなかった）
+var APP_VERSION = '0.03.016.017';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

@@ -445,6 +445,11 @@ function updateWeatherFx(t) {
         if (u.overcast) u.overcast.value = on ? Math.min(1, w.cloud * 0.65 + (w.rain || 0) * 0.5) : 0;
         if (u.fogVeil) u.fogVeil.value = on ? Math.min(0.95, (w.fog || 0) * 0.95 + (w.rain || 0) * 0.35) : 0;
         if (u.fogTintColor && scene.fog) u.fogTintColor.value.copy(scene.fog.color);
+        // 晴れの日の霞より濃いぶんの霧（空の、水平線ほど濃い霞の計算に使う。05-sky-dome.js）
+        if (u.fogExtraDensity) {
+            const d = scene.fog ? (scene.fog.density || 0) : 0, d0 = (window.fogClearDensity || 0.00025) * 1.1;
+            u.fogExtraDensity.value = d > d0 ? Math.sqrt(d * d - d0 * d0) : 0;
+        }
         if (u.lightningFlash) u.lightningFlash.value = window.lightningFlash * 1.4;
         if (u.lightningDir && _lightning.strike) u.lightningDir.value.copy(_lightning.strike.dir);
     }

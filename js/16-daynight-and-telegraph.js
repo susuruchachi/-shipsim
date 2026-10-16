@@ -193,6 +193,7 @@ function updateDayNightCycle(dayProgress) {
     scene.fog.color.lerp(fogColor, 0.05);
     // 荒天ほど視程が落ちる（しぶき・降水・もやで霞む）
     const targetFogDensity = (isNight ? 0.00015 : 0.00025) * lightSettings.fogMult * wxMul.fog;
+    window.fogClearDensity = isNight ? 0.00015 : 0.00025;   // 晴れの日の霞の濃さ（空の霞の計算で、これより濃い分だけ使う：29-weather-fx.js）
     scene.fog.density += (targetFogDensity - scene.fog.density) * 0.02;
 
     ambientLight.intensity += (ambientIntensity * lightSettings.ambientMult * wxMul.ambient - ambientLight.intensity) * 0.05;
