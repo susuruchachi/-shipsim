@@ -240,6 +240,12 @@ function setupUIControls() {
         if (cgMarker) cgMarker.position.z = v;
         if (typeof updateDisplacementReadout === 'function') updateDisplacementReadout();
     });
+    // 前後・左右の重心を手で変えたら、自動バランス（開くたびに計算し直す：18-hull-wake-physics.js）をやめる。
+    // プログラムから入れた値（保存の復元・自動バランス自身）は isTrusted が false なので、ここでは止めない
+    ['cgx-slider', 'cgx-num', 'cgz-slider', 'cgz-num'].forEach((id) => {
+        const el = $(id);
+        if (el) ['input', 'change'].forEach((t) => el.addEventListener(t, (e) => { if (e.isTrusted) physics.cgAuto = false; }));
+    });
     // 喫水線基準点（重心とは独立。船体のどの高さを「喫水ゼロ」とみなすか）
     bindSettingsSlider('waterlineY-slider', 'waterlineY-num', (v) => {
         physics.waterlineOffsetY = v;

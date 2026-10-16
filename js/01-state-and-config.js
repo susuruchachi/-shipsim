@@ -300,6 +300,9 @@ const physics = {
     heading: 0.0, turnRate: 0.0,
     pitch: 0.0, vPitch: 0.0, roll: 0.0, vRoll: 0.0,
     mass: 1.5, buoyancy: 12.0, buoyancyBase: 12.0, draftOffset: 0.0,
+    // 重心（前後・左右）・復元力ベースを自動にしたか。true なら船を開くたびに船体から計算し直す
+    // （'guess'：自動にしたかの印が無い以前の保存。測り直したときに値から見分ける：18-hull-wake-physics.js の reapplyAutoBalance）
+    cgAuto: false, restoreAuto: false,
     // 喫水線の基準点（モデルローカルY）。重心(cgOffset.y)とは独立に設定できる。
     // 例: 重心が水面より下にある船（バラストキール等）もこの値とcgOffset.yを別々に設定すれば再現できる。
     // デフォルト値はcgOffset.yの初期値(-0.5)と一致させ、既存挙動を変えないようにしている。

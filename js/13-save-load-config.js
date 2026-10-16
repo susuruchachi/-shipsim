@@ -49,6 +49,7 @@ function collectShipConfig() {
             turningRadiusFactor: getVal('turnrad-num'),
             buoyancy: getVal('buoyancy-num'),           // GM倍率 (0.5〜2.0)
             buoyancyBase: physics.buoyancyBase || 12.0, // 自動計算ベース値
+            buoyancyAuto: physics.restoreAuto === true,  // 自動にした復元力ベース（開くたびに計算し直す）
             draftOffset: getVal('draft-num'),
             waterlineOffsetY: getVal('waterlineY-num'),
             mass: getVal('mass-num'),
@@ -63,7 +64,8 @@ function collectShipConfig() {
             offx: getVal('offx-num'), offy: getVal('offy-num'), offz: getVal('offz-num'),
             roty: getVal('roty-num'), mscale: getVal('mscale-num'),
         },
-        cg: { x: getVal('cgx-num'), y: getVal('cgy-num'), z: getVal('cgz-num') },
+        // auto：前後・左右を自動バランスにした（開くたびに計算し直す。保存した x・z は 2 桁に丸めた値）
+        cg: { x: getVal('cgx-num'), y: getVal('cgy-num'), z: getVal('cgz-num'), auto: physics.cgAuto === true },
         rudder: {
             width: getVal('rudder-width'), height: getVal('rudder-height'), depth: getVal('rudder-depth'),
             x: getVal('rudx-num'), y: getVal('rudy-num'), z: getVal('rudz-num'),
@@ -266,6 +268,10 @@ function applyShipConfig(cfg) {
     setVal('cgx-num', cg.x); setVal('cgx-slider', cg.x);
     setVal('cgy-num', cg.y); setVal('cgy-slider', cg.y);
     setVal('cgz-num', cg.z); setVal('cgz-slider', cg.z);
+    // 自動にした重心・復元力ベースは、開いたあと船体を測り直したときに計算し直す（18-hull-wake-physics.js の reapplyAutoBalance）。
+    // 印の無い以前の保存は、そのときに値から見分ける
+    physics.cgAuto = typeof cg.auto === 'boolean' ? cg.auto : 'guess';
+    physics.restoreAuto = typeof p.buoyancyAuto === 'boolean' ? p.buoyancyAuto : 'guess';
 
     const r = cfg.rudder || {};
     setVal('rudder-width', r.width);

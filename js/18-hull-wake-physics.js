@@ -1444,6 +1444,8 @@ function scanHullProfile() {
     // applyDisplacementToMass: 計算値→UIスライダー・physics.mass へ一括反映
     if (typeof applyDisplacementToMass === 'function') applyDisplacementToMass();
     else if (typeof updateDisplacementReadout === 'function') updateDisplacementReadout();
+    // 自動にした重心・復元力を、測り直した船体から計算し直す
+    reapplyAutoBalance();
 
     console.log(
         `[HullScan] v12 | slices=${hp.slices.length}` +
@@ -3378,6 +3380,18 @@ function computeHullGM() {
 //    physics側:  h_pend = (waterlineOffsetY - cgOffset.y) × physScale
 //    → waterlineOffsetY = cgOffset.y + h_pend_geom / physScale
 // ============================================================
+// 復元力ベース（buoyancy 逆算、横揺れBMベース）。ボタンと、船を開いたときの計算し直しで共用
+function _autoRestorationBase(gm) {
+    const hp = window.hullProfile;
+    const physScale   = Math.max(0.25, physics.scale || 1);
+    const wid         = hp.halfBeam * 2 * physScale;
+    const g_eff       = 9.81;
+    // 17-main-loop.js と同じジャイロ半径
+    const k_gyro_roll = wid * 0.35;
+    const restoringBase_new = gm.BM_roll * g_eff / (k_gyro_roll * k_gyro_roll);
+    return THREE.MathUtils.clamp((restoringBase_new - 1.0) / 1.8, 1.0, 50.0);
+}
+
 function autoTuneRestoration() {
     const hp = window.hullProfile;
     if (!hp || !hp.ready) {
@@ -3392,19 +3406,9 @@ function autoTuneRestoration() {
     }
 
     const physScale        = Math.max(0.25, physics.scale || 1);
-    const len              = hp.halfLen  * 2 * physScale;
-    const wid              = hp.halfBeam * 2 * physScale;
-    const g_eff            = 9.81;
-
-    // 17-main-loop.js と同じジャイロ半径
-    const k_gyro_roll  = wid * 0.35;
-
-    // buoyancy 逆算（横揺れBMベース）
-    const restoringBase_new = gm.BM_roll * g_eff / (k_gyro_roll * k_gyro_roll);
-    const buoyancyNew = THREE.MathUtils.clamp(
-        (restoringBase_new - 1.0) / 1.8,
-        1.0, 50.0
-    );
+    const buoyancyNew = _autoRestorationBase(gm);
+    // 船を開くたびに計算し直す（reapplyAutoBalance）
+    physics.restoreAuto = true;
 
     // 参考値のみ計算（waterlineY は変更しない — 喫水が勝手に変わる問題を防ぐ）
     const h_pend_geom  = gm.KB - gm.KG;
@@ -3441,7 +3445,8 @@ function autoTuneRestoration() {
             `排水量 = ${Math.round(gm.V_m3 * 1.025).toLocaleString()} t<br>` +
             `→ 復元力ベース = <b>${buoyancyNew.toFixed(1)}</b>（GM倍率で微調整可）<br>` +
             `<span style="color:#aaa">参考: 喫水線基準点 推奨値 = ${waterlineYRef.toFixed(2)}` +
-            ` （現在: ${physics.waterlineOffsetY.toFixed(2)}）</span>`;
+            ` （現在: ${physics.waterlineOffsetY.toFixed(2)}）</span><br>` +
+            `<span style="color:#aaa">復元力ベースは、船を開くたびに船体から計算し直します</span>`;
     }
 
     console.log(
@@ -3479,19 +3484,11 @@ function autoTuneCG() {
         return;
     }
 
-    const cgZNew = THREE.MathUtils.clamp(gm.LCB_local, -10.0, 10.0);
+    const cgZNew = _autoCgZ(gm);
     const cgXNew = 0.0; // 船体形状は左右対称スキャンのためTCB=0
-
-    const syncAndFire = (slId, numId, val, dec) => {
-        const sl = document.getElementById(slId);
-        const nm = document.getElementById(numId);
-        if (!sl) return;
-        sl.value = val;
-        sl.dispatchEvent(new Event('input')); // → setter(v) → physics.cgOffset.x/z 更新
-        if (nm) nm.value = val.toFixed(dec ?? 2);
-    };
-    syncAndFire('cgz-slider', 'cgz-num', cgZNew, 2);
-    syncAndFire('cgx-slider', 'cgx-num', cgXNew, 2);
+    _setCgXZPrecise(cgXNew, cgZNew);
+    // 船を開くたびに計算し直す（reapplyAutoBalance）。前後・左右の重心を手で動かすとやめる（09-ui-setup-and-import.js）
+    physics.cgAuto = true;
 
     const el = document.getElementById('gm-readout');
     if (el) {
@@ -3500,11 +3497,65 @@ function autoTuneCG() {
             `<b>重心バランス自動設定（前後・左右）</b><br>` +
             `LCB（浮力中心・前後） = ${gm.LCB_local.toFixed(2)} → CG Z に設定<br>` +
             `TCB（浮力中心・左右） = 0.00（左右対称）→ CG X に設定<br>` +
-            `<span style="color:#aaa">CG Y（高さ）は変更していません（現在: ${physics.cgOffset.y.toFixed(2)}）</span>`;
+            `<span style="color:#aaa">CG Y（高さ）は変更していません（現在: ${physics.cgOffset.y.toFixed(2)}）</span><br>` +
+            `<span style="color:#aaa">船を開くたびに船体から計算し直します（前後・左右の重心を手で動かすと止まります）</span>`;
     }
 
     console.log(`[AutoTuneCG] LCB_local=${gm.LCB_local.toFixed(3)} → cgOffset.z=${cgZNew.toFixed(3)}, cgOffset.x=${cgXNew.toFixed(3)}`);
 }
 
 window.autoTuneCG = autoTuneCG;
+
+// 前後の重心の自動の値（浮力中心 LCB）
+function _autoCgZ(gm) { return THREE.MathUtils.clamp(gm.LCB_local, -10.0, 10.0); }
+// 前後・左右の重心を、目盛り（0.05 刻み）に丸めずに入れる。数字の欄の change から入れると
+// 丸めずに physics.cgOffset へ入る（スライダーから入れると目盛りに丸められ、表示・保存の 2 桁の値とずれていた）
+function _setCgXZPrecise(x, z) {
+    for (const [numId, v] of [['cgx-num', x], ['cgz-num', z]]) {
+        const nm = document.getElementById(numId);
+        if (!nm) continue;
+        nm.value = String(v);
+        nm.dispatchEvent(new Event('change'));   // → setter(v) → physics.cgOffset.x/z 更新
+        nm.value = v.toFixed(2);                 // 表示は 2 桁
+    }
+}
+
+// ============================================================
+//  自動設定の計算し直し（船を開いたとき・船体を測り直したとき）
+// ============================================================
+//  保存する重心の値は 2 桁に丸められ、自動バランスでは目盛り（0.05）にも丸められていたので、
+//  開くたびに少しずれていた。自動にした重心（前後・左右）と復元力ベースは、保存した数字を使わず、
+//  船体を測り直すたびに（船を開くと必ず測り直す：scanHullProfile）計算し直す。
+//  以前の保存（自動にしたかの印が無い：'guess'）は、保存した値が計算した値とほぼ同じなら
+//  自動にしたものとみなす（重心は目盛りと 2 桁の丸めの分まで、復元力ベースは 2% まで）。
+function reapplyAutoBalance() {
+    const cgOn = physics.cgAuto === true || physics.cgAuto === 'guess';
+    const rsOn = physics.restoreAuto === true || physics.restoreAuto === 'guess';
+    if (!cgOn && !rsOn) return;
+    const hp = window.hullProfile;
+    if (!hp || !hp.ready) return;
+    const gm = computeHullGM();
+    if (!gm) return;
+    if (physics.cgAuto === 'guess') {
+        physics.cgAuto = Math.abs(physics.cgOffset.x) < 1e-3 && Math.abs(physics.cgOffset.z - _autoCgZ(gm)) <= 0.035;
+    }
+    if (physics.restoreAuto === 'guess') {
+        const b = _autoRestorationBase(gm);
+        physics.restoreAuto = Math.abs((physics.buoyancyBase || 12.0) - b) <= Math.max(0.02, b * 0.02);
+    }
+    if (physics.cgAuto === true) {
+        const z = _autoCgZ(gm);
+        if (physics.cgOffset.x !== 0 || physics.cgOffset.z !== z) _setCgXZPrecise(0, z);
+    }
+    if (physics.restoreAuto === true) {
+        physics.buoyancyBase = _autoRestorationBase(gm);
+        // GM倍率（スライダー）はそのまま、ベースだけ入れ替える
+        const sl = document.getElementById('buoyancy-slider');
+        if (sl) sl.dispatchEvent(new Event('input'));
+        else physics.buoyancy = physics.buoyancyBase;
+    }
+    console.log(`[AutoBalance] 計算し直し: 重心 ${physics.cgAuto === true ? 'Z=' + physics.cgOffset.z.toFixed(4) : '手動'}` +
+        ` / 復元力ベース ${physics.restoreAuto === true ? physics.buoyancyBase.toFixed(3) : '手動'}`);
+}
+window.reapplyAutoBalance = reapplyAutoBalance;
 

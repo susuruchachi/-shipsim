@@ -170,6 +170,8 @@ function onGizmoChange() {
     } 
     else if (currentGizmoType === 'cg') {
         const _oldPin = (typeof _currentPinOffsetScaled === 'function') ? _currentPinOffsetScaled() : null;
+        // 前後・左右を動かしたら、自動バランスをやめる（18-hull-wake-physics.js の reapplyAutoBalance）
+        if (Math.abs(pos.x - physics.cgOffset.x) > 1e-6 || Math.abs(pos.z - physics.cgOffset.z) > 1e-6) physics.cgAuto = false;
         physics.cgOffset.x = pos.x; physics.cgOffset.y = pos.y; physics.cgOffset.z = pos.z;
         if (_oldPin && typeof reanchorWorldPositionForPinOffsetChange === 'function') {
             reanchorWorldPositionForPinOffsetChange(_oldPin, _currentPinOffsetScaled());
@@ -336,6 +338,8 @@ function spAdj(sliderId, numId, delta) {
     const decimals = String(parseFloat(slider.step)).includes('.') ? String(parseFloat(slider.step)).split('.')[1].length : 0;
     v = Number(v.toFixed(decimals));
     slider.value = v; num.value = v;
+    // 前後・左右の重心の ± ボタン：自動バランスをやめる（09-ui-setup-and-import.js と同じ）
+    if (sliderId === 'cgx-slider' || sliderId === 'cgz-slider') physics.cgAuto = false;
     slider.dispatchEvent(new Event('input'));
 }
 

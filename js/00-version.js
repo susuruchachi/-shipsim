@@ -386,7 +386,11 @@
 //               屋根の下を暗くする仕掛けが自前で余分に渡していた値（世界の位置と向き）を画素で読むと壊れると分かった。
 //               three.js がもともと渡している値（カメラから見た位置・面の向き）から求める作りに直したので、Adreno の GPU でも
 //               自動で止めずに屋根の下が暗くなる。切り分けの ⑪・⑫ と「自動で止めています」の表示は無くした
-var APP_VERSION = '0.03.016.024';
+// 0.03.016.025 重心の自動バランス（前後・左右）と復元力の自動設定を、船を開くたびに船体から計算し直す。以前は保存した値（2 桁に
+//               丸めた数字。自動バランスはスライダーの目盛り 0.05 にも丸めていた）を使っていたので、開くたびに少しずれていた。
+//               自動にしたかを保存に残し、前後・左右の重心を手で動かすと自動をやめる。印の無い以前の保存は、保存した値が
+//               計算した値とほぼ同じなら自動にしたものとみなす。自動バランスの値も目盛りに丸めずにそのまま使う
+var APP_VERSION = '0.03.016.025';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
