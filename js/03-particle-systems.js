@@ -93,7 +93,8 @@ function createGlobalSmokeSystem() {
                 vFogDist = -mvPos.z;
                 // Smaller, more gradual growth avoids the "blobby" look on small/slow ships
                 float baseSize = (7.0 + 42.0 * age + rand * 16.0) * sizeScale;
-                float ps = baseSize * (300.0 / max(0.01, -mvPos.z));
+                // 画角で割る（ふだんの画角 50° で 1。双眼鏡で寄ると煙も一緒に大きく：69-binoculars.js）
+                float ps = baseSize * (300.0 / max(0.01, -mvPos.z)) * (projectionMatrix[2][3] == -1.0 ? projectionMatrix[1][1] / 2.1445 : 1.0);
                 // カメラのすぐ近くの煙は画面を大きく覆うだけで重いので、大きくなるほど薄くして上限で止める
                 vNear = 1.0 - smoothstep(260.0, 520.0, ps);
                 gl_PointSize = min(ps, 520.0) * uResK;          // 解像度の補正（画質で大きさが変わらないように）
@@ -520,7 +521,8 @@ function createWakeParticleSystem() {
                 //   最終pxが数百pxを超えることは通常ほぼ無い。念のための保険として、
                 //   本当に異常な値だけを弾く緩いセーフティネット(500px)だけ残す。
                 const float MIN_DIST = 3.0;
-                float requestedSize = baseSize * (400.0 / max(-mvPos.z, MIN_DIST));
+                // 画角で割る（ふだんの画角 50° で 1。双眼鏡で寄ると泡・しぶきも一緒に大きく：69-binoculars.js）
+                float requestedSize = baseSize * (400.0 / max(-mvPos.z, MIN_DIST)) * (projectionMatrix[2][3] == -1.0 ? projectionMatrix[1][1] / 2.1445 : 1.0);
                 gl_PointSize = min(requestedSize, 500.0) * uResK;   // 解像度の補正（画質で大きさが変わらないように）
                 // 【対策】しぶきの発生点は船体表面や海面すれすれのことが多く、視点に
                 // よっては発生点そのものだけがわずかに船体/海面の裏側に回り込み、

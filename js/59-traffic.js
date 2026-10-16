@@ -2417,7 +2417,7 @@ function _tfVisual(S, t, vis, night) {
             v = Math.max(0, Math.min(1, 1 - (Math.acos(cosA) / _tfR - q.half) / 2));
         }
         q.sp.material.opacity = on * v * Math.max(0, Math.min(1, 1.6 - dd / (vis * 1.2)));
-        q.sp.scale.setScalar((0.01 + 0.012 * Math.min(1, dd / 1500)) * (q.k || 1));
+        q.sp.scale.setScalar(navLampSpriteScale(dd, 4) * (q.k || 1));   // （遠いほど小さく：47-tugboats.js）
     }
     // 排煙（昔の船・近くだけ）
     if (typeof puffEmit === 'function' && S.dPl < 3500 && g.visible) {
@@ -2610,9 +2610,14 @@ function updateTraffic(t, dt) {
     // 形：見える範囲の船だけ
     const vis = _tfVisM(), night = typeof lightingNightFactor === 'number' ? lightingNightFactor : 0;
     _tfProtoAOStep();
-    // 保存した船の窓の明かり：昼は消し、夜は点ける（自分の船の updateWindowGlow と同じ係数）
-    const glowK = night * ((typeof lightSettings !== 'undefined' && Number.isFinite(lightSettings.windowGlowMult)) ? lightSettings.windowGlowMult : 1);
-    for (const P of _tfProto.values()) if (P.glow && P.users > 0 && P.glowK !== glowK) { P.glowK = glowK; for (const [m, base] of P.glow) m.emissiveIntensity = base * glowK; }
+    // 保存した船の窓の明かり：昼は消し、夜は点ける（自分の船の updateWindowGlow と同じ係数）。
+    // 窓の明るさの倍率は、その船の設定に保存した値（P.glowMult）。以前は今乗っている船の設定（lightSettings）を使っていて、
+    // 乗っている船の窓の明るさが 0 だと、他の船として出した保存した船の窓が全部消えていた
+    for (const P of _tfProto.values()) {
+        if (!P.glow || !(P.users > 0)) continue;
+        const glowK = night * (P.glowMult != null ? P.glowMult : 1);
+        if (P.glowK !== glowK) { P.glowK = glowK; for (const [m, base] of P.glow) m.emissiveIntensity = base * glowK; }
+    }
     {
         // （カメラで追っている船はいちばん先に：遠くて後回しにされると、モデルが外れて追うのが切れ、
         //  カメラが自分の船へ飛んで戻る。外から見ると、追っていた船が遠くへ瞬間移動したように見えていた）
@@ -3351,7 +3356,10 @@ async function _tfLoadProto(v) {
         _tfMergeProto(inner);
         // 空の見え方（プロムナードの奥などを暗く）を、自分の船と同じ方法で少しずつ焼き込む（60・61）
         if (typeof _ssBuild === 'function' && typeof _aoField === 'function' && typeof _aoMeshes === 'function') P.aoJob = _tfProtoAO(inner, (+ph.scale || 12) / 12);
-        Object.assign(P, { state: 'ok', glow: [...glow], obj: inner, S, wl, cx: (box.min.x + box.max.x) / 2, cz: (box.min.z + box.max.z) / 2, len, wid: box.max.x - box.min.x, keel: box.min.y, funnels, lamps, bytes: _tfProtoBytes(inner) });
+        // 窓の明るさの倍率（その船の設定の「窓の発光の強さ」。無ければ 1）
+        const lt = v.cfg.lighting || {};
+        const glowMult = Number.isFinite(+lt.windowGlowMult) && lt.windowGlowMult !== '' && lt.windowGlowMult != null ? Math.max(0, +lt.windowGlowMult) : 1;
+        Object.assign(P, { state: 'ok', glow: [...glow], glowMult, obj: inner, S, wl, cx: (box.min.x + box.max.x) / 2, cz: (box.min.z + box.max.z) / 2, len, wid: box.max.x - box.min.x, keel: box.min.y, funnels, lamps, bytes: _tfProtoBytes(inner) });
         traffic.protoBytes = traffic.protoBytes || new Map(); traffic.protoBytes.set(v.key, P.bytes);
     } catch (e) {
         console.warn('保存した船のモデルを読めませんでした：' + v.name, e);

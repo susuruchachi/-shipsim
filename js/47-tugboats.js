@@ -129,6 +129,16 @@ function _tugGlowTex() {
     x.fillStyle = gr; x.fillRect(0, 0, 64, 64);
     return (_tugGlowTex.t = new THREE.CanvasTexture(c));
 }
+// 他の船・タグの航行灯の光のにじみ（Sprite。sizeAttenuation: false なので、scale ＝ 見た目の大きさ ÷ 奥行き）の大きさ。
+// worldM：にじみの直径[m]。遠いほど小さく見え（自分の船の灯のにじみと同じ）、遠くでも灯りが分かるよう画面で minPx（CSS の画素）より
+// 小さくはしない。以前は画面の上でいつも同じ大きさ（遠いほどむしろ少し大きく）で、遠くの船の灯が大きなにじみのままだった。
+// 双眼鏡（69-binoculars.js）で寄ると、にじみも一緒に大きくなる
+function navLampSpriteScale(dist, worldM, minPx) {
+    const H = window.innerHeight || 800;   // （描画の画面は窓いっぱい。clientHeight は読むたびに配置の計算が走るので使わない）
+    const k = 2 * Math.tan(((typeof camera !== 'undefined' && camera) ? camera.fov : 50) * Math.PI / 360);
+    return Math.max(worldM / Math.max(1, dist), (minPx || 4) / H * k);
+}
+window.navLampSpriteScale = navLampSpriteScale;
 // 航行灯の点灯と、見える向き（灯の光の届く角度の外からは見えない）
 const _tugV = new THREE.Vector3(), _tugD = new THREE.Vector3();
 function _tugLights(tg) {
@@ -151,7 +161,7 @@ function _tugLights(tg) {
         const vis = Math.max(0, Math.min(1, 1 - (THREE.MathUtils.radToDeg(Math.acos(cosA)) - q.half) / 2));
         q.sp.material.opacity = on * vis;
         q.bulb.material.color.copy(q.c).multiplyScalar(0.08 + 0.92 * vis);
-        q.sp.scale.setScalar(0.012 + 0.012 * Math.min(1, d / 600));
+        q.sp.scale.setScalar(navLampSpriteScale(d, 2.5));
     }
 }
 // 排煙：出力に応じて2本の煙突から

@@ -729,6 +729,8 @@ function createWater() {
     const _wlHalf = MAX_WL_PTS >> 1;
     const _wlStbd = { along: new Float64Array(_wlHalf), hw: new Float64Array(_wlHalf), wet: new Float64Array(_wlHalf) };
     const _wlPort = { along: new Float64Array(_wlHalf), hw: new Float64Array(_wlHalf), wet: new Float64Array(_wlHalf) };
+    for (const W of [_wlStbd, _wlPort]) { W.wx = new Float64Array(_wlHalf); W.wz = new Float64Array(_wlHalf); }
+    const _wlWorldP = { x: 0, y: 0, z: 0 };
 
     // ── ウォーターラインポリゴン（hullProfile.shape ベース）──
     // v166: 船首・船尾形状の取得を作り直した（js/22-hull-shape.js 参照）。
@@ -787,26 +789,30 @@ function createWater() {
         const sinT = Math.sin(totalRad), cosT = Math.cos(totalRad);
         const tNow = (typeof t === 'number') ? t : ((typeof clock !== 'undefined') ? clock.getElapsedTime() : 0);
 
-        const roll  = (typeof physics !== 'undefined') ? physics.roll  : 0;
-        const pitch = (typeof physics !== 'undefined') ? physics.pitch : 0;
-        const shipY = (typeof physics !== 'undefined') ? physics.y     : 0;
-        const waterlineYScaled = ((typeof physics !== 'undefined') ? physics.waterlineOffsetY : 0) * physScale;
-        const sinP = Math.sin(pitch), cosP = Math.cos(pitch), sinR = Math.sin(roll);
-
-        // 船体ローカル y=0 がワールドのどの高さにあるか。
-        // shipY(=喫水基準点のワールドY)から waterlineOffsetY のスケール分を戻す。
-        const originY = shipY - waterlineYScaled;
-
-        // 【局所水面高さの導出】
-        //   keelYSide  = originY + localY*physScale - alongW*sinP + sign*hwW*sinR*cosP
-        // を localY について解くと、そのstationで水面に相当するローカルYは
-        //   localWaterY = (waveY - originY + alongW*sinP - sign*hwW*sinR*cosP) / physScale
-        // となる。旧実装はここにスライスごとのdraftを噛ませていたが、式の上では
-        // 完全に相殺する項であり、しかもメッシュによっては実測に失敗して
-        // 極端な値（実測: 組み込みモデルで0.165）になることがあった。
-        // 相殺する項は最初から書かない方が安全で、かつ速い。
-        const localWaterYAt = (alongW, hwW, sign, waveY) =>
-            (waveY - originY + alongW * sinP - sign * hwW * sinR * cosP) / physScale;
+        // 【船の今の姿勢そのもので解く】船体の形（船体スキャンの座標：前後 along・左右・高さ y）の点を、
+        // 船の行列（shipGroup.matrixWorld：縦揺れ・横揺れ・座礁の傾き・潜水艦の姿勢・高さがすべて入っている）で
+        // 世界へ移し、その点の高さが水面の高さになる y を求める。
+        // 以前は「縦揺れ・横揺れで高さだけずれる」近似（along×sin(pitch) など）で y を求め、水平の位置は
+        // 縦揺れの無いときのまま（along をそのまま）置いていた。縦揺れが大きいほど、輪郭（水面の穴）が船体から
+        // 前後にずれ、立ち上がるほど傾くと、水面の穴が船の長さのまま残っていた（戦艦太田で、艦首を下げたとき）。
+        // 回る中心も、近似では船体スキャンの原点・物理の高さとしていたが、実際の回る中心は喫水線基準点（重心の前後）
+        if (typeof shipGroup !== 'undefined' && shipGroup) shipGroup.updateWorldMatrix(false, false);
+        const ME = shipGroup.matrixWorld.elements;
+        // 船体スキャンの前後の向き（船の中の座標で）：_wakeAxisRad の、船首方位を除いた分
+        const axisL = (typeof _wakeAxisRad === 'function') ? _wakeAxisRad(0) : 0;
+        const sA = Math.sin(axisL), cA = Math.cos(axisL);
+        const _P = _wlWorldP;
+        const toWorld = (a, sign, hw, y) => {
+            const lx = sA * a + cA * sign * hw, lz = cA * a - sA * sign * hw;
+            _P.x = ME[0] * lx + ME[4] * y + ME[8] * lz + ME[12];
+            _P.y = ME[1] * lx + ME[5] * y + ME[9] * lz + ME[13];
+            _P.z = ME[2] * lx + ME[6] * y + ME[10] * lz + ME[14];
+            return _P;
+        };
+        // 船の中の高さ 1 あたりの世界の高さ（縦揺れ・横揺れで小さくなる。立ち上がった船でも割り算が暴れないよう下限）
+        const dYdy = Math.max(0.05 * physScale, ME[5]);
+        const keelY = shape.levelY[shape.kFirst];
+        const hullH = Math.max(1e-3, hp.hullHeight > 0 ? hp.hullHeight : 1);
 
         const pxArr  = waterUniforms.wlPtsX.value;
         const pzArr  = waterUniforms.wlPtsZ.value;
@@ -821,11 +827,12 @@ function createWater() {
         const refStern = ends.sternAlong, refBow = ends.bowAlong;
 
         // 1station分を解く。u は輪郭上の正規化位置（0=船尾端, 1=船首端）。
-        // alongW/hwW は互いに依存する（ロール項とレーキ）ので数回反復して収束させる。
+        // 高さ y と前後・半幅は互いに依存する（レーキ・横揺れ）ので数回くり返して合わせる。
         const solveStation = (u, sign) => {
             // 初期推定は設計喫水の輪郭。endsは共有スクラッチなので、前のstationの
             // 状態を引きずらないよう毎回ここで設計喫水に戻してから始める。
             hullShapeEndsAtY(shape, shape.designWaterlineY, ends);
+            let y = shape.designWaterlineY;
             let alongLocal = refStern + (refBow - refStern) * u;
             let hwLocal = hullShapeHwAtU(shape, ends.k0, ends.k1, ends.f, u, span);
 
@@ -833,29 +840,25 @@ function createWater() {
             // 走査するのでこの関数の中で最も重く、station数×2舷ぶん毎フレーム
             // 呼ばれる。水面形状は船体スケールに対して十分緩やかなので、
             // 仮位置での1サンプルで実用上の精度が出る（旧実装も同じ判断）。
-            // 一方、along/半幅/高さレベルの相互依存（レーキとロール）は
-            // 波高を固定したまま数回反復すれば十分収束する。
-            const alongW0 = alongLocal * physScale;
-            const hwW0 = hwLocal * physScale;
-            const waveY = (typeof getWaveHeight === 'function')
-                ? getWaveHeight(cx + sinT * alongW0 + cosT * sign * hwW0,
-                                cz + cosT * alongW0 - sinT * sign * hwW0, tNow, true)
-                : 0;
+            toWorld(alongLocal, sign, hwLocal, y);
+            const waveY = (typeof getWaveHeight === 'function') ? getWaveHeight(_P.x, _P.z, tNow, true) : 0;
 
-            let localWaterY = shape.designWaterlineY;
             for (let it = 0; it < 3; it++) {
-                localWaterY = localWaterYAt(alongLocal * physScale, hwLocal * physScale, sign, waveY);
-                hullShapeEndsAtY(shape, localWaterY, ends);
+                toWorld(alongLocal, sign, hwLocal, y);
+                y += (waveY - _P.y) / dYdy;
+                // 船体の高さの外へ飛び出しすぎないように（その外は下で縮めて消す）
+                y = Math.max(keelY - hullH, Math.min(keelY + 2 * hullH, y));
+                hullShapeEndsAtY(shape, y, ends);
                 alongLocal = ends.sternAlong + (ends.bowAlong - ends.sternAlong) * u;
                 hwLocal = hullShapeHwAtU(shape, ends.k0, ends.k1, ends.f, u, span);
             }
+            const localWaterY = y;
             // 濡れ具合。輪郭の上の点は定義上すべて水と接しているので、
             // 消すべきなのは「その断面がキールより上に出た＝空中にある」場合だけ。
             let wet = hullShapeWetness(shape, localWaterY);
-            const band = Math.max(1e-4, (hp.hullHeight > 0 ? hp.hullHeight : 1) * 0.02);
+            const band = Math.max(1e-4, hullH * 0.02);
             // 船底が水面から出た（波の上で船が浮き上がった・船の中ほどが波の谷の上に出た）：その断面には水面との交わりが無い。
             // 喫水線（泡帯・水面の穴）を真ん中へ縮める（以前は泡だけ消えて、船の下の水面の穴が残っていた）
-            const keelY = shape.levelY[shape.kFirst];
             if (localWaterY < keelY) hwLocal *= Math.max(0, 1 - (keelY - localWaterY) / band);
             // 水面が甲板（その場所の舷側の上の縁：hullDeckTopAt）より上：その断面は水をかぶっている。喫水線を真ん中へ縮める
             //（甲板の上に水が見え、甲板の上の煙突・甲板室のまわりに喫水線を引かない）
@@ -864,7 +867,8 @@ function createWater() {
             if (localWaterY > deckTop) {
                 hwLocal *= Math.max(0, 1 - (localWaterY - deckTop) / band); wet = 0;
             }
-            return { alongLocal, hwLocal, wet };
+            toWorld(alongLocal, sign, hwLocal, localWaterY);
+            return { alongLocal, hwLocal, wet, wx: _P.x, wz: _P.z };
         };
 
         // パーティクル側（18-hull-wake-physics.js）と共有する実喫水線テーブル
@@ -889,8 +893,8 @@ function createWater() {
             const u = uOf(i);
             const rs = solveStation(u, 1);
             const rp = solveStation(u, -1);
-            stbd.along[i] = rs.alongLocal; stbd.hw[i] = rs.hwLocal; stbd.wet[i] = rs.wet;
-            port.along[i] = rp.alongLocal; port.hw[i] = rp.hwLocal; port.wet[i] = rp.wet;
+            stbd.along[i] = rs.alongLocal; stbd.hw[i] = rs.hwLocal; stbd.wet[i] = rs.wet; stbd.wx[i] = rs.wx; stbd.wz[i] = rs.wz;
+            port.along[i] = rp.alongLocal; port.hw[i] = rp.hwLocal; port.wet[i] = rp.wet; port.wx[i] = rp.wx; port.wz[i] = rp.wz;
         }
 
         // along方向の単調性を保証する。各stationが自分の局所水面高さで輪郭を引くため、
@@ -913,17 +917,16 @@ function createWater() {
         // ポリゴンを一周させる: 右舷を船尾→船首、左舷を船首→船尾。
         // 点数・並び順は毎フレーム同一（N_SIDE*2点）なので、離水した区間も
         // 点を間引かずwet=0で消す（v165で確立した方針をそのまま踏襲）。
-        const emit = (alongLocal, hwLocal, wet, sign) => {
+        // 点の位置は、船の今の姿勢で求めた世界の位置（solveStation）
+        const emit = (W, i) => {
             if (n >= MAX_WL_PTS) return;
-            const alongW = alongLocal * physScale;
-            const hwW = hwLocal * physScale;
-            pxArr[n]  = cx + sinT * alongW + cosT * sign * hwW;
-            pzArr[n]  = cz + cosT * alongW - sinT * sign * hwW;
-            wetArr[n] = wet;
+            pxArr[n]  = W.wx[i];
+            pzArr[n]  = W.wz[i];
+            wetArr[n] = W.wet[i];
             n++;
         };
-        for (let i = 0; i < N_SIDE; i++) emit(stbd.along[i], stbd.hw[i], stbd.wet[i], 1);
-        for (let i = N_SIDE - 1; i >= 0; i--) emit(port.along[i], port.hw[i], port.wet[i], -1);
+        for (let i = 0; i < N_SIDE; i++) emit(stbd, i);
+        for (let i = N_SIDE - 1; i >= 0; i--) emit(port, i);
 
         waterUniforms.wlPtCount.value = n;
         waterUniforms.hullBoundCenter.value.set(cx, cz);
