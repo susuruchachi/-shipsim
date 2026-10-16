@@ -175,6 +175,9 @@ document.addEventListener('visibilitychange', () => {
                 if (typeof minimapReset === 'function') minimapReset();
                 if (typeof _wm !== 'undefined') { _wm.detail = null; _wm.detailKey = ''; }
                 if (typeof bloomTargetsDirty === 'function') bloomTargetsDirty();
+                // 送り直しても真っ黒のままのテクスチャがある（画像そのものが壊れている）。⚡ 軽量化タブの「テクスチャを読み込み直す」と
+                // 同じことを自動で行い、他の船の形も作り直す（42-texture-guard.js）
+                if (typeof texRecover === 'function') setTimeout(() => texRecover('context'), 1000);
             } catch (err) { console.warn('[Perf] 送り直しに失敗しました', err); }
         }, false);
     };

@@ -378,8 +378,95 @@ async function reloadModelTextures() {
         resent++;
     }
     if (typeof bloomTargetsDirty === 'function') bloomTargetsDirty();
+    // 読み込み直しても空の画像は、もともと空とみなす（処理落ちのたびに読み込み直さないように）
+    if (typeof texNoteBlankImages === 'function') texNoteBlankImages(importedModelGroup, 1000);
     const st = ctx.stats;
     say(`読み込み直しました：${redone} 枚を展開し直し${resent ? `・${resent} 枚を送り直し` : ''}${st.failed || failed ? `（${st.failed + failed} 枚は読み込めず）` : ''}`);
 }
 window.reloadModelTextures = reloadModelTextures;
 window.texRememberGltf = texRememberGltf;
+
+// ════════════════════════════════════════════════════════════
+//  処理落ちのあと、自動で直す
+// ════════════════════════════════════════════════════════════
+// スマホなどで一度処理落ちすると（描画が捨てられて戻る・数秒止まる）、画像のテクスチャが真っ黒になり、
+// 他の船が（地図・汽笛ではいるのに）見えなくなることがあった。⚡ 軽量化タブのボタンで直るので、それを自動で行う：
+//  ・描画が捨てられて戻った（webglcontextrestored：33-performance.js から）→ 自分の船のテクスチャを読み込み直し、他の船の形を作り直す
+//  ・画面が見えているのに 2.5 秒以上止まった → 自分の船・他の船（保存した船）のテクスチャを調べ、空（真っ黒・透明）や
+//    使えなくなった画像があったときだけ読み込み直す。他の船の形は作り直す
+//  ・続けて何度も走らないよう、30 秒に 1 回まで
+// 読み込んだときから空の画像（黒一色の絵など）は覚えておき、壊れたとは数えない
+const _texKnownBlank = new WeakSet();
+const texRecovery = { lastT: -1e9, busy: false, count: 0 };
+window.texRecovery = texRecovery;
+// 調べ方：閉じられた・大きさが 0 の画像、または読み込んだときは空でなかったのに空になった画像
+function _texImageBroken(img) {
+    if (!img) return false;
+    if ((img.width === 0 || img.height === 0)) return true;
+    if (_texKnownBlank.has(img)) return false;
+    let blank = false;
+    try { blank = _texLooksBlank(img); } catch (e) { return true; }
+    return blank;
+}
+function _texImagesOf(root) {
+    const out = new Set();
+    if (!root) return out;
+    root.traverse(o => {
+        const mats = !o.material ? [] : Array.isArray(o.material) ? o.material : [o.material];
+        // 読み込んだ画像（ImageBitmap・img）だけ。GLTFLoader は ImageBitmap を CanvasTexture に入れるので、テクスチャの種類では分けない
+        //（プログラムで描いたキャンバス・数値の表は、壊れても描き直せるので調べない）
+        for (const m of mats) for (const k in m) {
+            const t = m[k], im = t && t.isTexture ? t.image : null;
+            if (im && ((typeof ImageBitmap !== 'undefined' && im instanceof ImageBitmap) || (typeof HTMLImageElement !== 'undefined' && im instanceof HTMLImageElement))) out.add(im);
+        }
+    });
+    return out;
+}
+// 読み込んだモデルの、もともと空の画像を覚える（読み込みが落ち着いてから、少しずつ）
+function texNoteBlankImages(root, delayMs) {
+    setTimeout(() => {
+        for (const img of _texImagesOf(root)) {
+            if (!img || !img.width) continue;
+            try { if (_texLooksBlank(img)) _texKnownBlank.add(img); } catch (e) { /* ignore */ }
+        }
+    }, delayMs == null ? 4000 : delayMs);
+}
+window.texNoteBlankImages = texNoteBlankImages;
+function texFindBroken(root) {
+    let n = 0;
+    for (const img of _texImagesOf(root)) if (_texImageBroken(img)) n++;
+    return n;
+}
+window.texFindBroken = texFindBroken;
+// reason：'context'（描画が戻った）・'stall'（止まった）
+async function texRecover(reason) {
+    const now = performance.now();
+    if (texRecovery.busy || now - texRecovery.lastT < 30000) return;
+    texRecovery.lastT = now; texRecovery.busy = true;
+    try {
+        const own = (typeof importedModelGroup !== 'undefined' && importedModelGroup) ? importedModelGroup : null;
+        const broken = own ? texFindBroken(own) : 0;
+        const doOwn = own && (reason === 'context' || broken > 0);
+        console.warn(`[TextureGuard] 処理落ちのあと（${reason === 'context' ? '描画が戻った' : '止まった'}）：自分の船の壊れたテクスチャ ${broken} 枚${doOwn ? '・読み込み直します' : ''}`);
+        // 他の船：形を作り直す（保存した船は、テクスチャが壊れていればモデルを読み直す）
+        if (typeof trafficRebuildMeshes === 'function') trafficRebuildMeshes(reason === 'context');
+        if (doOwn) { texRecovery.count++; await reloadModelTextures(); }
+    } catch (e) { console.warn('[TextureGuard] 自動の読み込み直しに失敗しました', e); }
+    texRecovery.busy = false;
+}
+window.texRecover = texRecover;
+// 画面が見えているのに長く止まったか（requestAnimationFrame の間隔）。裏に回っていた間・その直後は数えない
+(function watchStalls() {
+    let last = 0, shownAt = 0;
+    document.addEventListener('visibilitychange', () => { last = 0; shownAt = performance.now(); });
+    const tick = (now) => {
+        if (last && !document.hidden && now - last > 2500 && now - shownAt > 3000 && !window.glContextLost) {
+            const gap = now - last;
+            // 止まった間の仕事（モデルの読み込みなど）が落ち着いてから調べる
+            setTimeout(() => { console.warn(`[TextureGuard] 画面が ${(gap / 1000).toFixed(1)} 秒止まりました`); texRecover('stall'); }, 1500);
+        }
+        last = now;
+        requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+})();

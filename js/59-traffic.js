@@ -3359,6 +3359,8 @@ async function _tfLoadProto(v) {
         // 窓の明るさの倍率（その船の設定の「窓の発光の強さ」。無ければ 1）
         const lt = v.cfg.lighting || {};
         const glowMult = Number.isFinite(+lt.windowGlowMult) && lt.windowGlowMult !== '' && lt.windowGlowMult != null ? Math.max(0, +lt.windowGlowMult) : 1;
+        // もともと空の画像を覚えておく（処理落ちのあとに、壊れたと数えない：42-texture-guard.js）
+        if (typeof texNoteBlankImages === 'function') texNoteBlankImages(inner, 3000);
         Object.assign(P, { state: 'ok', glow: [...glow], glowMult, obj: inner, S, wl, cx: (box.min.x + box.max.x) / 2, cz: (box.min.z + box.max.z) / 2, len, wid: box.max.x - box.min.x, keel: box.min.y, funnels, lamps, bytes: _tfProtoBytes(inner) });
         traffic.protoBytes = traffic.protoBytes || new Map(); traffic.protoBytes.set(v.key, P.bytes);
     } catch (e) {
@@ -3387,6 +3389,22 @@ function trafficFreeMemory(sec) {
     for (const [key, P] of [..._tfProto]) if (P.state !== 'loading') _tfProtoDispose(key);
 }
 window.trafficFreeMemory = trafficFreeMemory;
+// 処理落ちのあと（42-texture-guard.js の texRecover）：他の船の形を全部作り直す（次のフレームで、見える船から作られる）。
+// 処理落ちのあと、地図・汽笛ではいるのに見えない船があった。保存した船は、モデルのテクスチャが壊れていればモデルを読み直す
+//（ctx：描画が戻った。そのときは、捨てられたときに外してあるので、そのまま読み直す）
+function trafficRebuildMeshes(ctx) {
+    let n = 0;
+    for (const S of traffic.ships) if (S.mesh) { _tfDropMesh(S); n++; }
+    let re = 0;
+    for (const [key, P] of [..._tfProto]) {
+        if (P.state !== 'ok' || !P.obj) continue;
+        if (ctx || (typeof texFindBroken === 'function' && texFindBroken(P.obj) > 0)) { _tfProtoDispose(key); re++; }
+    }
+    if (ctx && traffic.savedHoldUntil) traffic.savedHoldUntil = Math.min(traffic.savedHoldUntil, performance.now() + 30000);
+    console.warn(`[Traffic] 処理落ちのあと：他の船 ${n} 隻の形を作り直します${re ? `（保存した船のモデル ${re} つを読み直し）` : ''}`);
+    return n;
+}
+window.trafficRebuildMeshes = trafficRebuildMeshes;
 // 保存した船の形（読み込んだモデルを写す。形・材質は共有）
 function _tfBuildSavedMesh(S, P) {
     const g = new THREE.Group(), wrap = new THREE.Group();
