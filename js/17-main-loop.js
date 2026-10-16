@@ -651,6 +651,8 @@ function animate() {
     }
 
     updateWaterReflection();
+    // 船の後ろに残る泡の帯（68-wake-foam-map.js。物理の時間で薄れる）
+    if (typeof updateWakeFoamMap === 'function') updateWakeFoamMap(isDesignMode ? 0 : physicsDt);
     // SWE流体シミュ（海面を消しているときは結果を使わないので止める）
     if (typeof updateSWE === 'function' && !(waterMesh && !waterMesh.visible)) updateSWE(dt, t);
     updateWater(t);
@@ -934,6 +936,9 @@ function updateWaterReflection() {
     // 水面メッシュを一時的に非表示にして反射には映らないようにする
     const wasVisible = waterMesh.visible;
     waterMesh.visible = false;
+    // 遠くの水面（44-world-terrain.js）も。この反射の絵を読んで色を決めているので、映すと自分の色を読み返してしまう
+    const farWaterWas = (typeof _trFarWater !== 'undefined' && _trFarWater) ? _trFarWater.visible : null;
+    if (farWaterWas !== null) _trFarWater.visible = false;
     // 霧の灯りのにじみは、メインカメラから見た奥行きで隠れるかを調べているので、
     // 反射カメラの絵には描かない（反射では見当違いの所で隠れてしまうため）
     const haloWasVisible = (typeof glowHaloPoints !== 'undefined' && glowHaloPoints) ? glowHaloPoints.visible : null;
@@ -959,6 +964,7 @@ function updateWaterReflection() {
     } finally {
         // 例外が発生してもクリップ平面・waterMesh の状態を必ず元に戻す
         waterMesh.visible = wasVisible;
+        if (farWaterWas !== null) _trFarWater.visible = farWaterWas;
         if (haloWasVisible !== null) glowHaloPoints.visible = haloWasVisible;
         if (wakePtsWas !== null) wakeParticlePoints.visible = wakePtsWas;
         if (bubPtsWas !== null) bubblePoints.visible = bubPtsWas;

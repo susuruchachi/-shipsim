@@ -408,6 +408,10 @@ function createWater() {
         seabedRect: { value: new THREE.Vector4(0, 0, 1, 0) },
         // 浅瀬・岩礁・波打ち際の白い泡の強さ（波の高さから。17-main-loop.js の updateWater で）
         shoalFoamK: { value: 0.0 },
+        // 船の後ろに残る泡の帯（68-wake-foam-map.js が毎フレーム書く泡の地図）。
+        //  wakeFoamTex：r＝白い泡、g＝泡の混じった水（明るい青緑の帯）。wakeFoamRect：中心 x,z・一辺・使うか(1/0)
+        wakeFoamTex:  { value: null },
+        wakeFoamRect: { value: new THREE.Vector4(0, 0, 1, 0) },
         normalMap1: { value: wNorm1 },
         normalMap2: { value: wNorm2 },
         normalMap3: { value: wNorm3 },
@@ -963,6 +967,45 @@ function createWater() {
     });
     window._waterUniforms = waterUniforms;
 
+    // ── 遠くの水面の色 ──
+    // 細かい波が画面で見分けられないほど遠い所で、下の水面の式（細かい波の傾き・高さ・白波）が平均してどうなるかを
+    // まとめた式。波の水面（±1.8km の四角）の端と、その外の遠くの水面（44-world-terrain.js）の両方で使う
+    // （以前は遠くの水面だけ別の簡単な式で、空の映り込みが反射の絵ではなく一定の色・水の中で散らばる光が無い・
+    //  太陽の照り返しの式も違う、で、近くの海と色が食い違っていた）。
+    //  reflCol：反射の絵（水面に映る空・船・陸）の色。n は水平（大きいうねりも平均すると水平）
+    window.WATER_FAR_GLSL = `
+        vec3 waterFarColor(vec3 viewDir, vec3 reflCol) {
+            float U = max(windSpeedU, 0.0);
+            // 細かい波の傾きの二乗平均（下の水面の式と同じ：Cox & Munk。4 層を合わせたもの）
+            float slopeRms = sqrt(0.003 + 0.00512 * U) * 1.5;
+            float wGrow = smoothstep(1.5, 12.0, U);
+            float s4 = slopeRms * 0.62, s1 = slopeRms * 0.52;
+            float s2 = slopeRms * mix(0.22, 0.48, wGrow), s3 = slopeRms * mix(0.12, 0.30, wGrow) + 0.03;
+            float slopeVar = s4 * s4 + s1 * s1 + s2 * s2 + s3 * s3;
+            // 海の色（波の山・谷が平均して、逆光ほど透けて明るい）と、水の中で散らばった太陽の光
+            vec3 lookH = vec3(-viewDir.x, 0.0, -viewDir.z) + 1.0e-5;
+            vec3 sunH = vec3(sunDir.x, 0.0, sunDir.z) + 1.0e-5;
+            float backLit = pow(max(0.0, dot(normalize(lookH), normalize(sunH))), 2.0);
+            vec3 col = mix(deepColor, shallowColor, 0.18 * (0.55 + 0.45 * backLit));
+            col += shallowColor * sunColor * pow(max(0.0, sunDir.y), 2.0) * 0.45;
+            // 太陽の照り返し（見分けられない凹凸の分だけ広く弱く）
+            float specExp = clamp(2.0 / max(slopeVar * 1.2, 0.0154), 24.0, 130.0);
+            vec3 halfDir = normalize(sunDir + viewDir);
+            vec3 spec = sunColor * pow(max(0.0, halfDir.y), specExp) * (specExp + 8.0) / 138.0 * 1.5;
+            // 空の映り込み（シュリックの近似）・白波（海面のうち白波の割合）・泡の筋・反射の絵。
+            // 波立った海を斜めに見ると、手前を向いた面ばかりが見える（向こう向きの面は波の陰に隠れる）ので、
+            // 平らな水面より映り込みが弱い（近くの水面は細かい波の傾き・うねりの形でこれが自然に出る。
+            // その平均に合うよう、傾きの二乗と見る角度の浅さから、面の向きを見る向きへ寄せる）
+            float cosV = max(0.0, viewDir.y);
+            float tiltV = slopeRms * slopeRms * 0.62 * pow(1.0 - cosV, 4.0);
+            float fresnel = 0.02 + 0.98 * pow(1.0 - min(1.0, cosV + tiltV), 5.0);
+            col = mix(col, skyReflColor, fresnel * 0.38);
+            float foam = clamp(whitecapU.y * 0.6 + whitecapU.z * 0.1, 0.0, 1.0);
+            col = mix(col + spec, foamColor, foam);
+            return mix(col, reflCol, fresnel * reflectionStrength * (1.0 - foam * 0.7));
+        }
+    `;
+
     const waterMat = new THREE.ShaderMaterial({
         uniforms: waterUniforms,
         transparent: false,
@@ -1419,6 +1462,7 @@ function createWater() {
 
                 // SWE displacement（流体シミュ有効時）
                 float sweH = 0.0;
+                float wakeCrestFoam = 0.0;
                 vSWEFoam = 0.0;
                 if (sweEnabled) {
                     vec2 origin = sweGridOrigin - vec2(sweGridSize * 0.5);
@@ -1437,12 +1481,13 @@ function createWater() {
                     if (wp.x >= wakeBox.x && wp.x <= wakeBox.z && wp.z >= wakeBox.y && wp.z <= wakeBox.w) {
                         vec2 wk = wakeHF(wp.xz, time);
                         oceanH += wk.x;
-                        foam = max(foam, wk.y);
+                        wakeCrestFoam = wk.y;
                     }
                 }
 
                 wp.y += oceanH + sweH;
-                vColor    = vec3(foam, depthRatio, 0.0);
+                // b：引き波（船首・船尾の波）の山の泡。フラグメント側でまだらにして白く塗る
+                vColor    = vec3(foam, depthRatio, wakeCrestFoam);
                 vWorldPos = wp.xyz;
 
                 // 【反射方式修正】このワールド座標(波の高さ込み)を「反射カメラ視点の
@@ -1462,7 +1507,9 @@ function createWater() {
                     float hX = oceanWaveHC(wp.xz + vec2(eps, 0.0), time, h, w).x - oceanH;
                     float hZ = oceanWaveHC(wp.xz + vec2(0.0, eps), time, h, w).x - oceanH;
                     vec3 approxNormal = normalize(vec3(-hX / eps, 1.0, -hZ / eps));
-                    vNormal   = normalize(normalMatrix * approxNormal);
+                    // 世界の座標のまま（フラグメント側は視線・太陽の向きを世界の座標で扱う。以前は normalMatrix で
+                    // カメラの座標に直していて、カメラの向き・見下ろす角度によって海の明るさ・照り返しの位置がずれていた）
+                    vNormal   = approxNormal;
                 } else {
                     vNormal = vec3(0.0, 1.0, 0.0);
                 }
@@ -1524,6 +1571,8 @@ function createWater() {
             uniform sampler2D seabedTex;
             uniform vec4      seabedRect;
             uniform float     shoalFoamK;
+            uniform sampler2D wakeFoamTex;
+            uniform vec4      wakeFoamRect;
             // 太陽シャドウ（v83: 自前サンプリング。Three.js標準のreceiveShadowは
             // 完全自前シェーダーには自動適用されないため、手動で判定する）
             uniform sampler2D sunShadowMap;
@@ -1690,6 +1739,8 @@ function createWater() {
                 return lColor * (refl + diff);
             }
 
+            ${window.WATER_FAR_GLSL}
+
             void main() {
                 // 画素ごとの対数深度（標準の材質と同じ式）。水面は 0.02% 奥へ（船体の水面下と際どいときに船体が勝つように。
                 // 画素ごとに奥行きを書くと polygonOffset は効かないので、その代わり）
@@ -1826,7 +1877,34 @@ function createWater() {
                     float sRes = 1.0 - smoothstep(0.3, 3.0, footprint);
                     streak = mix(0.1, smoothstep(1.2, 2.6, sh * 0.75 + sh2 * 0.45) * mix(0.5, 1.0, lace), sRes) * whitecapU.z;
                 }
-                float foam = clamp(whitecap + streak + vSWEFoam * 0.6 + hullEdgeFoam * 0.75, 0.0, 1.0);
+                // ── 引き波の泡 ──
+                // ① 船首・船尾の波（ケルビン波）の山が砕けた泡（頂点シェーダーが vColor.b に入れる）。
+                //    以前は大きい波の山の泡と一緒に白く塗っていたが、白波を風速で決めるようにしてから（0.03.016.015）
+                //    ほとんど出なくなっていた。細かい波でまだらに、山の高い所ほど白く
+                float wkCrest = clamp(vColor.b, 0.0, 1.0);
+                float wakeFoam = smoothstep(0.12, 0.45, wkCrest * mix(0.4, 1.6, lace)) * mix(0.35, 0.8, wkCrest);
+                // ② 船尾の後ろに残る泡の帯（スクリューと船体の渦で泡立った水。68-wake-foam-map.js）。
+                //    すぐ後ろは一面に白く、古くなる（薄くなる）ほど細かい波の模様で千切れて、まだらな泡の筋になり、
+                //    泡が消えた後も、細かい泡の混じった明るい青緑の帯がしばらく残る
+                float trailAir = 0.0;
+                if (wakeFoamRect.w > 0.5) {
+                    vec2 fuv = (worldXZ - wakeFoamRect.xy) / wakeFoamRect.z + 0.5;
+                    float fEdge = min(min(fuv.x, fuv.y), min(1.0 - fuv.x, 1.0 - fuv.y));
+                    if (fEdge > 0.0) {
+                        vec2 tf = texture2D(wakeFoamTex, fuv).rg * smoothstep(0.0, 0.06, fEdge);
+                        // 千切れ方の模様（小波・さざ波・さらに細かい模様。見分けられない遠くでは平均の濃さ）。
+                        // 泡が濃い（新しい）ほど覆う割合が多く（すぐ後ろでも 9 割ほど。間に青緑の水がのぞく）、
+                        // 古くなるほど、まだらな泡の島と筋だけが残る。古い泡ほど薄い
+                        float pn = 0.5 * hg1 * res1 + 0.5 * hg4 * res4 + 0.35 * hg5 * res5 + 0.3 * hg2 * res2;
+                        float pRes = max(max(res4, res1), 0.001);
+                        float thr = mix(3.5, -1.4, pow(tf.r, 0.4));
+                        float trailNear = smoothstep(thr - 0.1, thr + 0.4, pn) * mix(0.55, 1.0, lace) * smoothstep(0.0, 0.06, tf.r);
+                        float trailFoam = mix(tf.r * 0.7, trailNear, smoothstep(0.05, 0.5, pRes)) * mix(0.5, 0.95, tf.r);
+                        wakeFoam = max(wakeFoam, trailFoam);
+                        trailAir = tf.g;
+                    }
+                }
+                float foam = clamp(whitecap + streak + wakeFoam + vSWEFoam * 0.6 + hullEdgeFoam * 0.75, 0.0, 1.0);
                 
                 // 船体・煙突などが太陽を遮っているかを判定（日陰では直射成分だけを弱める。
                 // 空からの拡散光であるskyRefl等はここでは減衰させない＝影が真っ黒にならない）
@@ -1842,6 +1920,8 @@ function createWater() {
                 float crestH = clamp((0.45 * hg1 * res1 + 0.55 * hg2 * res2 + 0.35 * hg3) * 0.35, -1.0, 1.0);
                 float depth = clamp(0.18 + (vColor.g - 0.5) * 0.45 + max(crestH, 0.0) * (0.25 + 0.5 * wGrow), 0.0, 1.0) * (0.55 + 0.45 * backLit);
                 vec3 waterBase = mix(deepColor, shallowColor, depth);
+                // 泡の混じった水（引き波の帯）は、水の中で光が散らばって明るい青緑に見える
+                waterBase = mix(waterBase, shallowColor * 2.4 + deepColor * 0.5, trailAir * 0.45);
                 // ── とても浅い所（8m 未満）だけ、水の色が少し明るい砂色寄りになる ──
                 // 以前は深さ 200m まで海底の絵（砂・岩・海草のまだら）が透けて見えていたが、透けすぎで模様も
                 // 不自然だったので、模様は使わず深さだけで、ごく薄く色を変える。
@@ -1958,12 +2038,9 @@ function createWater() {
                     float edgeUv = min(min(vUv.x, vUv.y), min(1.0 - vUv.x, 1.0 - vUv.y));
                     float toFar = 1.0 - smoothstep(0.0, 0.11, edgeUv);
                     if (toFar > 0.0) {
-                        vec3 nf = vec3(0.0, 1.0, 0.0);
-                        float frF = pow(1.0 - max(0.0, dot(nf, viewDir)), 4.0);
-                        vec3 farCol = mix(mix(deepColor, shallowColor, 0.2), skyReflColor, 0.12 + frF * 0.5);
-                        farCol += sunColor * pow(max(0.0, dot(nf, normalize(sunDir + viewDir))), 60.0) * 0.6;
-                        farCol = mix(farCol, foamColor, whitecapU.y * 0.45);
-                        finalColor = mix(finalColor, farCol, toFar);
+                        // 反射の絵は、波で揺らさない位置で読む（遠くの水面と同じ）
+                        vec3 reflFar = texture2D(reflectionTex, clamp(vReflectUv.xy / max(vReflectUv.w, 1e-5), 0.002, 0.998)).rgb;
+                        finalColor = mix(finalColor, waterFarColor(viewDir, reflFar), toFar);
                     }
                 }
                 // 霧：船や空と同じ FogExp2 の式。以前は水面だけ霧を受けず、霧の中でも

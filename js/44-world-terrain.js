@@ -904,6 +904,7 @@ function _trFarWaterMesh() {
     const mat = new THREE.ShaderMaterial({
         uniforms: {
             deepColor: U.deepColor, shallowColor: U.shallowColor, sunDir: U.sunDir, sunColor: U.sunColor, skyReflColor: U.skyReflColor, whitecapU: U.whitecapU, foamColor: U.foamColor,
+            windSpeedU: U.windSpeedU, reflectionTex: U.reflectionTex, reflectionStrength: U.reflectionStrength, textureMatrix: U.textureMatrix,
             waterFogColor: U.waterFogColor, waterFogDensity: U.waterFogDensity, uBloomDark: U.uBloomDark,
         },
         // 深度は地形・船・近くの水面と同じ対数深度（04-scene-and-water-init.js の水面と同じ式）にそろえる。
@@ -918,9 +919,12 @@ function _trFarWaterMesh() {
                     uniform float logDepthBufFC;
                 #endif
             #endif
+            uniform mat4 textureMatrix;
             varying vec3 vW;
+            varying vec4 vReflectUv;
             void main() {
                 vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz;
+                vReflectUv = textureMatrix * w;   // 反射の絵の上の位置（近くの水面と同じ）
                 gl_Position = projectionMatrix * viewMatrix * w;
                 #ifdef USE_LOGDEPTHBUF
                     #ifdef USE_LOGDEPTHBUF_EXT
@@ -935,10 +939,14 @@ function _trFarWaterMesh() {
             }`,
         fragmentShader: `
             uniform vec3 deepColor, shallowColor, sunDir, sunColor, waterFogColor, skyReflColor;
-            uniform vec4 whitecapU;   // y＝白波の割合（近くの水面と同じ）
+            uniform vec4 whitecapU;   // y＝白波の割合・z＝泡の筋（近くの水面と同じ）
             uniform vec3 foamColor;
+            uniform float windSpeedU, reflectionStrength;
+            uniform sampler2D reflectionTex;
             uniform float waterFogDensity, uBloomDark;
             varying vec3 vW;
+            varying vec4 vReflectUv;
+            ${window.WATER_FAR_GLSL || ''}
             #if defined( USE_LOGDEPTHBUF ) && defined( USE_LOGDEPTHBUF_EXT )
                 uniform float logDepthBufFC;
                 varying float vFragDepthW; varying float vFragPersp;
@@ -950,16 +958,10 @@ function _trFarWaterMesh() {
                 #endif
                 if (uBloomDark > 0.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
                 vec3 viewDir = normalize(cameraPosition - vW);
-                vec3 n = vec3(0.0, 1.0, 0.0);
-                // 遠くは斜めに見るので、浅い海でも海底は透けない：普通の海の色（近くの水面の端も同じ色へ戻してある）
-                vec3 base = mix(deepColor, shallowColor, 0.2);
-                float fresnel = pow(1.0 - max(0.0, dot(n, viewDir)), 4.0);
-                vec3 skyRefl = skyReflColor;
-                vec3 col = mix(base, skyRefl, 0.12 + fresnel * 0.5);
-                vec3 halfDir = normalize(sunDir + viewDir);
-                col += sunColor * pow(max(0.0, dot(n, halfDir)), 60.0) * 0.6;
-                // 風が強いと、遠くの海も白波で白っぽく（近くの水面の端と同じ式）
-                col = mix(col, foamColor, whitecapU.y * 0.45);
+                // 近くの水面を遠くから見たときと同じ式（04-scene-and-water-init.js の WATER_FAR_GLSL）。
+                // 遠くは斜めに見るので、浅い海でも海底は透けない。空・陸の映り込みは近くの水面と同じ反射の絵から
+                vec3 reflCol = texture2D(reflectionTex, clamp(vReflectUv.xy / max(vReflectUv.w, 1e-5), 0.002, 0.998)).rgb;
+                vec3 col = waterFarColor(viewDir, reflCol);
                 float fd = length(vW - cameraPosition) * waterFogDensity;
                 col = mix(col, waterFogColor, clamp(1.0 - exp(-fd * fd), 0.0, 1.0));
                 gl_FragColor = vec4(col, 1.0);
