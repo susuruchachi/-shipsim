@@ -395,7 +395,10 @@
 //               Xperia 5 III（Adreno）で、焼き込みの計算中・焼き込みを使わない夜に船が赤くなるのを直す：実機の検査で、船のシェーダーで
 //               画素へ渡す値（varying）が 9 個を超えると色が壊れると分かった（float 1 つも 1 個に数えられる。以前の真っ青も同じ原因）。
 //               霧の深さ・奥行き 2 つ・空の見え方の 4 つの float を 1 つにまとめ（ふだん 9 個 → 6 個）、Adreno では面光源の影を付けない
-var APP_VERSION = '0.03.017.000';
+// 0.03.018.000 挨拶の汽笛への返事：自分の船が長音 3 回（汽笛信号の「汽笛の挨拶」・出港の汽笛・📯 ボタンか H キーで 1.5 秒以上を 3 回）を
+//               鳴らすと、3km 以内の船（停泊・錨泊中も）が近い順に 3 隻まで、少しずつ間をずらして長音 3 回で返す（遠い船ほど遅れて届く）。
+//               同じ船は 1 分に 1 回まで。被弾して漂っている船は返さない。他の船の汽笛を「鳴らさない」にしているときは返さない
+var APP_VERSION = '0.03.018.000';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

@@ -360,6 +360,21 @@ function _mainHornIdx() {
 }
 function hornPressMain() { _mainHornIdx().forEach(hornPress); }
 function hornReleaseMain() { _mainHornIdx().forEach(hornRelease); }
+// 手で鳴らす汽笛（📯 ボタン・H キー）：鳴らした長さを覚えて、長音（1.5 秒以上）を 3 回続けたら挨拶とみなし、
+// 近くの船が返事をする（59-traffic.js の trafficGreetReply）。4 秒鳴らさなければ、そこまでの並びで見る
+const _manualHorn = { t0: 0, blasts: [], timer: 0 };
+function hornManualDown() { hornPressMain(); _manualHorn.t0 = performance.now(); clearTimeout(_manualHorn.timer); }
+function hornManualUp() {
+    hornReleaseMain();
+    const now = performance.now(), B = _manualHorn.blasts;
+    if (B.length && now - B[B.length - 1].end > 8000) B.length = 0;
+    B.push({ len: (now - _manualHorn.t0) / 1000, end: now });
+    clearTimeout(_manualHorn.timer);
+    _manualHorn.timer = setTimeout(() => {
+        if (B.length === 3 && B.every(b => b.len >= 1.5) && typeof trafficGreetReply === 'function') trafficGreetReply(0);
+        B.length = 0;
+    }, 4000);
+}
 // 霧中信号に使う汽笛（「霧中信号用」にチェックしたもの。無ければ 📯 用）
 function _fogHornIdx() {
     const idx = [];
@@ -380,13 +395,16 @@ function playHornSignal(pattern, role) {
     stopHornSignal();
     const press = role === 'fog' ? hornPressFog : hornPressMain;
     const release = role === 'fog' ? hornReleaseFog : hornReleaseMain;
-    let t = 0;
+    let t = 0, end = 0;
     for (const ch of pattern) {
         const d = ch === 'L' ? HORN_LONG : HORN_SHORT;
         _signalTimers.push(setTimeout(press, t * 1000));
         _signalTimers.push(setTimeout(release, (t + d) * 1000));
+        end = t + d;
         t += d + (ch === 'L' ? 2.0 : HORN_GAP);
     }
+    // 挨拶の汽笛（長音 3 回）：近くの船が返事をする（59-traffic.js）
+    if (pattern === 'LLL' && role !== 'fog' && typeof trafficGreetReply === 'function') trafficGreetReply(end);
 }
 function stopHornSignal() {
     for (const id of _signalTimers) clearTimeout(id);
@@ -867,7 +885,7 @@ function _bindHold(el, down, up) {
 // ── 画面のボタンとキー ──
 document.addEventListener('DOMContentLoaded', () => {
     const btn = document.getElementById('btn-horn');
-    if (btn) _bindHold(btn, hornPressMain, hornReleaseMain);
+    if (btn) _bindHold(btn, hornManualDown, hornManualUp);
     _hornSigSetup();
     renderSoundPanel();
 });
@@ -956,7 +974,7 @@ window.addEventListener('keydown', (e) => {
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
     if (e.repeat) return;
     const k = e.key.toLowerCase();
-    if (k === 'h' && !_keyHeld.h) { _keyHeld.h = true; hornPressMain(); }       // 操船信号用の汽笛を一斉に
+    if (k === 'h' && !_keyHeld.h) { _keyHeld.h = true; hornManualDown(); }     // 操船信号用の汽笛を一斉に
     if (k === 'g' && !_keyHeld.g) { _keyHeld.g = true; hornPressFog(); }        // 霧笛を一斉に
     if (/^[1-9]$/.test(k) && !_keyHeld[k]) {
         const i = parseInt(k, 10) - 1;
@@ -965,7 +983,7 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => {
     const k = e.key.toLowerCase();
-    if (k === 'h' && _keyHeld.h) { _keyHeld.h = false; hornReleaseMain(); }
+    if (k === 'h' && _keyHeld.h) { _keyHeld.h = false; hornManualUp(); }
     if (k === 'g' && _keyHeld.g) { _keyHeld.g = false; hornReleaseFog(); }
     if (/^[1-9]$/.test(k) && _keyHeld[k]) { _keyHeld[k] = false; hornRelease(parseInt(k, 10) - 1); }
 });

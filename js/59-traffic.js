@@ -3701,6 +3701,29 @@ function _tfPlayerHorn(pat) {
 }
 
 // ════════════════════════════════════════════════════════════════
+//  挨拶の汽笛への返事
+// ════════════════════════════════════════════════════════════════
+//  自分の船が挨拶の汽笛（長音 3 回：汽笛信号の「汽笛の挨拶」・出港の汽笛・汽笛を手で 3 回長く：36-horns.js）を鳴らしたら、
+//  近く（TF_GREET_R）の船が長音 3 回で返す。近い順に TF_GREET_MAX 隻まで、少しずつ間をずらして（遠い船ほど音が届くのが遅い）。
+//  停泊・錨泊中の船も返す。同じ船は 1 分に 1 回まで。被弾して漂っている船は返さない。
+//  after：自分の汽笛が鳴り終わるまで[秒]（そこから数える）
+const TF_GREET_R = 3000, TF_GREET_MAX = 3;
+function trafficGreetReply(after) {
+    if (!traffic.on || !traffic.horn) return 0;
+    const cand = traffic.ships.filter(S => _tfShown(S) && S.st !== 'damaged' && S.dPl < TF_GREET_R
+        && traffic.t - ((S.sigs && S.sigs.greet) ?? -1e9) >= 60).sort((a, b) => a.dPl - b.dPl).slice(0, TF_GREET_MAX);
+    if (!cand.length) return 0;
+    let t = (after || 0) + 2 + Math.random() * 2;
+    for (const S of cand) {
+        S.sigs = S.sigs || {}; S.sigs.greet = traffic.t;
+        _tfLater(0, () => { if (_tfShown(S) && S.st !== 'damaged') { _tfHorn(S, 'LLL'); _trMsgSafe(`${S.name}：長音 3 回（挨拶の返事）`); } }, t + S.dPl / 680);
+        t += 5 + Math.random() * 6;            // 次の船は、前の船の返事の途中から
+    }
+    return cand.length;
+}
+window.trafficGreetReply = trafficGreetReply;
+
+// ════════════════════════════════════════════════════════════════
 //  警告信号・変針の信号
 // ════════════════════════════════════════════════════════════════
 //  ・警告（短音 5 回）：進路が重なってきて（最接近が近く・7 分以内）、相手がよけていないとき。保持船（よけなくてよい方）が鳴らす
