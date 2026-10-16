@@ -5,21 +5,38 @@
 //   puffEmit({ x, y, z, vx, vy, vz, life, s0, s1, r, g, b, a, rise, drag, grav })
 //     s0 → s1：出たとき → 消えるときの大きさ[m]、a：濃さ、rise：浮き上がる加速度[m/s²]、
 //     drag：まわりの空気（風）に馴染む速さ[1/s]、grav：重力（しぶき）なら 1
+//     far: true で「他の船・タグの排煙」の層へ（下の描く順番を参照）
 //   updatePuffs(t, dt)：毎フレーム（17-main-loop.js）
+//
+// 描く順番：煙・しぶきは半透明で奥行きを書かないので、後に描いたものが手前に見える。以前は他の船の排煙も
+// 1つの描画で、自分の船の排煙・泡・しぶき（03）より後に描いていたため、ずっと奥の他の船の煙が、手前の
+// 自分の船の煙やしぶきの上に塗られて隠していた。他の船・タグの排煙は別の層にして、カメラから見て
+// 自分の船より奥にあるものが多いときは自分の船の効果より先に（奥として）、手前に多いときは後に描く。
 
-const PUFF_MAX = 1800;
-const puffState = { pts: null, geo: null, mat: null, n: 0, idx: 0, vel: new Float32Array(PUFF_MAX * 3), life: new Float32Array(PUFF_MAX),
-    s0: new Float32Array(PUFF_MAX), s1: new Float32Array(PUFF_MAX), a0: new Float32Array(PUFF_MAX), rise: new Float32Array(PUFF_MAX),
-    drag: new Float32Array(PUFF_MAX), grav: new Float32Array(PUFF_MAX) };
+const PUFF_MAX = 1800, PUFF_FAR_MAX = 1200;
+function _puffNewLayer(max) {
+    return { max, pts: null, geo: null, idx: 0, any: false, vel: new Float32Array(max * 3), life: new Float32Array(max),
+        s0: new Float32Array(max), s1: new Float32Array(max), a0: new Float32Array(max), rise: new Float32Array(max),
+        drag: new Float32Array(max), grav: new Float32Array(max) };
+}
+const puffState = Object.assign(_puffNewLayer(PUFF_MAX), { mat: null });   // 自分の船・波・砲などの粒
+const puffFar = _puffNewLayer(PUFF_FAR_MAX);                                // 他の船・タグの排煙
 
+function _puffMakePoints(layer, name, order) {
+    const max = layer.max;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(max * 3), 3));
+    geo.setAttribute('aCol', new THREE.BufferAttribute(new Float32Array(max * 3), 3));
+    geo.setAttribute('aAge', new THREE.BufferAttribute(new Float32Array(max).fill(2), 1));   // 0〜1、1を超えたら消えている
+    geo.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(max), 1));
+    geo.setAttribute('aAlpha', new THREE.BufferAttribute(new Float32Array(max), 1));
+    const pts = new THREE.Points(geo, puffState.mat);
+    pts.frustumCulled = false; pts.renderOrder = order; pts.userData.noBloom = true; pts.name = name;
+    scene.add(pts);
+    layer.pts = pts; layer.geo = geo;
+}
 function _puffInit() {
     if (puffState.pts || typeof scene === 'undefined' || !scene) return !!puffState.pts;
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(PUFF_MAX * 3), 3));
-    geo.setAttribute('aCol', new THREE.BufferAttribute(new Float32Array(PUFF_MAX * 3), 3));
-    geo.setAttribute('aAge', new THREE.BufferAttribute(new Float32Array(PUFF_MAX).fill(2), 1));   // 0〜1、1を超えたら消えている
-    geo.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(PUFF_MAX), 1));
-    geo.setAttribute('aAlpha', new THREE.BufferAttribute(new Float32Array(PUFF_MAX), 1));
     const mat = new THREE.ShaderMaterial({
         uniforms: {
             uPixelScale: { value: 500 },
@@ -68,68 +85,89 @@ function _puffInit() {
             }`,
         transparent: true, depthWrite: false, depthTest: true, blending: THREE.NormalBlending,
     });
-    const pts = new THREE.Points(geo, mat);
-    pts.frustumCulled = false; pts.renderOrder = 11; pts.userData.noBloom = true; pts.name = 'Puffs';
-    scene.add(pts);
-    Object.assign(puffState, { pts, geo, mat });
+    puffState.mat = mat;
+    _puffMakePoints(puffState, 'Puffs', 11);
+    _puffMakePoints(puffFar, 'PuffsFar', 9);
     return true;
 }
 
 function puffEmit(o) {
     if (!_puffInit()) return;
-    const i = puffState.idx; puffState.idx = (i + 1) % PUFF_MAX;
-    const G = puffState.geo.attributes;
+    const Ly = o.far ? puffFar : puffState;
+    const i = Ly.idx; Ly.idx = (i + 1) % Ly.max;
+    const G = Ly.geo.attributes;
     G.position.array.set([o.x, o.y, o.z], i * 3);
     G.aCol.array.set([o.r ?? 0.6, o.g ?? 0.6, o.b ?? 0.6], i * 3);
     G.aAge.array[i] = 0;
     G.aSize.array[i] = o.s0 ?? 2;
     G.aAlpha.array[i] = o.a ?? 0.5;
-    puffState.vel.set([o.vx || 0, o.vy || 0, o.vz || 0], i * 3);
-    puffState.life[i] = o.life || 4;
-    puffState.s0[i] = o.s0 ?? 2; puffState.s1[i] = o.s1 ?? 8;
-    puffState.a0[i] = o.a ?? 0.5;
-    puffState.rise[i] = o.rise ?? 0.6;
-    puffState.drag[i] = o.drag ?? 0.6;
-    puffState.grav[i] = o.grav || 0;
+    Ly.vel.set([o.vx || 0, o.vy || 0, o.vz || 0], i * 3);
+    Ly.life[i] = o.life || 4;
+    Ly.s0[i] = o.s0 ?? 2; Ly.s1[i] = o.s1 ?? 8;
+    Ly.a0[i] = o.a ?? 0.5;
+    Ly.rise[i] = o.rise ?? 0.6;
+    Ly.drag[i] = o.drag ?? 0.6;
+    Ly.grav[i] = o.grav || 0;
 }
 window.puffEmit = puffEmit;
 
 const _puffPush = { x: 0, y: 0, z: 0 };
-function updatePuffs(t, dt) {
-    if (typeof updateShoreSpray === 'function') updateShoreSpray(t, Math.min(0.1, Math.max(0, dt || 0)));
-    if (!puffState.pts) return;
-    dt = Math.min(0.1, Math.max(0, dt || 0));
-    const G = puffState.geo.attributes, P = G.position.array, A = G.aAge.array, S = G.aSize.array, V = puffState.vel;
-    // 風（排煙と同じ：03 / 12）
-    const wr = (physics.windDir || 0) * Math.PI / 180, ws = (physics.windSpeed || 0) * 0.5;
-    const wX = Math.sin(wr) * ws, wZ = Math.cos(wr) * ws;
-    let any = false;
-    const solidOn = typeof shipSolidPushOut === 'function' && window.shipSolid && shipSolid.G;
-    for (let i = 0; i < PUFF_MAX; i++) {
+// 1つの層の粒を動かす。戻り値：自分の船よりカメラに近い粒の割合（濃さで重み。粒が無ければ -1）
+function _puffStep(Ly, dt, wX, wZ, solidOn, cx, cy, cz, dOwn2) {
+    const G = Ly.geo.attributes, P = G.position.array, A = G.aAge.array, S = G.aSize.array, V = Ly.vel;
+    let any = false, wNear = 0, wAll = 0;
+    for (let i = 0; i < Ly.max; i++) {
         if (A[i] > 1) continue;
         any = true;
-        A[i] += dt / puffState.life[i];
-        const k = Math.min(1, puffState.drag[i] * dt), j = i * 3;
+        A[i] += dt / Ly.life[i];
+        const k = Math.min(1, Ly.drag[i] * dt), j = i * 3;
         V[j] += (wX - V[j]) * k; V[j + 2] += (wZ - V[j + 2]) * k;
-        V[j + 1] += (puffState.rise[i] - 9.8 * puffState.grav[i]) * dt - V[j + 1] * k * 0.5 * (1 - puffState.grav[i]);
+        V[j + 1] += (Ly.rise[i] - 9.8 * Ly.grav[i]) * dt - V[j + 1] * k * 0.5 * (1 - Ly.grav[i]);
         P[j] += V[j] * dt; P[j + 1] += V[j + 1] * dt; P[j + 2] += V[j + 2] * dt;
         const u = Math.min(1, A[i]);
-        S[i] = puffState.s0[i] + (puffState.s1[i] - puffState.s0[i]) * Math.sqrt(u);
+        S[i] = Ly.s0[i] + (Ly.s1[i] - Ly.s0[i]) * Math.sqrt(u);
         // しぶきは水面より下へ落ちたら消す
-        if (puffState.grav[i] > 0 && V[j + 1] < 0 && P[j + 1] < -0.5) A[i] = 2;
+        if (Ly.grav[i] > 0 && V[j + 1] < 0 && P[j + 1] < -0.5) A[i] = 2;
         // 船の中に入ったら（60-ship-solid.js）：煙・湯気は上へ押し出し、しぶきは消す
         else if (solidOn && shipSolidPushOut(P[j], P[j + 1], P[j + 2], _puffPush)) {
-            if (puffState.grav[i] > 0) A[i] = 2;
+            if (Ly.grav[i] > 0) A[i] = 2;
             else {
                 P[j] = _puffPush.x; P[j + 1] = _puffPush.y; P[j + 2] = _puffPush.z;
                 if (_puffPush.nx || _puffPush.nz) { const vn = V[j] * _puffPush.nx + V[j + 2] * _puffPush.nz; if (vn < 0.6) { V[j] += (0.6 - vn) * _puffPush.nx; V[j + 2] += (0.6 - vn) * _puffPush.nz; } }
                 else if (V[j + 1] < 0) V[j + 1] = 0;
             }
         }
+        if (dOwn2 > 0) {
+            const dx = P[j] - cx, dy = P[j + 1] - cy, dz = P[j + 2] - cz, w = Ly.a0[i] * S[i];
+            wAll += w; if (dx * dx + dy * dy + dz * dz < dOwn2) wNear += w;
+        }
     }
-    if (!any) return;
-    G.position.needsUpdate = true; G.aAge.needsUpdate = true; G.aSize.needsUpdate = true;
-    G.aCol.needsUpdate = true; G.aAlpha.needsUpdate = true;
+    if (any || Ly.any) {
+        G.position.needsUpdate = true; G.aAge.needsUpdate = true; G.aSize.needsUpdate = true;
+        G.aCol.needsUpdate = true; G.aAlpha.needsUpdate = true;
+    }
+    Ly.any = any;
+    return wAll > 0 ? wNear / wAll : -1;
+}
+function updatePuffs(t, dt) {
+    if (typeof updateShoreSpray === 'function') updateShoreSpray(t, Math.min(0.1, Math.max(0, dt || 0)));
+    if (!puffState.pts) return;
+    dt = Math.min(0.1, Math.max(0, dt || 0));
+    // 風（排煙と同じ：03 / 12）
+    const wr = (physics.windDir || 0) * Math.PI / 180, ws = (physics.windSpeed || 0) * 0.5;
+    const wX = Math.sin(wr) * ws, wZ = Math.cos(wr) * ws;
+    const solidOn = typeof shipSolidPushOut === 'function' && window.shipSolid && shipSolid.G;
+    _puffStep(puffState, dt, wX, wZ, solidOn, 0, 0, 0, 0);
+    // 他の船の排煙：カメラから自分の船までより近い粒が多ければ、自分の船の排煙・泡・しぶき（03：10〜12）の後に描く
+    let dOwn2 = 0, cx = 0, cy = 0, cz = 0;
+    if (typeof camera !== 'undefined' && camera && typeof shipGroup !== 'undefined' && shipGroup) {
+        cx = camera.position.x; cy = camera.position.y; cz = camera.position.z;
+        const hp = window.hullProfile, R = ((hp && hp.ready) ? hp.halfLen : 6) * (physics.scale || 1) * 0.5;
+        const d = Math.max(1, Math.hypot(shipGroup.position.x - cx, shipGroup.position.y + 10 - cy, shipGroup.position.z - cz) - R);
+        dOwn2 = d * d;
+    }
+    const nearFrac = _puffStep(puffFar, dt, wX, wZ, solidOn, cx, cy, cz, dOwn2);
+    if (nearFrac >= 0) puffFar.pts.renderOrder = nearFrac > 0.5 ? 13 : 9;
     const u = puffState.mat.uniforms;
     if (typeof camera !== 'undefined' && camera && typeof renderer !== 'undefined' && renderer)
         u.uPixelScale.value = renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));

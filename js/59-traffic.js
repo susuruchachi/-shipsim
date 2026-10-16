@@ -2424,16 +2424,18 @@ function _tfVisual(S, t, vis, night) {
         const old = _tfClassOf(S).era === 'old' || ['fishing', 'destroyer', 'cruiser'].includes(S.cls);
         const p = Math.min(1, (S.v || 0) / Math.max(1, S.vSea));
         const last = S.smokeT === undefined ? t : S.smokeT, dtS = Math.min(0.5, Math.max(0, t - last)); S.smokeT = t;
-        S.smokeAcc = (S.smokeAcc || 0) + dtS * (old ? 1.5 + 4 * p : 0.6 + 1.2 * p) * g.userData.funnels.length;
+        // 量・濃さ・色は自分の船の排煙（12-bloom-...js の既定：濃さ 0.6・灰色）に近く。以前は昔の船で
+        // 煙突1本あたり毎秒 5.5 粒・濃さ 0.65・黒に近い色で、真っ黒な太い帯になっていた
+        S.smokeAcc = (S.smokeAcc || 0) + dtS * (old ? 0.9 + 2.4 * p : 0.5 + 1.0 * p) * g.userData.funnels.length;
         while (S.smokeAcc >= 1) {
             S.smokeAcc -= 1;
             const f = g.userData.funnels[(Math.random() * g.userData.funnels.length) | 0];
             if (!f) break;
             const w = (g.userData.funnelParent || g).localToWorld(_tfV.copy(f));
-            const c = old ? 0.18 + Math.random() * 0.08 : 0.45 + Math.random() * 0.1;
+            const c = old ? 0.42 + Math.random() * 0.1 : 0.55 + Math.random() * 0.1;
             const vx = fx * (S.v || 0) * 0.5, vz = fz * (S.v || 0) * 0.5;
             puffEmit({ x: w.x, y: w.y, z: w.z, vx, vy: 2 + 2 * p, vz, life: 7 + Math.random() * 5, s0: Math.max(1.5, S.L * 0.012), s1: 12 + S.L * 0.06 * (old ? 1 : 0.5),
-                r: c, g: c, b: c * 1.03, a: old ? 0.4 + 0.25 * p : 0.12, rise: 0.5, drag: 0.4 });
+                r: c, g: c, b: c * 1.03, a: old ? 0.2 + 0.12 * p : 0.08, rise: 0.5, drag: 0.4, far: true });
         }
     }
 }
