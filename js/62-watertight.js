@@ -367,6 +367,8 @@ function _wtFollow() {
     _wt.root.matrixWorldNeedsUpdate = true;
 }
 window.wtRoot = () => _wt.root;
+// 船体の座標（横 p・高さ y・前後 a）→ 模型の座標 の回転（44-world-terrain.js の海底との当たりの点）
+window.wtRotM = () => _wtRot();
 // ── 表示（毎フレーム）──
 function _wtTabOpen() {
     const sp = document.getElementById('settings-panel');

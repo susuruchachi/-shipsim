@@ -222,20 +222,32 @@ function _trMaterialFine() {
     return _trMatFine;
 }
 // 高さ・傾き → 色
+// なめらかな値ノイズ（升目の角の乱数を補間。0〜1）：海底・草地のまだらに使う
+function _trHash(i, j) { let h = (Math.imul(i, 374761393) + Math.imul(j, 668265263)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
+function _trVNoise(x, z) {
+    const i = Math.floor(x), j = Math.floor(z), fx = x - i, fz = z - j;
+    const u = fx * fx * (3 - 2 * fx), v = fz * fz * (3 - 2 * fz);
+    const a = _trHash(i, j), b = _trHash(i + 1, j), c = _trHash(i, j + 1), d = _trHash(i + 1, j + 1);
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
 function _trColor(h, slope, x, z, out, o) {
     let r, g, b;
     if (h < -0.5) {
-        // 浅い海の海底（TR_SEABED まで網を作る）：急な所は岩、ほかは砂・泥（深いほど暗く）
-        const mott = (Math.sin(x * 0.013 + z * 0.007) * Math.sin(x * 0.005 - z * 0.011) + 1) * 0.5, k = 1 - Math.min(0.55, -h / 60);
-        if (slope > 0.12 || mott > 0.8) { r = 0.40 * k; g = 0.39 * k; b = 0.35 * k; }
-        else { r = (0.66 - 0.1 * mott) * k; g = (0.61 - 0.08 * mott) * k; b = (0.46 - 0.05 * mott) * k; }
+        // 浅い海の海底（TR_SEABED まで網を作る）：急な所は岩、ほかは砂・泥（深いほど暗く）。まだらは不規則なノイズで、
+        // 岩の色へはなめらかに移る（以前は sin の積で、約 500m おきに同じ形の暗い楕円（岩の色）がくっきり並び、
+        // 海底の下にもう一枚別の海底が透けて見えるようだった）
+        const mott = 0.55 * _trVNoise(x / 420, z / 420) + 0.3 * _trVNoise(x / 130 + 17.3, z / 130 + 5.1) + 0.15 * _trVNoise(x / 45 + 3.7, z / 45 + 9.2);
+        const k = 1 - Math.min(0.55, -h / 60);
+        const rk = Math.min(1, smoothstep(0.09, 0.2, slope) + 0.45 * smoothstep(0.62, 0.8, mott));
+        const sr = 0.66 - 0.1 * mott, sg = 0.61 - 0.08 * mott, sb = 0.46 - 0.05 * mott;
+        r = (sr + (0.44 - sr) * rk) * k; g = (sg + (0.42 - sg) * rk) * k; b = (sb + (0.37 - sb) * rk) * k;
     }
     else if (h < 1.2) { if (_RW) { r = 0.52; g = 0.55; b = 0.40; } else { r = 0.78; g = 0.72; b = 0.54; } }   // 砂浜（現実世界は干潟・湿地の色）
     else if (slope > 0.75) { r = 0.42; g = 0.40; b = 0.37; }             // 岩肌
     else if (h > 1800) { r = 0.93; g = 0.94; b = 0.96; }                 // 雪
     else if (h > 1100) { r = 0.50; g = 0.48; b = 0.42; }                  // 高地
     else {
-        const f = (Math.sin(x * 0.0021 + z * 0.0013) * Math.sin(x * 0.0007 - z * 0.0019) + 1) * 0.5;   // 草地と林のまだら
+        const f = 0.65 * _trVNoise(x / 900 + 41.7, z / 900 + 13.3) + 0.35 * _trVNoise(x / 260 + 7.1, z / 260 + 29.5);   // 草地と林のまだら
         r = 0.30 - 0.12 * f; g = 0.44 - 0.12 * f; b = 0.22 - 0.07 * f;
     }
     // 見た目の色（sRGB）→ 明るさの計算用（リニア）
@@ -1216,28 +1228,24 @@ function _trHullPoints() {
     _trHullCache = { key, pts, dense };
     return pts;
 }
-// その姿勢（重心の位置 x,z と向き h）で、船体がどれだけ底・岸壁に入っているか（0 なら当たっていない）
+// その姿勢（重心の位置 x,z と向き h）で、船体がどれだけ底・岸壁に入っているか（0 なら当たっていない）。
+// 船底・甲板の点（_gcPoints）を、今の上下・縦・横の傾きのまま（波で持ち上がれば、そのぶん船底も上がる）その位置へ置いて調べる。
+// 以前は高さを船の下の波の高さ（±6m まで）と設計の喫水で決めていて、波で船体が持ち上がっても、水面より上に出た浅瀬の点は
+// どれも「固い所」として数えていたので、浅瀬の縁に引っかかると、どれだけ持ち上がっても抜け出せなかった。
+//  score：海底に触れている・入っている深さの合計、hard：入り込みが段（GC_STEP）より深い点＝横から当たる壁・岸壁
 function _trHullScore(x, z, h, off, out) {
     const r = h * Math.PI / 180, fx = Math.sin(r), fz = Math.cos(r), sx = Math.cos(r), sz = -Math.sin(r);
     const ox = x + fx * off.a + sx * off.s, oz = z + fz * off.a + sz * off.s;
     let score = 0, hard = 0;
-    // 船底の深さは喫水（船体設定の喫水＋操作パネルのレバーの分：worldHullAt）で決め、
-    // 波の動きだけを足す：船の下の海面の高さ（波で上下）と、縦揺れ・横揺れで前後・両舷が上下する分。
-    // 波の山で船が持ち上がれば船底も上がり、座礁していても外れる
-    const scl = physics.scale || 1;
-    const M = shipGroup.matrixWorld.elements;
-    const sea = Number.isFinite(window._physicsWaveY) ? Math.max(-6, Math.min(6, window._physicsWaveY)) : 0;
-    for (const p of _trHullPoints()) {
-        const px = ox + fx * p.a + sx * p.s, pz = oz + fz * p.a + sz * p.s;
-        const b = worldSeabedAt(px, pz);
-        // 縦揺れ・横揺れでこの点が上下する分（行列の y 行の、横・前後の成分）
-        const lx = p.s / scl, lz = p.a / scl;
-        // 潜水艦は潜っている分だけ深い（54-submarine.js：sub.applied＝深さ＋届かない波の分）
-        const keelY = sea + M[1] * lx + M[9] * lz - p.d - ((window.sub && sub.applied) || 0);
-        const c = b - keelY;                             // 正：底（岸壁）が船底より上
-        if (c > 0) { score += Math.min(12, c); if (out) out.push(Object.assign({ c }, p)); }
-        if (b > 0) hard++;                               // 岸壁・桟橋・陸（水面より上）の中
+    const pts = _gcPoints(), ps = _gcPose(r), subY = (window.sub && sub.applied) || 0;
+    for (const p of pts) {
+        _gcWorld(p, ps, _gcW);
+        const b = worldSeabedAt(x + _gcW.x, z + _gcW.z);
+        const c = b - (physics.y + _gcW.y - subY);       // 正：底（岸壁）が点より上
+        if (c > -GC_TOUCH) { score += Math.min(12, c + GC_TOUCH); if (out) out.push({ c, a: p.ma, s: p.ms, d: -p.y, tip: !!p.tip }); }
+        if (c > GC_STEP) hard++;
     }
+    if (terrain.ports.size) _trHullPoints();
     if (terrain.ports.size && _trHullCache) for (const p of _trHullCache.dense) {
         if (_trInCollider(ox + fx * p.a + sx * p.s, oz + fz * p.a + sz * p.s)) { hard++; score += 12; if (out) out.push(p); }
     }
@@ -1255,29 +1263,17 @@ function worldGroundTry(dA, dS, dH) {
     return { score, hard: _trHullScore.hard };
 }
 window.worldGroundTry = worldGroundTry;
-// 前の姿勢より悪くなったか（固い所に入る点が増えた、または深く乗り上げた）
-function _trWorse(score, hard, good) { return hard > good.hard || score > good.score + 0.02; }
-// 乗り上げたときの船の姿勢：海底に当たっている所（c：海底が船底より上に出ている高さ[m]）を持ち上げるように、
-// 前後の傾き（縦）と横の傾きを、当たっている点の位置で最小二乗に合わせる。船は水にも支えられているので 6 割ほど。
-// 描く姿勢にだけ足す（17-main-loop.js：physics.groundPitch / groundRoll）。離れたら数秒で戻す
+// 前の姿勢より悪くなったか（壁・岸壁に入る点が増えた）。浅瀬・斜面に乗り上げるのは止めない：船底を海底が支え
+// （groundContactStep）、底に載った重さのぶんの摩擦で止まる
+function _trWorse(score, hard, good) { return hard > good.hard; }
+// 乗り上げたときの描く姿勢の足し分（physics.groundPitch / groundRoll）。今は物理の姿勢そのものが海底に支えられて
+// 傾く（groundContactStep）ので、以前の足し分は 0 へ戻すだけ
 function _trGroundAttitude(hits, dt) {
-    const pts = _trHullPoints();
-    let sa = 0, ss = 0, ca = 0, cs = 0;
-    for (const p of pts) { sa += p.a * p.a; ss += p.s * p.s; }
-    if (terrain.grounded) for (const p of hits) if (p.c > 0 && !p.dense) { ca += Math.min(8, p.c) * p.a; cs += Math.min(8, p.c) * p.s; }
-    const lim = (v, m) => Math.max(-m, Math.min(m, v));
-    // 船首（+a）が持ち上がる＝ピッチは負（17：Euler の x 回転は正で船首が下がる）。左舷（+s）が持ち上がる＝ロールは正
-    const tp = terrain.grounded ? lim(-Math.atan(0.6 * ca / Math.max(1, sa)), 0.1) : 0;
-    const tr = terrain.grounded ? lim(Math.atan(0.6 * cs / Math.max(1, ss)), 0.14) : 0;
-    const k = Math.min(1, (dt || 0) / (terrain.grounded ? 2.5 : 4));
-    physics.groundPitch = (physics.groundPitch || 0) + (tp - (physics.groundPitch || 0)) * k;
-    physics.groundRoll = (physics.groundRoll || 0) + (tr - (physics.groundRoll || 0)) * k;
+    const k = Math.min(1, (dt || 0) / 2);
+    physics.groundPitch = (physics.groundPitch || 0) * (1 - k);
+    physics.groundRoll = (physics.groundRoll || 0) * (1 - k);
 }
-// 船底を海底の上に乗せる：船体の点（船底の真ん中・舷の丸み）が海底より下に入っていれば、その分だけ船を持ち上げる
-//（描いている船の高さ physics.y から測る。縦・横の傾きは _trGroundAttitude。持ち上げると浮力が減るので、
-//  次のフレームでまた沈もうとして、海底に乗ったまま止まる。岸壁・陸（水面より上）は横から当たる所なので持ち上げない）
-// 沈没した船（63-flooding.js）：船の姿勢（縦に立つ・裏返る）のまま、船底と甲板の点を世界の座標にして、
-// 当たった点を支点に支える（_trContactSolve）
+// 沈没した船の、船底と甲板の点（船の姿勢のまま：縦に立つ・裏返る）。いちばん低い所（_trLowestY）に使う
 function _trSunkPoints() {
     const D = typeof wtDims === 'function' ? wtDims() : null; if (!D) return [];
     const key = [D.aS, D.aB, D.yBot, D.yDeck, physics.scale].join(',');
@@ -1292,7 +1288,6 @@ function _trSunkPoints() {
     _trSunkPoints.c = { key, pts };
     return pts;
 }
-// 船体の点（世界の座標）を、沈没した船は船底と甲板の点（船の姿勢のまま：縦に立つ・裏返る）で
 function _trSunkWorldPts() {
     const root = typeof wtRoot === 'function' ? wtRoot() : null;
     const e = (root || shipGroup).matrixWorld.elements, out = [];
@@ -1300,83 +1295,169 @@ function _trSunkWorldPts() {
         x: e[0] * q[0] + e[4] * q[1] + e[8] * q[2] + e[12], y: e[1] * q[0] + e[5] * q[1] + e[9] * q[2] + e[13], z: e[2] * q[0] + e[6] * q[1] + e[10] * q[2] + e[14] });
     return out;
 }
-// 海底に当たった点を、その点で支える：当たった点に上向きの力（撃力）をかけたときの、上下・縦の傾き・横の傾きの
-// 動き方の割合（船の重さと、縦・横の回りにくさ）で分けて押し戻す。船首だけが当たれば、船首が持ち上がるより先に
-// 船首を支点に船尾が沈む向きに回る（以前は、当たった分だけ船ごと真上へ持ち上げていたので、浸水して船首から
-// 沈んだ船が、船首で底に立ったまま重心ごと持ち上がって、縦に立っていた）
-function _trContactSolve(pts, maxLift) {
+
+// ════════════════════════════════════════════════════════════════
+//  船体と海底の当たり（物理の刻みごと：17-main-loop.js のサブステップから）
+// ════════════════════════════════════════════════════════════════
+// 以前は 1 フレームに 1 回、物理の計算が全部終わった後に、海底へ入り込んだ分だけ押し戻していた（1 フレームに動かせる量に
+// 上限つき）。時間倍率を上げると、そのフレームの間（サブステップ何十回分）に浮力・重力で深く沈み込んでから押し戻されるので、
+// 底に当たるたびにびくびく跳ね、船首だけ乗り上げると、押し戻しが浮力の起こし戻しに負けて海底にめり込んでいた。
+// 今は物理の刻み（0.02 秒）ごとに、船の今の姿勢（上下・縦・横の傾き）で船底・舷・甲板の縁の点の高さを出して、
+// 海底より下に入った点を、その点に上向きの力（撃力）をかけたときの動き方の割合（船の重さと、縦・横の回りにくさ）で
+// 押し戻し、底へ向かう速さを止める。船首だけ当たれば、船首が持ち上がり、船首を支点に船尾が沈む向きに回る。
+// 底に載った重さ（浮力で支えきれない分）に比例する摩擦で、船は止まる（深く乗り上げるほど抜け出しにくい）。
+// 沈んでいく船・沈んだ船は、底に着いたら浮力の縦のモーメントで起こし直さず、着いた端を支点に倒れて底に横たわる
+//（以前は、底に着いた後も波・残った浮力で船尾が持ち上がり、縦に立つことがあった）
+const GC_TOUCH = 0.1;    // これだけ離れていても「触れている」[m]（座礁の表示・score）
+const GC_STEP = 2.5;     // 1 回にこれより深く入り込んだ点は、下から支えず「横から当たる壁」とする[m]（hard）
+const GC_MU = 0.3;       // 船底と海底（砂・泥）の摩擦係数
+const _gcW = { x: 0, y: 0, z: 0 };
+const _gc = { key: '', pts: [], pin: { x: 0, y: 0, z: 0 }, active: false, iP: 0, iR: 0, contact: false, touchT: -1e9, maxPen: 0, support: 0, C: [] };
+// 当たりを見る点（ピン＝重心の位置の喫水線を原点にした、船の向きの座標[m]：x 横（+ が左舷）・y 上・z 前）。
+// 船体の形（22-hull-shape.js）から、前後 13 か所の船底（その位置まで届いているいちばん低い段：船首・船尾で船底が上がる所も）・
+// 船底の丸み・舷の中ほど・甲板の縁と、船首・船尾の先。ma・ms：模型の原点からの前後・横[m]（穴の位置：64-damage.js）
+function _gcPoints() {
+    const hp = window.hullProfile, sc = physics.scale || 1, pin = _gc.pin;
+    const D = (hp && hp.ready && hp.shape && typeof wtDims === 'function') ? wtDims() : null;
+    const rot = (D && typeof wtRotM === 'function') ? wtRotM() : null;
+    const key = [pin.x, pin.y, pin.z, sc, D ? [D.aS, D.aB, D.yBot, D.yDeck].join(',') : 'none', rot ? rot.elements[0].toFixed(5) + ',' + rot.elements[8].toFixed(5) : '', hp && hp.ready ? hp.halfLen : 0].join('|');
+    if (_gc.key === key) return _gc.pts;
+    const pts = [];
+    if (D && rot && typeof wtHW === 'function') {
+        const S = hp.shape, e = rot.elements;
+        const add = (p, y, a, tip) => {
+            // 船体の座標 → 模型の座標（向きの補正）→ m → ピンから
+            const mx = (e[0] * p + e[4] * y + e[8] * a) * sc, my = (e[1] * p + e[5] * y + e[9] * a) * sc, mz = (e[2] * p + e[6] * y + e[10] * a) * sc;
+            pts.push({ x: mx - pin.x, y: my - pin.y, z: mz - pin.z, ma: mz, ms: mx, tip: !!tip });
+        };
+        const N = 12;
+        for (let i = 0; i <= N; i++) {
+            const a = D.aS + (D.aB - D.aS) * (0.01 + 0.98 * i / N);
+            let yb = null;
+            for (let k = S.kFirst; k <= S.kTop; k++) if (S.sternAlong[k] <= a && a <= S.bowAlong[k]) { yb = S.levelY[k]; break; }
+            if (yb === null) continue;
+            const y1 = yb + (D.yDeck - yb) * 0.12, y2 = yb + (D.yDeck - yb) * 0.55;
+            const w1 = Math.max(0, wtHW(y1, a) || 0), w2 = Math.max(0, wtHW(y2, a) || 0), wd = Math.max(0, wtHW(D.yDeck, a) || 0);
+            add(0, yb, a, i === 0 || i === N);
+            if (w1 > 0.01) { add(w1, y1, a); add(-w1, y1, a); }
+            if (w2 > 0.01) { add(w2, y2, a); add(-w2, y2, a); }
+            if (wd > 0.01) { add(wd, D.yDeck, a); add(-wd, D.yDeck, a); }
+        }
+        add(0, D.yDeck, D.aB, true); add(0, D.yDeck, D.aS, true);
+    } else {
+        // 船体の形がまだ無いとき：喫水の点（_trHullPoints）
+        for (const p of _trHullPoints()) pts.push({ x: p.s - pin.x, y: -p.d, z: p.a - pin.z, ma: p.a, ms: p.s, tip: !!p.tip });
+    }
+    _gc.key = key; _gc.pts = pts;
+    return pts;
+}
+// 今の姿勢（縦・横の傾き＋向き r[rad]）の回転：three.js の Euler 'YXZ'（描く船と同じ：17-main-loop.js）
+const _gcPs = { cp: 1, sp: 0, cr: 1, sr: 0, cy: 1, sy: 0 };
+function _gcPose(r) {
+    _gcPs.cp = Math.cos(physics.pitch || 0); _gcPs.sp = Math.sin(physics.pitch || 0);
+    _gcPs.cr = Math.cos(physics.roll || 0); _gcPs.sr = Math.sin(physics.roll || 0);
+    _gcPs.cy = Math.cos(r); _gcPs.sy = Math.sin(r);
+    return _gcPs;
+}
+// 点の、ピンからの世界の向きのずれ（out.x・out.z：水平、out.y：高さ）
+function _gcWorld(p, ps, out) {
+    const x1 = p.x * ps.cr - p.y * ps.sr, y1 = p.x * ps.sr + p.y * ps.cr;
+    const y2 = y1 * ps.cp - p.z * ps.sp, z2 = y1 * ps.sp + p.z * ps.cp;
+    out.x = x1 * ps.cy + z2 * ps.sy; out.y = y2; out.z = -x1 * ps.sy + z2 * ps.cy;
+    return out;
+}
+// 1 フレームの物理の前（17-main-loop.js）：当たりを調べるか決め、点を用意する。pin：重心の位置の喫水線（模型の原点から[m]）
+function groundContactPrepare(pinX, pinY, pinZ) {
+    _gc.active = false; _gc.contact = false; _gc.maxPen = 0; _gc.support = 0;
+    if (typeof shipGroup === 'undefined' || !shipGroup || (window.sub && sub.applied > 0.5)) return false;
     const hp = window.hullProfile, sc = physics.scale || 1;
     const L = Math.max(10, ((hp && hp.ready) ? hp.halfLen * 2 : 12) * sc);
     const B = Math.max(3, (typeof flood !== 'undefined' && flood.B) || ((hp && hp.ready && hp.halfBeam) ? hp.halfBeam * 2 * sc : L / 8));
-    const iM = 1, iP = 1 / Math.pow(0.25 * L, 2), iR = 1 / Math.pow(0.35 * B, 2);
-    const cx = physics.cgWorldX || 0, cz = physics.cgWorldZ || 0, r = (physics.heading || 0) * Math.PI / 180;
-    const fx = Math.sin(r), fz = Math.cos(r), sx = Math.cos(r), sz = -Math.sin(r);
-    const C = [];
+    // 船のいちばん低くなりうる所より、海底がずっと深ければ調べない（外洋のまん中など）
+    const lowest = (physics.y || 0) - worldShipDraft() - Math.abs(Math.sin(physics.pitch || 0)) * L * 0.5 - Math.abs(Math.sin(physics.roll || 0)) * B * 0.5 - (physics.vy < 0 ? -physics.vy * 2 : 0);
+    const bed = worldSeabedAt(physics.cgWorldX || 0, physics.cgWorldZ || 0);
+    const inWorld = window.world && world.mode === 'world';
+    if (!(bed > lowest - 40) && !(inWorld && (terrain.near || terrain.ports.size))) return false;
+    _gc.iP = 1 / Math.pow(0.25 * L, 2); _gc.iR = 1 / Math.pow(0.35 * B, 2);
+    _gc.pin.x = pinX; _gc.pin.y = pinY; _gc.pin.z = pinZ;
+    _gcPoints();
+    _gc.active = true;
+    return true;
+}
+// 物理の 1 刻み（上下・縦・横の傾きを進めた後）。r：向き[rad]、support：船の重さのうち浮力で支えきれていない割合
+function groundContactStep(r, subDt, support) {
+    physics.groundFriction = 0;
+    if (!_gc.active) return;
+    const pts = _gc.pts, ps = _gcPose(r), cx = physics.cgWorldX || 0, cz = physics.cgWorldZ || 0, iP = _gc.iP, iR = _gc.iR;
+    const fx = ps.sy, fz = ps.cy, sx = ps.cy, sz = -ps.sy;
+    const C = _gc.C; let nC = 0;
     for (const p of pts) {
-        const b = worldSeabedAt(p.x, p.z);
-        if (b > -0.3) continue;                                       // 岸壁・陸（水面より上）は横から当たる所
-        const pen = b - p.y;
-        if (pen > 0.01) C.push({ pen, a: (p.x - cx) * fx + (p.z - cz) * fz, s: (p.x - cx) * sx + (p.z - cz) * sz });
+        _gcWorld(p, ps, _gcW);
+        const b = worldSeabedAt(cx + _gcW.x, cz + _gcW.z);
+        if (b === 5) continue;                                   // 岸壁・桟橋（横から当たる：_trCheckGrounding）
+        const pen = b - (physics.y + _gcW.y);
+        if (pen <= -GC_TOUCH || pen > GC_STEP) continue;         // 離れている／深く入りすぎ（壁）
+        let c = C[nC]; if (!c) c = C[nC] = { pen: 0, a: 0, s: 0 };
+        c.pen = pen; c.a = _gcW.x * fx + _gcW.z * fz; c.s = _gcW.x * sx + _gcW.z * sz; nC++;
     }
-    if (!C.length) return 0;
-    let dy = 0, dP = 0, dR = 0, maxPen = 0;
-    for (const c of C) maxPen = Math.max(maxPen, c.pen);
-    // 何回か：いちばん深く入っている点を押し戻す（押し戻した分の動きで、ほかの点の入り方も変わる）
+    if (!nC) return;
+    _gc.contact = true;
+    // 位置：いちばん深く入っている点から順に押し戻す（押し戻した分で、ほかの点の入り方も変わる）
+    let dy = 0, dP = 0, dR = 0;
     for (let it = 0; it < 8; it++) {
-        let best = null, bp = 0.005;
-        for (const c of C) { const pr = c.pen - (dy - c.a * dP + c.s * dR); if (pr > bp) { bp = pr; best = c; } }
-        if (!best) break;
-        const K = iM + best.a * best.a * iP + best.s * best.s * iR, J = bp / K;
-        dy += J * iM; dP -= best.a * J * iP; dR += best.s * J * iR;
+        let best = -1, bp = 0.002;
+        for (let i = 0; i < nC; i++) { const c = C[i], pr = c.pen - (dy - c.a * dP + c.s * dR); if (pr > bp) { bp = pr; best = i; } }
+        if (best < 0) break;
+        const c = C[best], K = 1 + c.a * c.a * iP + c.s * c.s * iR, J = bp / K;
+        dy += J; dP -= c.a * J * iP; dR += c.s * J * iR;
+        if (bp > _gc.maxPen) _gc.maxPen = bp;
     }
-    // 1 フレームに動かす量の上限（残りは次のフレームで）
-    dy = Math.min(dy, maxLift);
-    dP = THREE.MathUtils.clamp(dP, -0.03, 0.03); dR = THREE.MathUtils.clamp(dR, -0.03, 0.03);
-    physics.y += dy; shipGroup.position.y += dy;
-    physics.pitch += dP; physics.roll += dR;
-    // 当たった点が底へ向かって動く速さを止める（同じ割合で、上下・縦・横の回る速さに分けて）
-    for (const c of C) {
-        const v = physics.vy - c.a * physics.vPitch + c.s * physics.vRoll;
-        if (v >= 0) continue;
-        const K = iM + c.a * c.a * iP + c.s * c.s * iR, J = -v / K;
-        physics.vy += J * iM; physics.vPitch -= c.a * J * iP; physics.vRoll += c.s * J * iR;
-    }
-    // 底との摩擦
-    physics.vPitch *= 0.9; physics.vRoll *= 0.9;
-    shipGroup.updateMatrixWorld();
-    return maxPen;
-}
-function _trSeabedLift(off, dt) {
-    physics.groundLift = 0;
-    if (typeof shipGroup === 'undefined' || !shipGroup || (window.sub && sub.applied > 0.5)) return;
-    shipGroup.updateMatrixWorld();
-    const sunk = typeof flood !== 'undefined' && (flood.sunk || flood.sinking);
-    if (sunk) {
-        const pen = _trContactSolve(_trSunkWorldPts(), 5);
-        if (pen > 0.01) { physics.groundLift = pen; physics.speed *= 0.9; }
-        // 沈みきって海底に着いた船は、中に残っていた空気が抜けて浮力の偏りが無くなり、縦に立っていても
-        // 着いた端を支点に倒れて底に横たわる（真っ直ぐ立っている間はゆっくり、傾くほど速く。17-main-loop.js は
-        // その間、浮力・浸水の縦のモーメントで起こし直さない：flood.settle）
-        if (flood.sunk && pen > 0.01) flood.bedT = (flood.bedT || 0) + (dt || 0);
-        flood.settle = flood.sunk && (flood.bedT || 0) > 5;
-        if (flood.settle) {
-            const p = physics.pitch, rate = 0.01 + 0.08 * Math.cos(Math.min(1.55, Math.abs(p)));
-            physics.pitch -= Math.sign(p) * Math.min(Math.abs(p), rate * (dt || 0));
-            physics.vPitch = 0;
+    // 1 刻みに動かす量の上限（深く入っていた所は、数刻みかけて出す）
+    dy = Math.min(dy, 0.3); dP = Math.max(-0.01, Math.min(0.01, dP)); dR = Math.max(-0.01, Math.min(0.01, dR));
+    physics.y += dy; physics.pitch += dP; physics.roll += dR;
+    // 速さ：触れている点が底へ向かって動く速さを止める（上下・縦・横の回る速さに分けて）
+    for (let it = 0; it < 3; it++) {
+        for (let i = 0; i < nC; i++) {
+            const c = C[i];
+            if (c.pen - (dy - c.a * dP + c.s * dR) < -0.02) continue;
+            const v = physics.vy - c.a * physics.vPitch + c.s * physics.vRoll;
+            if (v >= 0) continue;
+            const K = 1 + c.a * c.a * iP + c.s * c.s * iR, J = -v / K;
+            physics.vy += J; physics.vPitch -= c.a * J * iP; physics.vRoll += c.s * J * iR;
         }
-        return;
     }
-    const x = physics.cgWorldX || 0, z = physics.cgWorldZ || 0, r = (physics.heading || 0) * Math.PI / 180;
-    const fx = Math.sin(r), fz = Math.cos(r), sx = Math.cos(r), sz = -Math.sin(r);
-    const ox = x + fx * off.a + sx * off.s, oz = z + fz * off.a + sz * off.s;
-    const M = shipGroup.matrixWorld.elements, scl = physics.scale || 1;
-    const pts = [];
-    for (const p of _trHullPoints()) {
-        pts.push({ x: ox + fx * p.a + sx * p.s, z: oz + fz * p.a + sz * p.s, y: physics.y + M[1] * (p.s / scl) + M[9] * (p.a / scl) - p.d });
+    // 底との摩擦：底に載った重さに比例して、前後の速さ（次の刻みで進む前に：17-main-loop.js の physics.groundFriction）と
+    // 回頭を止める（触れているだけでも少しこすれる）
+    const sup = Math.max(0.005, Math.min(1, support || 0));
+    _gc.support = Math.max(_gc.support, sup);
+    physics.groundFriction = GC_MU * 9.81 * sup;                // m/s²
+    physics.turnRate = (physics.turnRate || 0) * Math.max(0, 1 - subDt * 6 * sup);
+    if (typeof _tugShip !== 'undefined' && _tugShip) {
+        if (_tugShip.vSway) _tugShip.vSway *= Math.max(0, 1 - subDt * 6 * sup);
+        if (_tugShip.yawRate) _tugShip.yawRate *= Math.max(0, 1 - subDt * 6 * sup);
     }
-    const pen = _trContactSolve(pts, worldShipDraft() * 0.9);
-    if (pen > 0.01) physics.groundLift = pen;
+    physics.vPitch *= Math.max(0, 1 - subDt * 2); physics.vRoll *= Math.max(0, 1 - subDt * 2);
+    // 沈んでいく船・沈んだ船：底に着いたら、着いた端を支点に倒れて底に横たわる（浮力の縦のモーメントで起こし直さない：
+    // flood.settle。真っ直ぐ立っている間はゆっくり、傾くほど速く）
+    if (typeof flood !== 'undefined' && (flood.sunk || flood.sinking)) {
+        flood.settle = true;
+        const pq = physics.pitch, rate = 0.02 + 0.1 * Math.cos(Math.min(1.55, Math.abs(pq)));
+        physics.pitch -= Math.sign(pq) * Math.min(Math.abs(pq), rate * subDt);
+        if (physics.vPitch * pq > 0) physics.vPitch = 0;
+    }
 }
+// 1 フレームの物理の後：浸水の傾きの上限（17-main-loop.js の floodRoll）に使う、底に支えられている深さ
+function groundContactFinish(physDt) {
+    if (!_gc.active) physics.groundFriction = 0;
+    if (_gc.contact) _gc.touchT = 0; else if (_gc.touchT >= 0) _gc.touchT += physDt || 0;
+    const touching = _gc.touchT >= 0 && _gc.touchT < 1.0;
+    physics.groundLift = touching ? Math.max(0.05, _gc.support * worldShipDraft()) : 0;
+    if (typeof flood !== 'undefined' && !touching && !(flood.sunk && (flood.bedT || 0) > 0)) flood.settle = false;
+    if (typeof flood !== 'undefined' && flood.sunk && touching) flood.bedT = (flood.bedT || 0) + (physDt || 0);
+}
+window.groundContactPrepare = groundContactPrepare;
+window.groundContactStep = groundContactStep;
+window.groundContactFinish = groundContactFinish;
 function _trCheckGrounding(t, dt) {
     const hp = window.hullProfile;
     if (typeof shipGroup === 'undefined' || !shipGroup) return;
@@ -1394,9 +1475,7 @@ function _trCheckGrounding(t, dt) {
         terrain._bowWarn = worldSeabedAt(x + fx * HL * 0.9, z + fz * HL * 0.9) > -bowD - 3;
         terrain._sternWarn = worldSeabedAt(x - fx * HL * 0.9, z - fz * HL * 0.9) > -sternD - 3;
     }
-    // 外洋のまん中（近くに陸も港も無い）では調べない
-    // （沈んでいく船は、海底に着くまで見る）
-    if (typeof flood !== 'undefined' && (flood.sunk || flood.sinking) && terrain.depth < -physics.y + ((hp && hp.ready) ? hp.halfLen * 2 : 12) * (physics.scale || 1) + 40) _trSeabedLift(off, dt);
+    // 外洋のまん中（近くに陸も港も無い）では調べない（海底で支えるのは物理の刻みごと：groundContactStep）
     if (!terrain.near && !terrain.ports.size && terrain.depth > worldShipDraft() + 80) { terrain.grounded = false; terrain.good = { x, z, h, score: 0, hard: 0 }; _trGroundAttitude([], dt); return; }
     const hits = [];
     const score = _trHullScore(x, z, h, off, hits), hard = _trHullScore.hard;
@@ -1439,16 +1518,14 @@ function _trCheckGrounding(t, dt) {
         terrain.grounded = true;
         terrain.good = { x: pick.x, z: pick.z, h: pick.h, score: pickS, hard: pickH };
     } else {
+        // 船底が海底に触れている（乗り上げている間の摩擦は groundContactStep）
         terrain.grounded = score > 0.02;
         terrain.good = { x, z, h, score, hard };
-        // 乗り上げている間は船底がこすれて、ゆっくりにしか動けない
-        if (terrain.grounded) physics.speed *= Math.exp(-dt * 0.8);
     }
     terrain.hullHits = hits.length;
     // 速く乗り上げたら船底に穴（64-damage.js：ゆっくりなら二重底で止まる）
     if (terrain.grounded && (!wasGrounded || worse) && typeof damageGround === 'function') damageGround(hits, vHit);
     _trGroundAttitude(hits, dt);
-    _trSeabedLift(off, dt);
     if (terrain.grounded && !wasGrounded && Math.abs(physics.speed || 0) > 0.6 && typeof audioWaveImpact === 'function') {
         audioWaveImpact(shipGroup.position.clone(), Math.min(2, 0.5 + Math.abs(physics.speed) / 6), true);
     }
@@ -1505,15 +1582,9 @@ function _trOceanFloor() {
         P.needsUpdate = true; _ocFloor.geometry.computeVertexNormals(); _ocFloor.geometry.computeBoundingSphere();
     }
 }
-// 外洋のモード：沈んでいく自分の船を海底で止める（世界のモードの _trCheckGrounding と同じ支え方）
+// 外洋のモード：沈んでいく自分の船の下の水深（海底で支えるのは物理の刻みごと：groundContactStep）
 function _trOceanContact(dt) {
-    if (typeof flood === 'undefined' || !(flood.sunk || flood.sinking) || typeof shipGroup === 'undefined' || !shipGroup) return;
-    const hp = window.hullProfile, L = ((hp && hp.ready) ? hp.halfLen * 2 : 12) * (physics.scale || 1);
-    const x = physics.cgWorldX || 0, z = physics.cgWorldZ || 0;
-    terrain.depth = -oceanSeabedAt(x, z);
-    if (physics.y - L - 40 > -terrain.depth) return;
-    const r0 = (physics.heading || 0) * Math.PI / 180, dx = shipGroup.position.x - x, dz = shipGroup.position.z - z;
-    _trSeabedLift({ a: dx * Math.sin(r0) + dz * Math.cos(r0), s: dx * Math.cos(r0) - dz * Math.sin(r0) }, dt);
+    terrain.depth = -oceanSeabedAt(physics.cgWorldX || 0, physics.cgWorldZ || 0);
 }
 function updateWorldTerrain(t, dt) {
     if (typeof updateHornEcho === 'function') updateHornEcho(t);   // 汽笛のこだま（45-horn-echo.js）

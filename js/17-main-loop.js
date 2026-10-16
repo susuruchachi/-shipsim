@@ -133,6 +133,8 @@ function animate() {
 
     // 潜水艦（54-submarine.js）：深さの分だけ下げて描いていた高さを、水上の船としての高さへ戻してから計算する
     if (typeof subPreStep === 'function') subPreStep();
+    // 海底との当たり（44-world-terrain.js）：刻みごとに、船底・甲板の縁の点が海底より下に入らないように支える
+    const _gcOn = !isDesignMode && typeof groundContactPrepare === 'function' && groundContactPrepare(cgXScaled, waterlineYScaled, cgZScaled);
     for (let _sub = 0; _sub < numSubsteps; _sub++) {
         // --- 舵 ---
         if (!isDesignMode) {
@@ -182,6 +184,12 @@ function animate() {
         // 推力はスクリューの軸（船首尾の向き）に沿って押すので、波で船首が上がれば上向きにも押す（下の上下の計算）
         const thrustGrossAcc = propTargetSpeed * _kThrust * 0.514444;
         physics.speed = THREE.MathUtils.clamp(physics.speed, -maxSpd * 0.5, maxSpd);
+        // 海底に乗り上げているときの摩擦（44-world-terrain.js の groundContactStep が、底に載った重さから決める）。
+        // 進む前にかける：推力が摩擦に勝たなければ動かない（後でかけると、刻みごとに推力のぶんだけ這い上がっていた）
+        if (physics.groundFriction > 0) {
+            const dvF = physics.groundFriction * subDt / 0.514444;
+            physics.speed = Math.abs(physics.speed) <= dvF ? 0 : physics.speed - Math.sign(physics.speed) * dvF;
+        }
         // 離岸のスプリング（49-autopilot.js）：綱で留めているので、機関を回しても前後には進まない
         if (!isDesignMode && window.autopilot && autopilot.selfDepart && autopilot.selfDepart.spring) physics.speed = 0;
 
@@ -564,8 +572,11 @@ function animate() {
             physics.roll   += physics.vRoll * subDt;
             // （横の傾きの限界も設けない：転覆するときは、ひっくり返るところまで）
             if (Math.abs(physics.roll) > Math.PI) physics.roll -= Math.sign(physics.roll) * 2 * Math.PI;
+            // 海底に入った点を押し戻す（支えきれない重さの割合で、底との摩擦も）
+            if (_gcOn) groundContactStep(rotY, subDt, F_weight > 0 ? (F_weight - F_buoyancyHeave) / F_weight : 0);
         }
     }
+    if (typeof groundContactFinish === 'function') groundContactFinish(isDesignMode ? 0 : physicsDt);
     // 潜水艦：潜航・浮上の上下を計算し、深さの分だけ下げる（深いほど波の上下も届かない）
     if (typeof subPostStep === 'function') subPostStep(t, physicsDt, isDesignMode);
 
