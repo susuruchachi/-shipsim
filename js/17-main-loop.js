@@ -1008,6 +1008,24 @@ function updateSunShadowFollow() {
 // v166: 設計喫水での輪郭前後端を引くための共有スクラッチ（毎フレーム使う）
 const _mainLoopWlEnds = { k0:0, k1:0, f:0, sternAlong:0, bowAlong:0 };
 
+// 白波の割合 → 水面シェーダーの「白波の出やすさ」（4層の波の高さの重ね合わせ）のしきい値。
+// 表は 02 の法線マップから実際に数えた分布（割合, その割合だけが越える値）
+const WATER_WHITECAP_T = [[0.0005, 4.25], [0.001, 3.97], [0.002, 3.66], [0.005, 3.19], [0.01, 2.82], [0.02, 2.41],
+    [0.05, 1.82], [0.1, 1.32], [0.2, 0.76], [0.3, 0.40], [0.45, 0.0], [0.6, -0.36]];
+function waterWhitecapThreshold(cov) {
+    const T = WATER_WHITECAP_T;
+    if (!(cov > 1e-5)) return 99;
+    const lc = Math.log(cov);
+    if (cov <= T[0][0]) return T[0][1] + (Math.log(T[0][0]) - lc) * (T[0][1] - T[1][1]) / Math.log(T[1][0] / T[0][0]);
+    for (let i = 1; i < T.length; i++) {
+        if (cov <= T[i][0]) {
+            const a = Math.log(T[i - 1][0]), b = Math.log(T[i][0]);
+            return T[i - 1][1] + (T[i][1] - T[i - 1][1]) * (lc - a) / (b - a);
+        }
+    }
+    return T[T.length - 1][1];
+}
+
 function updateWater(t) {
     if (waterMesh && !waterMesh.visible) return;
     if (!window._waterUniforms) return;
@@ -1049,9 +1067,33 @@ function updateWater(t) {
             u.value.x = (u.value.x + vx * spd * dtW) % 1;
             u.value.y = (u.value.y + vz * spd * dtW) % 1;
         };
-        add(uni.detailOff1U,  wx,     wz,    0.010 + wn * 0.010);
-        add(uni.detailOff2U, -v2[0], -v2[1], 0.008 + wn * 0.009);
-        add(uni.detailOff3U,  v3[0],  v3[1], 0.005 + wn * 0.004);
+        // 速さは m/s を、04 の水面シェーダーでマップ1枚を貼る大きさ（①60m ②110m ③340m ④16m）で割ったもの
+        add(uni.detailOff1U,  wx,     wz,    (1.2 + wn * 1.2) / 60);
+        add(uni.detailOff2U, -v2[0], -v2[1], (1.6 + wn * 1.6) / 110);
+        add(uni.detailOff3U,  v3[0],  v3[1], (1.7 + wn * 1.4) / 340);
+        // ④は①のマップを37°回して貼っているので、流す向きも同じだけ回す
+        if (uni.detailOff4U) add(uni.detailOff4U, 0.8 * wx - 0.6 * wz, 0.6 * wx + 0.8 * wz, (0.7 + wn * 0.5) / 16);
+
+        const U = Math.max(0, (typeof physics.windSpeed === 'number') ? physics.windSpeed : 5);
+        // 白波：海面のうち白く砕けている割合（Monahan & O'Muircheartaigh 1980 の W = 3.84e-6·U^3.41 に、
+        // 砕けた後しばらく残る泡の分を少し足して1.3倍）と、それに合うしきい値。風力7（約14m/s）からは風下へ流れる泡の筋も
+        if (uni.whitecapU) {
+            const cov = Math.min(0.45, 3.84e-6 * Math.pow(U, 3.41) * 1.3);
+            const sk = THREE.MathUtils.smoothstep(U, 13, 24) * 0.4;
+            uni.whitecapU.value.set(waterWhitecapThreshold(cov), cov, sk, 0);
+        }
+        // 泡の筋の座標。風向をそのまま回すと、原点から遠い所では向きが少し変わっただけで模様が大きく流れるので、
+        // カメラの近くを基準点にして「基準点での模様の位置」を前の向きのまま積み上げ、向きはその点を中心に回す
+        if (uni.streakRotU && typeof camera !== 'undefined' && camera) {
+            const S = updateWater._streak || (updateWater._streak = { ax: camera.position.x, az: camera.position.z, bx: 0, by: 0, rx: wx, rz: wz });
+            const dx = camera.position.x - S.ax, dz = camera.position.z - S.az;
+            S.bx = (S.bx + (dx * S.rz - dz * S.rx) / 14) % 1;
+            S.by = (S.by + (dx * S.rx + dz * S.rz) / 150 + U * 0.03 * dtW / 150) % 1;   // 泡は風速の3%ほどで風下へ流れる
+            S.ax = camera.position.x; S.az = camera.position.z; S.rx = wx; S.rz = wz;
+            uni.streakRotU.value.set(wx, wz);
+            uni.streakAnchorU.value.set(S.ax, S.az);
+            uni.streakBaseU.value.set(S.bx, S.by);
+        }
     }
     uni.physScaleU.value     = Math.max(0.25, physics.scale || 1);
     {

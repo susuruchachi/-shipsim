@@ -162,22 +162,25 @@ function updateDayNightCycle(dayProgress) {
         if (!isNight) {
             const sunH = Math.max(0, sunY / sunDistance);
             const t = Math.min(sunH / 0.15, 1.0);
+            // 外洋の深い水：濃い紺（以前は緑がかった明るい水色で、南の島の浅い海のようだった）。
+            // shallowColor は波の頭・逆光で透ける水の色（少し明るい青緑）。朝夕は青みが抜けて暗く
             u.deepColor.value.setRGB(
-                0.01 + (1 - t) * 0.06,
-                0.06 + t * 0.06,
-                0.18 + t * 0.04
+                0.010 + (1 - t) * 0.012,
+                0.030 + t * 0.006,
+                0.062 + t * 0.016
             );
             u.shallowColor.value.setRGB(
-                0.03 + (1 - t) * 0.12,
-                0.28 * (0.5 + t * 0.5),
-                0.42 * (0.5 + t * 0.5)
+                0.020 + (1 - t) * 0.030,
+                0.085 * (0.6 + t * 0.4),
+                0.110 * (0.6 + t * 0.4)
             );
             u.foamColor.value.setRGB(0.92, 0.97, 1.00);
         } else {
             const b = 0.005 + 0.03 * moonPhaseFactor;
             u.deepColor.value.setRGB(b * 0.5, b * 0.8, b * 2.0);
             u.shallowColor.value.setRGB(b * 1.0, b * 2.0, b * 4.5);
-            u.foamColor.value.setRGB(0.3 + moonPhaseFactor * 0.3, 0.35 + moonPhaseFactor * 0.35, 0.4 + moonPhaseFactor * 0.4);
+            // 夜の泡は月明かりの分だけ（白波が暗い海に明るく浮きすぎないように）
+            u.foamColor.value.setRGB(0.2 + moonPhaseFactor * 0.2, 0.23 + moonPhaseFactor * 0.23, 0.26 + moonPhaseFactor * 0.26);
         }
         // 水面に映る空の色：水平線の近くの空（05-sky-dome.js と同じ昼・朝夕・夜の混ぜ方）。以前は昼の空色のままで、
         // 夕方や夜に、遠くの海（斜めに見るので空がよく映る）だけ明るい青に見えていた

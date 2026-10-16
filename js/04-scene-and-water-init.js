@@ -359,15 +359,11 @@ function resizeWaterReflectionRT(aspect) {
 function createWater() {
     waterGeometry = createLodWaterGeometry(perf.waterSegments);
 
-    const wNorm1 = createWaterNormalMap(1.0);
-    const wNorm2 = createWaterNormalMap(0.45);
-    // v162: 「大きめ・小さめの波があってもいい」の要望に対応する3枚目の法線マップ。
-    // createWaterNormalMap(scale)はscaleが小さいほどオクターブの周波数が下がり
-    // 粒が大きくなる（wNorm2=0.45がwNorm1=1.0より粒が大きいのと同じ理屈）。
-    // 既存の2枚(1.0 / 0.45)はどちらも密度の近い"さざ波"止まりで、それより一回り
-    // 大きなスケールのうねり成分が欠けていたため、さらに低いscale=0.20で
-    // 粒の大きい第3の法線マップを追加する。
-    const wNorm3 = createWaterNormalMap(0.20, 22);
+    // 細かい波の法線マップ（02-utils-and-wave-physics.js）。①細かい波（さざ波・小波の2層に使う）②中くらいの波 ③大きめの波。
+    // 数字はマップ1枚に入る波の数の範囲（シェーダー側の1枚の大きさと合わせて波長が決まる）
+    const wNorm1 = createWaterNormalMap(20250815, 5, 32, 90, 0.28);
+    const wNorm2 = createWaterNormalMap(918273, 4, 22, 80, 0.28);
+    const wNorm3 = createWaterNormalMap(55511, 2, 10, 60, 0.2);
 
     // 水面反射用レンダーターゲット（低解像度でAndroidでも動作）
     // 【修正】以前は固定512×512の正方形で作っていたが、スマホの縦長画面（camera.aspectは
@@ -415,16 +411,8 @@ function createWater() {
         normalMap1: { value: wNorm1 },
         normalMap2: { value: wNorm2 },
         normalMap3: { value: wNorm3 },
-        // v161-v3: 法線マップ生成を12オクターブのランダム合成に変更し、単体の
-        // 凹凸振幅がv160時点よりかなり強くなったため、normalScaleは0.38よりやや
-        // 控えめの0.32に調整（強すぎるとチカチカしすぎるため）。
-        // v161-v4: 「もう少し荒く・波の頭をシャープに」の要望で、法線マップ生成に
-        // リッジ(尖った山)成分を混ぜ、周波数もやや低め(粒を大きく)にしたのに
-        // 合わせて、normalScaleも0.32→0.36に少し上げて凹凸をしっかり見せる。
-        // v162: 上のコントラストカーブ追加＋3枚目の大波マップ追加＋specular乗数の
-        // 見直し(下記シェーダー参照)により見た目の総凹凸量が上がったため、
-        // 極端にチカチカしないよう0.36→0.33へ少し戻して調整。
-        normalScale: { value: new THREE.Vector2(0.33, 0.33) },
+        // 細かい波の凹凸の強さ（全体への倍率。風の強さによる変化はシェーダー側で決める）
+        normalScale: { value: new THREE.Vector2(1.0, 1.0) },
         // v163: 視差マッピングのON/OFF。低スペック機ではWATER_PRESETSのverylowで
         // falseになり、シェーダー内でハイトサンプリング＋UVオフセットをスキップして
         // 従来通りuv1/uv2/uv3をそのまま法線サンプリングに使う（負荷を増やさない）。
@@ -434,8 +422,8 @@ function createWater() {
         sunColor: { value: new THREE.Color(1.0, 0.96, 0.85) },
         // v120: v45の海色パレットに戻した（v93で「もっと濃い群青っぽい色に」の要望により
         // 青み(B)を強めて彩度を上げていたが、今回それ以前の落ち着いた色合いに戻す方針）。
-        deepColor: { value: new THREE.Color(0.008, 0.04, 0.14) },
-        shallowColor: { value: new THREE.Color(0.02, 0.12, 0.32) },
+        deepColor: { value: new THREE.Color(0.010, 0.036, 0.078) },
+        shallowColor: { value: new THREE.Color(0.020, 0.085, 0.110) },
         foamColor: { value: new THREE.Color(0.92, 0.97, 1.00) },
         // 水面に映る空の色（水平線の近くの空。昼は空色・夕方は橙・夜は暗い紺：16-daynight-and-telegraph.js が毎フレーム決める）
         skyReflColor: { value: new THREE.Color(0.30, 0.52, 0.82) },
@@ -527,6 +515,13 @@ function createWater() {
         detailOff1U:    { value: new THREE.Vector2() },
         detailOff2U:    { value: new THREE.Vector2() },
         detailOff3U:    { value: new THREE.Vector2() },
+        detailOff4U:    { value: new THREE.Vector2() },
+        // 白波：x＝しきい値・y＝海面のうち白波の割合（17-main-loop.js の updateWater が風速から決める）・z＝風下へ流れる泡の筋の濃さ
+        whitecapU:      { value: new THREE.Vector4(99, 0, 0, 0) },
+        // 泡の筋の座標：風の向き（x, z）、基準点（カメラのXZ）、基準点での模様の位置（17 が積み上げる）
+        streakRotU:     { value: new THREE.Vector2(1, 0) },
+        streakAnchorU:  { value: new THREE.Vector2() },
+        streakBaseU:    { value: new THREE.Vector2() },
         // 霧（scene.fog と同じ FogExp2 の式を自前で掛ける。17-main-loop.js の updateWater が毎フレーム反映）
         waterFogColor:   { value: new THREE.Color(0, 0, 0) },
         waterFogDensity: { value: 0.0 },
@@ -987,6 +982,8 @@ function createWater() {
         polygonOffset: true,
         polygonOffsetFactor: 1,
         polygonOffsetUnits: 1,
+        // 1画素が水面で何mにあたるかを dFdx/dFdy で求める（細かすぎて画面で見分けられない波の扱い）
+        extensions: { derivatives: true },
         defines: { USE_COLOR: '', WATER_SHIP_LIGHT_MAX: WATER_SHIP_LIGHT_MAX, MAX_WAKE: MAX_WAKE, MAX_WL_PTS: MAX_WL_PTS },
         vertexShader: `
             uniform sampler2D sweMap;
@@ -1416,7 +1413,7 @@ function createWater() {
                     // v94: さらにシャープに(遷移幅0.28→0.16)。ここは頂点シェーダー側
                     // (メッシュ解像度依存)なので、これ以上狭めると粗いLODで三角形の
                     // 継ぎ目が見えやすくなる恐れがあり、このあたりが実用上の下限。
-                    // 細かい粒立ちはフラグメント側のmicroFoam(fleckノイズ)側で稼ぐ。
+                    // フラグメント側では、これを白波の出やすさに足す（山の上で細かい波の頭が砕ける）。
                     foam = clamp((crest - 0.44) / 0.16, 0.0, 1.0) * min(1.0, h * 0.85);
                 }
 
@@ -1502,6 +1499,11 @@ function createWater() {
             uniform vec2      detailOff1U;
             uniform vec2      detailOff2U;
             uniform vec2      detailOff3U;
+            uniform vec2      detailOff4U;
+            uniform vec4      whitecapU;
+            uniform vec2      streakRotU;
+            uniform vec2      streakAnchorU;
+            uniform vec2      streakBaseU;
             uniform vec3      waterFogColor;
             uniform float     waterFogDensity;
             uniform vec3      sunDir;
@@ -1714,55 +1716,28 @@ function createWater() {
                 // （→ カメラが水面より高くても穴が見えない）。ウォーターライン直下のような
                 // 際どい深度差は対数深度バッファ＋polygonOffsetで解決している（詳細は
                 // renderer生成箇所とwaterMatのpolygonOffset設定のコメントを参照）。
-                vec2 worldXZ = vWorldPos.xz * 0.007;
-                // v163: 視差マッピング用にviewDirをこの位置（UV計算より前）に前倒し。
-                // 元々はもっと下（scatter/specular計算の直前）で計算していたが、
-                // 視差オフセットをUVサンプリングより前に適用する必要があるため、
-                // ここで先に計算しておく（値自体は変更なし、計算位置の前倒しのみ）。
+                vec2 worldXZ = vWorldPos.xz;
                 vec3 viewDir = normalize(cameraPosition - vWorldPos);
-                // ── v163: 視差マッピング（水平に近い視点での立体感不足への対応）──
-                // 法線マップは陰影しか偽装できず、実際のジオメトリはズレないため、
-                // 水平に近い角度で見ると「本来手前の波が奥を隠すはず」の視差が
-                // 一切出ず、水面が平坦に見えてしまう。ここでは正確なレイマーチングは
-                // 行わず、視線のXZ方向へUVを少しずらすだけの簡易版（1サンプルの
-                // オフセットマッピング）を使う。モバイルGPUでも1テクスチャあたり
-                // 追加コストはハイトマップのサンプル1回分のみに抑えている。
-                // viewDir.yが小さい（＝水平に近い）ほど1/viewDir.yが大きくなり、
-                // オフセット量が強く出る（水平視点でこそ効果が必要なため）。
-                // 真上から見下ろす場合はviewDir.y≈1で分母が大きく、オフセットは
-                // ほぼゼロになる（真上からは元々視差が要らないので自然）。
-                float parallaxStrength = 0.55; // オフセットの強さ（大きいほど視差が強く出る代わりに歪みやすい）
-                float viewDirY = max(viewDir.y, 0.06); // 0除算・極端な引き伸ばし防止のクランプ
+                // ── 視差（水平に近い視点での立体感）──
+                // 法線マップは陰影しか変えないので、波の高さ（マップのB）だけ視線の向きへUVをずらして、
+                // 手前の波が奥を隠すような見た目を簡易に作る。水平に近いほど強く、真上からはほぼ0。
+                float parallaxStrength = 0.55;
+                float viewDirY = max(viewDir.y, 0.06);
                 vec2 parallaxDir = viewDir.xz / viewDirY;
-                // オフセット量が暴走しないよう最終的な長さも制限（波打ち際やほぼ水平の
-                // 極端な角度でUVが遠くまで飛んでテクスチャが繰り返しすぎないように）。
                 float parallaxLen = length(parallaxDir);
                 if (parallaxLen > 4.0) parallaxDir = parallaxDir / parallaxLen * 4.0;
-                // ── v95: テクスチャ上の細かい波紋(法線マップ)の向き・流れる速さを風に連動 ──
-                // uv1は風向そのまま（メインの風波）、uv2はそこから約131°回した向き、
-                // uv3は約47°回した向きに流れる。風速が強いほど速く流れ、水面の細波が
-                // 「風で流れている」ように見える。
-                float wSpdNorm = clamp(windSpeedU / 20.0, 0.0, 1.5);
-                // 流れた量（風向×速さを時間で積み上げたもの）は CPU 側（17-main-loop.js の
-                // updateWater）で計算して detailOff*U で受け取る。以前は
-                // 「風向ベクトル×time×速さ」をここで直接計算していたため、風向・風速が
-                // 変わると経過時間の分だけ模様が一気にずれて、細波が暴走して見えた。
-                vec2 uv1 = worldXZ + detailOff1U;
-                vec2 uv2 = worldXZ * 1.85 + detailOff2U;
-                // v162: 「大きめの波」用の第3レイヤー。uv1/uv2よりUVスケールを縮小
-                // （＝1テクセルが世界座標でより広い範囲をカバーする＝模様が大きく見える）し、
-                // スクロールも遅くして、細波よりゆったりしたうねりとして流れさせる。
-                // 向きはuv1とも違う角度(約47°)に振って、3枚が同じ方向に重ならないようにする。
-                vec2 uv3 = worldXZ * 0.42 + detailOff3U;
-                // v163: 各UVで一度ハイトマップ(normalMapのBチャンネル)を読み、視線方向に
-                // ズラしたUVを最終サンプリング座標として使う。オフセット量はテクスチャの
-                // UVスケールに対して相対的に効くよう、各レイヤーのUV空間のスケールに
-                // 合わせて0.02〜0.05程度の小さい係数を掛ける（テクスチャそのものが
-                // worldXZ×0.007〜0.42という細かいUV空間なので、大きすぎる係数だと
-                // すぐにテクスチャが暴れて見える）。
-                // parallaxEnabled=0（低スペック機向けverylowプリセット）の場合は
-                // ハイトサンプリング自体を丸ごとスキップし、従来通りuv1/uv2/uv3を
-                // そのまま法線サンプリングに使う（テクスチャフェッチ+3回を節約）。
+                float wSpd = max(windSpeedU, 0.0);
+                // ── 細かい波：4層（法線マップ1枚を世界で何mに貼るか）──
+                //  ④さざ波 16m（波長0.5〜3m）・①小波 60m（2〜12m）・②中波 110m（5〜28m）・③大波 340m（34〜170m）
+                //  以前は一番細かい層でも波長3〜16m（1枚143m）で、船の大きさに比べて模様が粗かった。
+                //  流れた量（detailOff*U）は 17-main-loop.js の updateWater が風向・風速から積み上げる
+                //  （風向が変わっても模様が飛ばないように）。
+                vec2 uv1 = worldXZ * (1.0 / 60.0) + detailOff1U;
+                vec2 uv2 = worldXZ * (1.0 / 110.0) + detailOff2U;
+                vec2 uv3 = worldXZ * (1.0 / 340.0) + detailOff3U;
+                // さざ波は①と同じマップを37°回して使う（同じ模様が重なって見えないように）
+                vec2 uv4 = mat2(0.8, 0.6, -0.6, 0.8) * worldXZ * (1.0 / 16.0) + detailOff4U;
+                // parallaxEnabled=0（verylow）では高さを読まずにそのまま使う（テクスチャ3回ぶん軽く）
                 vec2 uv1p = uv1;
                 vec2 uv2p = uv2;
                 vec2 uv3p = uv3;
@@ -1770,20 +1745,39 @@ function createWater() {
                     float h1 = texture2D(normalMap1, uv1).b - 0.5;
                     float h2 = texture2D(normalMap2, uv2).b - 0.5;
                     float h3 = texture2D(normalMap3, uv3).b - 0.5;
-                    uv1p = uv1 + parallaxDir * h1 * parallaxStrength * 0.05;
-                    uv2p = uv2 + parallaxDir * h2 * parallaxStrength * 0.05;
-                    uv3p = uv3 + parallaxDir * h3 * parallaxStrength * 0.05;
+                    uv1p = uv1 + parallaxDir * h1 * parallaxStrength * 0.1;
+                    uv2p = uv2 + parallaxDir * h2 * parallaxStrength * 0.1;
+                    uv3p = uv3 + parallaxDir * h3 * parallaxStrength * 0.1;
                 }
                 vec3 n1 = texture2D(normalMap1, uv1p).rgb * 2.0 - 1.0;
                 vec3 n2 = texture2D(normalMap2, uv2p).rgb * 2.0 - 1.0;
                 vec3 n3 = texture2D(normalMap3, uv3p).rgb * 2.0 - 1.0;
-                // 風速が強いほど法線の凹凸を強調 → 細かい波紋がよりシャープに立って見える。
-                // v162: 3枚それぞれに個別の重みを持たせる。小波(n1)・中波(n2)は元より
-                // 少し強めにしてくっきりさせ、大波(n3)は主張しすぎないよう控えめにして、
-                // 「細かい凹凸の上に緩やかなうねりが乗る」という重なりの階層感を出す。
-                vec2 windNormalScale = normalScale * (1.0 + wSpdNorm * 0.5);
-                vec3 nSum = (n1 * 1.15 + n2 * 1.05 + n3 * 0.55);
-                vec3 n = normalize(vNormal + vec3(nSum.x * windNormalScale.x, 0.0, nSum.y * windNormalScale.y));
+                vec3 n4 = texture2D(normalMap1, uv4).rgb * 2.0 - 1.0;
+                // 1画素が水面で何mにあたるか（遠い・斜めほど大きい）。それより細かい波はテクスチャの縮小
+                // （ミップマップ）で平らにならされる。各層がまだ見分けられる度合い（1＝見える、0＝ならされた）
+                float footprint = max(length(dFdx(vWorldPos.xz)), length(dFdy(vWorldPos.xz)));
+                float res4 = 1.0 - smoothstep(0.12, 1.5, footprint);
+                float res1 = 1.0 - smoothstep(0.45, 6.0, footprint);
+                float res2 = 1.0 - smoothstep(1.2, 14.0, footprint);
+                float res3 = 1.0 - smoothstep(8.0, 85.0, footprint);
+                // ── 風が強いほど細かい波が立つ ──
+                // 海面の傾きの二乗平均は Cox & Munk（1954）の観測式 σ² = 0.003 + 0.00512·U（U＝風速 m/s）：
+                // 凪ではほぼ鏡、風速10m/sで σ≒0.23、20m/sで σ≒0.32。見た目のために1.5倍。
+                // 弱い風では一番細かい波だけ、風が強まるほど中波・大波まで立ってくる。
+                // 以前は凪でも嵐でも凹凸の強さが1〜1.5倍しか変わらず、風が強くても波が立って見えなかった。
+                float slopeRms = sqrt(0.003 + 0.00512 * wSpd) * 1.5;
+                float wGrow = smoothstep(1.5, 12.0, wSpd);
+                float s4 = slopeRms * 0.62;
+                float s1 = slopeRms * 0.52;
+                float s2 = slopeRms * mix(0.22, 0.48, wGrow);
+                float s3 = slopeRms * mix(0.12, 0.30, wGrow) + 0.03;
+                // テクスチャの傾き（1軸の二乗平均0.25）→ 2軸合わせた二乗平均を1にする係数 1/(0.25·√2)
+                vec2 slope = (n4.xy * s4 + n1.xy * s1 + n2.xy * s2 + n3.xy * s3) * 2.8284271 * normalScale;
+                vec3 n = normalize(vNormal + vec3(slope.x, 0.0, slope.y));
+                // ならされて画面に出ない凹凸の分（太陽の照り返しの広がりに使う）
+                float slopeVarLost = s4 * s4 * (1.0 - res4) + s1 * s1 * (1.0 - res1) + s2 * s2 * (1.0 - res2) + s3 * s3 * (1.0 - res3);
+                // 各層の波の高さ（二乗平均1）
+                float hg1 = n1.z * 4.0, hg2 = n2.z * 4.0, hg3 = n3.z * 4.0, hg4 = n4.z * 4.0;
 
                 // ── 船体に密着した波しぶき帯 ──
                 // 水面メッシュ自体は粗くても、実際の船体形状（hullProfile由来）との
@@ -1795,29 +1789,58 @@ function createWater() {
                     hullEdgeFoam = (1.0 - smoothstep(0.0, hullFoamWidth, hullEdgeD)) * hullEdgeWet;
                 }
 
+                // 大きい波（頂点シェーダー）の山の泡。以前はこれがそのまま白く塗られ、遠くの波の山が帯状に
+                // 真っ白になっていた。今は下の白波の「出やすさ」に足すだけ（山の上で細かい波の頭が砕ける）
                 float baseFoam = vColor.r;
-                float waveSteepness = length(n1.xy + n2.xy) * 0.5;
-                // v94: 「風で立った波の穂先だけが砕けて白くなる」感じをもっと強く。
-                // ① crestGate: 大きいうねりの高さ(vColor.g、1に近いほど波の頂上)でゲートする。
-                //    これが無いと谷でも細かい傾き(waveSteepness)さえあれば泡が出てしまい、
-                //    「面で白い」印象になる。頂上付近だけに絞ることで「先端だけ砕ける」形にする。
-                // ② microFoamMask: steepnessのしきい値幅を0.12→0.06にさらに狭め、輪郭をより鋭く。
-                // ③ fleck: ハッシュノイズの周波数を上げ、さらにそれ自体もsmoothstepで
-                //    二値化気味にして、なだらかな濃淡ではなく尖った粒状の砕けにする。
-                float crestGate = smoothstep(0.58, 0.88, vColor.g);
-                float microFoamMask = smoothstep(0.60, 0.66, waveSteepness);
-                float fleckA = hash21(floor(vWorldPos.xz * 42.0));
-                float fleckB = hash21(floor(vWorldPos.xz * 97.0 + vec2(13.0, 7.0)));
-                float fleck  = fleckA * 0.6 + fleckB * 0.4;
-                float fleckMask = smoothstep(0.42, 0.58, fleck);
-                float microFoam = microFoamMask * crestGate * mix(0.2, 1.0, fleckMask);
-                float foam = clamp(baseFoam + microFoam * 0.9 + vSWEFoam * 0.6 + hullEdgeFoam * 0.75, 0.0, 1.0);
+                // ── 白波（風で細かい波の頭が砕けて白くなる所）──
+                // 海面のうち白波の割合は風速で決まる（Monahan & O'Muircheartaigh 1980：W ≒ 3.84e-6·U^3.41。
+                // 風速5m/sで0.1%、10m/sで1%、15m/sで4%、20m/sで10%）。17-main-loop.js がこの割合（と砕けた後に
+                // 残る泡の分）から、下の wcP の分布でちょうどその割合が越えるしきい値（whitecapU.x）を決める。
+                // 以前は風速に関係なく、大きい波の山でさえあれば凪でも細かい白い粒が出ていた。
+                // （重み 0.35・0.55・0.40・0.25：数m の小さい白波が主で、大きい層は「群れて出る」まとまり）
+                float wcVar = 0.1225 * res4 + 0.3025 * res1 + 0.16 * res2 + 0.0625 * res3;
+                float wcP = (0.35 * hg4 + 0.55 * hg1 + 0.40 * hg2 + 0.25 * hg3) / sqrt(max(wcVar, 0.02));
+                float wcX = wcP + (vColor.g - 0.5) * 0.6 + baseFoam * 0.4;
+                float wcT = whitecapU.x;
+                // 泡のまだら（さざ波と、さらに細かい模様。遠くでは平均の濃さ）
+                float hg5 = texture2D(normalMap2, uv4 * 3.7 + vec2(0.37, 0.61)).b * 8.0 - 4.0;
+                float res5 = 1.0 - smoothstep(0.04, 0.4, footprint);
+                float lace = smoothstep(-1.3, 1.1, mix(0.3, hg4 * 0.7 * res4 + hg5 * 0.7 * res5, max(res4, 0.001)));
+                float wcCore = smoothstep(wcT, wcT + 0.8, wcX) * mix(0.45, 1.0, lace);
+                float wcRest = smoothstep(wcT - 0.6, wcT, wcX) * 0.25 * lace;
+                float wcNear = max(wcCore, wcRest);
+                // 細かい層がならされて見えない遠くでは、白波の割合ぶんだけ平均して白っぽく（大波の山ほど多め）
+                float wcFar = whitecapU.y * 0.6 * clamp(1.0 + 0.5 * hg3 + (vColor.g - 0.5), 0.2, 2.0);
+                float nearK = smoothstep(0.1, 0.45, (0.1225 * res4 + 0.3025 * res1 + 0.16 * res2) / 0.585);
+                float whitecap = mix(wcFar, wcNear, nearK);
+                // ── 風下へ流れる泡の筋（風力7くらいから：「泡が風に吹かれて筋を引く」）──
+                // 風の向きに長く（150m）、横に細かく（14m）引き伸ばした模様を、波でうねらせる。風向が変わっても
+                // 模様が飛ばないよう、座標はカメラの近くを基準点にして 17 が積み上げる（streakAnchorU・streakBaseU）
+                float streak = 0.0;
+                if (whitecapU.z > 0.001) {
+                    vec2 dW = worldXZ - streakAnchorU;
+                    vec2 sUv = vec2(dot(dW, vec2(streakRotU.y, -streakRotU.x)) / 14.0, dot(dW, streakRotU) / 150.0) + streakBaseU;
+                    sUv.x += hg2 * 0.06 + hg3 * 0.08;
+                    float sh = texture2D(normalMap2, sUv).b * 8.0 - 4.0;
+                    float sh2 = texture2D(normalMap1, sUv * vec2(2.3, 1.7) + vec2(0.31, 0.77)).b * 8.0 - 4.0;
+                    float sRes = 1.0 - smoothstep(0.3, 3.0, footprint);
+                    streak = mix(0.1, smoothstep(1.2, 2.6, sh * 0.75 + sh2 * 0.45) * mix(0.5, 1.0, lace), sRes) * whitecapU.z;
+                }
+                float foam = clamp(whitecap + streak + vSWEFoam * 0.6 + hullEdgeFoam * 0.75, 0.0, 1.0);
                 
                 // 船体・煙突などが太陽を遮っているかを判定（日陰では直射成分だけを弱める。
                 // 空からの拡散光であるskyRefl等はここでは減衰させない＝影が真っ黒にならない）
                 float sunShadowFactor = sampleSunShadow(vWorldPos);
 
-                float depth = vColor.g;
+                // ── 海の色 ──
+                // 深い外洋の水は、ほぼ黒に近い濃い紺（deepColor）。波の頭（薄い水）や逆光の波は、光が水の中で
+                // 散らばって透けるので少し明るい青緑（shallowColor）になる。大きい波の山（vColor.g）と細かい波の
+                // 頭（風が強いほど立つ）で混ぜる。以前は波の高さそのままで混ぜていて、海全体が明るい水色だった
+                vec3 lookH = vec3(-viewDir.x, 0.0, -viewDir.z) + 1.0e-5;
+                vec3 sunH = vec3(sunDir.x, 0.0, sunDir.z) + 1.0e-5;
+                float backLit = pow(max(0.0, dot(normalize(lookH), normalize(sunH))), 2.0);
+                float crestH = clamp((0.45 * hg1 * res1 + 0.55 * hg2 * res2 + 0.35 * hg3) * 0.35, -1.0, 1.0);
+                float depth = clamp(0.18 + (vColor.g - 0.5) * 0.45 + max(crestH, 0.0) * (0.25 + 0.5 * wGrow), 0.0, 1.0) * (0.55 + 0.45 * backLit);
                 vec3 waterBase = mix(deepColor, shallowColor, depth);
                 // ── とても浅い所（8m 未満）だけ、水の色が少し明るい砂色寄りになる ──
                 // 以前は深さ 200m まで海底の絵（砂・岩・海草のまだら）が透けて見えていたが、透けすぎで模様も
@@ -1856,17 +1879,23 @@ function createWater() {
                 // ようにしか見えない。べき乗を3→2に緩めて傾きへの反応を鈍感に
                 // せず、寄与量も0.35/0.18→0.5/0.26へ上げて、波面の起伏がそのまま
                 // 明暗のグラデーションとして見えるようにする。
+                // 太陽に向いた面は、水の中で散らばった光で少し明るく（水の色のまま。以前は白い光を足していて、
+                // 海全体が白っぽく褪せていた）
                 float scatter = pow(max(0.0, dot(sunDir, n)), 2.0) * 0.5;
-                waterBase += sunColor * scatter * 0.26 * sunShadowFactor;
+                waterBase += shallowColor * sunColor * scatter * 0.9 * sunShadowFactor;
                 // v163: viewDirはUV計算より前（parallaxDir計算時）に前倒し済みのため、
                 // ここでの再宣言は削除。halfDir以降はそのまま既存のviewDirを使う。
                 vec3 halfDir = normalize(sunDir + viewDir);
                 // v162: べき乗180は反射スポットが小さすぎ、凹凸が細かい点にしか
                 // 見えなかったため130へ緩め、代わりに乗数を1.8→1.5に少し絞って
                 // 全体の明るさバランスを保つ（面としての陰影はscatter側で担保）。
-                float spec = pow(max(0.0, dot(n, halfDir)), 130.0);
+                // 太陽の照り返し：画面で見分けられないほど細かい凹凸（遠く・風が強い）があるほど、広く弱く広がる
+                // （遠くの海で、太陽の下に光の帯がきらめいて伸びる）
+                float specExp = clamp(2.0 / max(slopeVarLost * 1.2, 0.0154), 24.0, 130.0);
+                float spec = pow(max(0.0, dot(n, halfDir)), specExp) * (specExp + 8.0) / 138.0;
                 vec3 specular = sunColor * spec * 1.5 * sunShadowFactor;
-                float fresnel = pow(1.0 - max(0.0, dot(n, viewDir)), 4.0);
+                // 空の映り込み（シュリックの近似：真上から見ると2%、水平に近いほど100%に近づく）
+                float fresnel = 0.02 + 0.98 * pow(1.0 - max(0.0, dot(n, viewDir)), 5.0);
                 // v120: deepColor/shallowColorをv45の色合いに戻したのに合わせて、
                 // 際(フレネル)の空色もv45の値に戻す。
                 vec3 skyRefl = skyReflColor;
@@ -1919,7 +1948,9 @@ function createWater() {
                 // 泡の部分は反射を弱める
                 reflMix *= (1.0 - foam * 0.7);
 
-                vec3 finalColor = mix(waterBase + specular + shipRefl, foamColor, foam);
+                // 泡は日陰（船の影）では暗く
+                vec3 foamLit = foamColor * mix(0.62, 1.0, sunShadowFactor);
+                vec3 finalColor = mix(waterBase + specular + shipRefl, foamLit, foam);
                 finalColor      = mix(finalColor, reflColor, reflMix);
                 // 波の水面の端（±1.8km の四角）の 400m ほどは、その外の遠くの水面（44-world-terrain.js）と同じ色の式へ
                 // 少しずつ寄せる。細かい波模様の水面と平らな水面の境目が、四角い線になって見えないように。
@@ -1929,8 +1960,9 @@ function createWater() {
                     if (toFar > 0.0) {
                         vec3 nf = vec3(0.0, 1.0, 0.0);
                         float frF = pow(1.0 - max(0.0, dot(nf, viewDir)), 4.0);
-                        vec3 farCol = mix(mix(deepColor, shallowColor, 0.6), skyReflColor, 0.12 + frF * 0.5);
+                        vec3 farCol = mix(mix(deepColor, shallowColor, 0.2), skyReflColor, 0.12 + frF * 0.5);
                         farCol += sunColor * pow(max(0.0, dot(nf, normalize(sunDir + viewDir))), 60.0) * 0.6;
+                        farCol = mix(farCol, foamColor, whitecapU.y * 0.45);
                         finalColor = mix(finalColor, farCol, toFar);
                     }
                 }

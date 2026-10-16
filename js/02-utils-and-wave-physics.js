@@ -556,139 +556,78 @@ function getWaveHeight(x, z, t, excludeWake = false) {
     return oceanWave + wakeWave;
 }
 
-function createWaterNormalMap(scale, repeatOverride) {
-    const size = 512;
+// 水面の細かい波の法線マップ（512×512、繰り返して貼る）。
+//  R・G：波面の傾き（R＝x方向の -dH/dx、G＝z方向の -dH/dz。1軸の二乗平均が 0.25 になるように）
+//  B：波の高さ（二乗平均が 0.25。視差・白波・波頭の明るさに使う）
+// 以前は向き・周波数を自由に選んだ sin を足してから強いコントラスト曲線を通していたため、
+// 値の1割以上が端（傾き最大）に張り付いて、平らな面が角で折れる「うろこ模様」になり、
+// 周波数も整数でないのでマップの継ぎ目で模様が切れていた。
+// 今は「マップ1枚にちょうど整数回入る波」だけを足した高さの場を作り、その高さを差分して
+// 傾きを出す（高さと傾きが食い違わない）。波頭は少し尖らせる（H + skew·H²：実際の波と同じく
+// 山は細く高く、谷は広く浅く）。
+//  seed：乱数の種、kLo〜kHi：マップ1枚に入る波の数（多いほど細かい）、count：足す波の数
+function createWaterNormalMap(seed, kLo, kHi, count, skew) {
+    const N = 512;
+    let s = seed >>> 0;
+    const rnd = () => { s = (Math.imul(s, 1103515245) + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+    // 波の向きはばらばら、波の数は対数で一様。振幅は 1/k（どの細かさの波も傾きの強さは同じくらい）
+    const comps = [];
+    for (let guard = 0; comps.length < count && guard < count * 50; guard++) {
+        const km = kLo * Math.pow(kHi / kLo, rnd());
+        const ang = rnd() * Math.PI * 2;
+        const mx = Math.round(km * Math.cos(ang)), my = Math.round(km * Math.sin(ang));
+        const k = Math.hypot(mx, my);
+        if (k < kLo * 0.85 || k > kHi * 1.15) continue;
+        comps.push({ mx, my, a: (0.55 + 0.45 * rnd()) / k, ph: rnd() * Math.PI * 2 });
+    }
+    // sin(Ax + By + φ) = sin(Ax)cos(By + φ) + cos(Ax)sin(By + φ)：行ごとに掛けて足すだけにする（三角関数を画素ごとに呼ばない）
+    const H = new Float32Array(N * N), sx = new Float32Array(N), cx = new Float32Array(N);
+    for (const c of comps) {
+        for (let x = 0; x < N; x++) { const A = 2 * Math.PI * c.mx * x / N; sx[x] = Math.sin(A) * c.a; cx[x] = Math.cos(A) * c.a; }
+        for (let y = 0; y < N; y++) {
+            const B = 2 * Math.PI * c.my * y / N + c.ph, sb = Math.sin(B), cb = Math.cos(B), row = y * N;
+            for (let x = 0; x < N; x++) H[row + x] += sx[x] * cb + cx[x] * sb;
+        }
+    }
+    const normalize = () => {
+        let m = 0, v = 0;
+        for (let i = 0; i < H.length; i++) m += H[i];
+        m /= H.length;
+        for (let i = 0; i < H.length; i++) { H[i] -= m; v += H[i] * H[i]; }
+        v = Math.sqrt(v / H.length) || 1;
+        for (let i = 0; i < H.length; i++) H[i] /= v;
+    };
+    normalize();
+    const sk = skew || 0;
+    if (sk) { for (let i = 0; i < H.length; i++) H[i] += sk * (H[i] * H[i] - 1); normalize(); }
+    // 傾き（隣の画素との差。端は反対側へ回り込む＝継ぎ目なし）
+    const GX = new Float32Array(N * N), GY = new Float32Array(N * N);
+    let g2 = 0;
+    for (let y = 0; y < N; y++) {
+        const up = ((y + 1) & (N - 1)) * N, dn = ((y + N - 1) & (N - 1)) * N, row = y * N;
+        for (let x = 0; x < N; x++) {
+            const gx = (H[row + ((x + 1) & (N - 1))] - H[row + ((x + N - 1) & (N - 1))]) * 0.5;
+            const gy = (H[up + x] - H[dn + x]) * 0.5;
+            GX[row + x] = gx; GY[row + x] = gy; g2 += gx * gx + gy * gy;
+        }
+    }
+    const gk = 0.25 / (Math.sqrt(g2 / (2 * N * N)) || 1);
     const canvas = document.createElement('canvas');
-    canvas.width = size; canvas.height = size;
+    canvas.width = N; canvas.height = N;
     const ctx = canvas.getContext('2d');
-    const imgData = ctx.createImageData(size, size);
-    const sc = scale || 1.0;
-
-    // v161-v4: 「波の頭をもっとシャープに」「もう少し荒く」の要望に対応。
-    // v161-v3の12オクターブ(単純なsin合成、丸い凹凸)に加え、"リッジ"成分
-    // （1-|sin(p)|で作る、頂点が尖った山）を別の8オクターブで作り、両者を
-    // ブレンドする。sin成分だけだと山も谷もなだらかな丸みを帯びるが、
-    // リッジ成分を混ぜることで頂点がキュッと立った鋭い凹凸になる。
-    // 周波数もv3よりやや低め(粒を大きく)、振幅もやや強めにして「荒さ」を出す。
-    //
-    // v162: 「凹凸の深さ高さが出てる感じがしない」への対応。上のv4時点では
-    // 山と谷の"形"はシャープになったが、法線ベクトルとしての振幅(sx/sy)が
-    // 素のsin合成のままだったため、多数のオクターブを足し合わせる過程で
-    // 振幅同士が打ち消し合い、中間値付近に収束しがちだった（＝法線マップの
-    // 色が全体的に灰色っぽく平坦になり、結果として陰影が弱く見える）。
-    // → 最終合成後にS字カーブ(コントラストカーブ)を通し、0.5(=平ら)付近の
-    //   値を中央へさらに寄せず、逆に0.5から離れた値ほど強調するようにして、
-    //   谷は谷らしく暗く、山は山らしく明るく出るようにする。
-    const CONTRAST_POW = 0.62; // 1.0=無補正、小さいほど中間値が0/1側へ強く引っ張られコントラストが上がる
-    function applyContrast(v) {
-        // vは0..1。0.5を中心にした符号付き距離をpowで強調してから戻す。
-        const d = v - 0.5;
-        const sign = d >= 0 ? 1 : -1;
-        const strong = Math.pow(Math.abs(d) * 2.0, CONTRAST_POW) * 0.5;
-        return 0.5 + sign * strong;
+    const img = ctx.createImageData(N, N), d = img.data;
+    const enc = (v) => Math.round((Math.max(-1, Math.min(1, v)) * 0.5 + 0.5) * 255);
+    for (let i = 0; i < N * N; i++) {
+        // テクスチャは上下反転して載る（v が上向き＝キャンバスの行と逆）ので、z方向の傾きは行方向の差の符号のまま
+        d[i * 4]     = enc(-GX[i] * gk);
+        d[i * 4 + 1] = enc(GY[i] * gk);
+        d[i * 4 + 2] = enc(H[i] * 0.25);
+        d[i * 4 + 3] = 255;
     }
-    let seed = 20250815; // 固定シード：この関数の結果が毎回同じになるようにする
-    function makeRand(seedStart) {
-        let s = seedStart;
-        return function nextRand() {
-            s = (s * 1103515245 + 12345) & 0x7fffffff;
-            return (s % 100000) / 100000;
-        };
-    }
-    function buildOctaves(n, seedStart, freqLo, freqHi, ampLo, ampHi) {
-        const rnd = makeRand(seedStart);
-        const arr = [];
-        for (let i = 0; i < n; i++) {
-            const ang = rnd() * 360;
-            const freq = (freqLo + rnd() * (freqHi - freqLo)) * sc;
-            const amp = ampLo + rnd() * (ampHi - ampLo);
-            const phase = rnd() * 6.283;
-            const rad = ang * Math.PI / 180;
-            arr.push({ dx: Math.cos(rad) * freq, dy: Math.sin(rad) * freq, amp: amp, phase: phase });
-        }
-        return arr;
-    }
-    // ベース成分（なだらかな凹凸のsin合成）と、リッジ成分（尖った山）を別々の
-    // 乱数列で生成する（同じ乱数を使うと2つの成分が同じ場所で重なり方向性が
-    // 揃ってしまうため、シード違いで独立させる）。
-    const baseOctaves  = buildOctaves(12, seed,       0.11, 0.65, 0.10, 0.34);
-    const ridgeOctaves = buildOctaves(8,  seed + 7654, 0.15, 0.80, 0.13, 0.32);
-    const ridgeMix = 0.5; // リッジ成分の混ぜ具合（0=丸い凹凸のみ、1=尖った山のみ）
-
-    // v163: 視差マッピング(Parallax Mapping)用のハイトマップをBチャンネルに追加。
-    // 「水平に近い角度で見ると法線マップだけでは立体感が出ない」という相談への対応。
-    // 法線マップは陰影を偽装するだけで実際の凹凸位置はズレないため、水平視点では
-    // 「本来手前の波が奥を隠すはず」の視差が一切出ず、平坦さがバレやすい。
-    // 視差マッピングはこの高さ情報を使ってUVをずらし、疑似的な視差を作る。
-    //
-    // 高さの合成には既存のbaseOctaves/ridgeOctavesをそのまま再利用する（新しい
-    // 乱数列は増やさない＝計算コストの増加をこのループ内のsin加算1回分に留める）。
-    // ただし既存のnx/ny(XY法線)と同じ位相のままだと相関が強く出すぎ、視差の
-    // ズレる方向がXY法線の陰影と重なりすぎて不自然になるため、定数位相オフセット
-    // (HEIGHT_PHASE_OFFSET)を1つ加えて緩く独立させている（Node.js上で相関係数
-    // 約-0.09、ほぼ無相関であることを検証済み）。
-    // これは物理的に厳密な「法線=高さの勾配」の関係ではないが、視差マッピング
-    // 自体が元々疑似効果なので、視覚的にそれらしい視差が付けば十分という判断。
-    const HEIGHT_PHASE_OFFSET = 1.732;
-
-    for (let y = 0; y < size; y++) {
-        for (let x = 0; x < size; x++) {
-            const idx = (y * size + x) * 4;
-            let sx = 0, sy = 0;
-            for (let i = 0; i < baseOctaves.length; i++) {
-                const o = baseOctaves[i];
-                const p = x * o.dx + y * o.dy;
-                sx += Math.sin(p) * o.amp;
-                sy += Math.sin(p + o.phase) * o.amp;
-            }
-            let rx = 0, ry = 0;
-            let hBase = 0, hRidge = 0;
-            for (let i = 0; i < ridgeOctaves.length; i++) {
-                const o = ridgeOctaves[i];
-                const p = x * o.dx + y * o.dy;
-                const s1 = Math.sin(p);
-                const s2 = Math.sin(p + o.phase);
-                // 1 - |sin| で頂点が尖った山を作り、元のsinの符号を掛けて
-                // 山と谷それぞれの向きを保つ。
-                rx += (1.0 - Math.abs(s1)) * (s1 >= 0 ? 1 : -1) * o.amp;
-                ry += (1.0 - Math.abs(s2)) * (s2 >= 0 ? 1 : -1) * o.amp;
-            }
-            // 高さ専用の合成（baseOctavesはHEIGHT_PHASE_OFFSET付きのsinで、
-            // ridgeOctavesは同じオフセットを使ったリッジ成分で計算）。
-            for (let i = 0; i < baseOctaves.length; i++) {
-                const o = baseOctaves[i];
-                const p = x * o.dx + y * o.dy + HEIGHT_PHASE_OFFSET;
-                hBase += Math.sin(p) * o.amp;
-            }
-            for (let i = 0; i < ridgeOctaves.length; i++) {
-                const o = ridgeOctaves[i];
-                const p = x * o.dx + y * o.dy + HEIGHT_PHASE_OFFSET;
-                const s1 = Math.sin(p);
-                hRidge += (1.0 - Math.abs(s1)) * (s1 >= 0 ? 1 : -1) * o.amp;
-            }
-            const fx = sx * (1.0 - ridgeMix) + rx * ridgeMix;
-            const fy = sy * (1.0 - ridgeMix) + ry * ridgeMix;
-            const fh = hBase * (1.0 - ridgeMix) + hRidge * ridgeMix;
-            const nx = applyContrast(Math.max(0, Math.min(1, fx + 0.5)));
-            const ny = applyContrast(Math.max(0, Math.min(1, fy + 0.5)));
-            const nh = applyContrast(Math.max(0, Math.min(1, fh + 0.5)));
-
-            imgData.data[idx] = Math.floor(Math.max(0, Math.min(1, nx)) * 255);
-            imgData.data[idx + 1] = Math.floor(Math.max(0, Math.min(1, ny)) * 255);
-            imgData.data[idx + 2] = Math.floor(Math.max(0, Math.min(1, nh)) * 255);
-            imgData.data[idx + 3] = 255;
-        }
-    }
-    ctx.putImageData(imgData, 0, 0);
+    ctx.putImageData(img, 0, 0);
     const tex = new THREE.CanvasTexture(canvas);
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
-    // v162: 大波用の第3マップは模様自体の周波数(scale)を下げただけでは足りず、
-    // テクスチャのタイリング回数(repeat)も一緒に下げないと、結局細かく繰り返されて
-    // 「大きなうねり」には見えない。第3引数で個別に指定できるようにする
-    // （未指定時は従来通り88のまま＝wNorm1/wNorm2の挙動は変えない）。
-    const rep = repeatOverride || 88;
-    tex.repeat.set(rep, rep);
     return tex;
 }
 
