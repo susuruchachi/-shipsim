@@ -390,7 +390,12 @@
 //               丸めた数字。自動バランスはスライダーの目盛り 0.05 にも丸めていた）を使っていたので、開くたびに少しずれていた。
 //               自動にしたかを保存に残し、前後・左右の重心を手で動かすと自動をやめる。印の無い以前の保存は、保存した値が
 //               計算した値とほぼ同じなら自動にしたものとみなす。自動バランスの値も目盛りに丸めずにそのまま使う
-var APP_VERSION = '0.03.016.025';
+// 0.03.017.000 見張り台の双眼鏡（新しく 69-binoculars.js）：見張り台の視点で、左の「🔭 双眼鏡」か B キーで覗く。倍率は ×2〜×25
+//               （既定 ×7。− ＋・2 本指でつまむ・ホイール）、二つの丸ののぞき窓、方位の表示、倍率に合わせて見回しの速さを落とす。
+//               Xperia 5 III（Adreno）で、焼き込みの計算中・焼き込みを使わない夜に船が赤くなるのを直す：実機の検査で、船のシェーダーで
+//               画素へ渡す値（varying）が 9 個を超えると色が壊れると分かった（float 1 つも 1 個に数えられる。以前の真っ青も同じ原因）。
+//               霧の深さ・奥行き 2 つ・空の見え方の 4 つの float を 1 つにまとめ（ふだん 9 個 → 6 個）、Adreno では面光源の影を付けない
+var APP_VERSION = '0.03.017.000';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

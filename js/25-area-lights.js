@@ -156,7 +156,12 @@ function areaLightIntensityFromProps(raw) {
 function getAreaLightBudget() {
     const q = (typeof perf !== 'undefined' && perf.quality) ? perf.quality : 'medium';
     const b = AREA_LIGHT_BUDGET[q] || AREA_LIGHT_BUDGET.medium;
-    const shadowsOn = !(typeof perf !== 'undefined' && !perf.shadowsEnabled);
+    // Adreno の GPU（Xperia 5 III で確認）では、面光源の影（SpotLight）を付けない。影 1 つごとに、照らされる物すべての
+    // シェーダーの varying が 1 個増え、9 個を超えると色が壊れる（焼き込みの計算中・焼き込みを使わないとき、夜に船が赤くなった。
+    // 船の材質は 61-ship-ao.js で減らしてあるが、地形・建物・タグなどにも効くので、影のほうを止める）。
+    // 焼き込んだ明るさには影が入っているので、ふだん（焼き込み済み）の見た目は変わらない
+    const adreno = /adreno/i.test(window.gpuName || '');
+    const shadowsOn = !(typeof perf !== 'undefined' && !perf.shadowsEnabled) && !adreno;
     return { active: b.active, shadows: shadowsOn ? b.shadows : 0, mapSize: b.mapSize };
 }
 

@@ -186,8 +186,10 @@ function setupMobileControls() {
         // マウス1ドラッグ/タッチ1本指ドラッグを横取りして見回しに使う。
         let _vpDragPrev = null;
         const vpLook = (dx, dy) => {
-            viewpointYaw   += dx * 0.0045;  // カメラが前向き(+Z)になったので符号を反転
-            viewpointPitch -= dy * 0.0045;
+            // 双眼鏡で覗いている間は倍率で割る（指の動きと景色の動きが合うように：69-binoculars.js）
+            const k = typeof binoLookScale === 'function' ? binoLookScale() : 1;
+            viewpointYaw   += dx * 0.0045 * k;  // カメラが前向き(+Z)になったので符号を反転
+            viewpointPitch -= dy * 0.0045 * k;
             viewpointPitch = Math.max(-1.45, Math.min(1.45, viewpointPitch)); // 上下 約±83°
         };
 

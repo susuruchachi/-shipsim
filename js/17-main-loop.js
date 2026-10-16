@@ -729,6 +729,7 @@ function animate() {
     if (typeof updatePuffs === 'function') updatePuffs(t, dt);                   // タグの排煙・汽笛の蒸気・しぶき（52-puffs.js）
     if (typeof updateSubmarine === 'function') updateSubmarine(t, dt);           // 潜水艦の魚雷・ソナー・潜望鏡（54-submarine.js）
     if (typeof updateSights === 'function') updateSights(t, dt);                 // 測距儀・照準・舵輪の横のボタン（66-sights.js）
+    if (typeof updateBinoculars === 'function') updateBinoculars(dt);           // 見張り台の双眼鏡（69-binoculars.js）
     if (typeof updateLightBake === 'function') updateLightBake(t);
     if (typeof updateAreaLights === 'function') updateAreaLights(t);
     if (typeof updateGlowHalos === 'function') updateGlowHalos();   // 遠景用の光のにじみ（26）

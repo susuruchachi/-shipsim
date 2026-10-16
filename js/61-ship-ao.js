@@ -154,6 +154,39 @@ float skyOccVis(vec3 nV, vec3 pV) {
     return v / 10.0 * smoothstep(-0.9, -0.2, n.y);
 }
 `;
+// 船のシェーダーで画素へ渡す小さな値（float の varying）を、1 つの vec4 にまとめる。
+// Adreno の GPU（Xperia 5 III で確認）では、船のシェーダーの varying が 9 個を超えると色が壊れた。
+// float 1 つも vec4 と同じ 1 個に数えられる（実機の検査：ふだんの 9 個に float を 1 つ足すと青、vec4 1 つで黒、
+// vec4 の配列 2 つで赤紫。焼き込みの計算中の灯りの影 3 つで赤、以前の空の遮られ方の 2 つで青）。
+// three.js の霧の深さ（fogDepth）・対数の奥行き（vFragDepth・vIsPerspective）と、空の見え方（vSkyAO）を 1 つにまとめて 3 個減らす。
+// 名前は #define で置き換えるので、three.js の部品（fog_vertex など）はそのまま動く
+const _SHIP_PK_DEF = '#define vSkyAO vShipPk.x\n#define fogDepth vShipPk.y\n#define vFragDepth vShipPk.z\n#define vIsPerspective vShipPk.w\nvarying vec4 vShipPk;\n';
+function _shipPackVaryings(src, frag) {
+    for (const name of frag ? ['fog_pars_fragment', 'logdepthbuf_pars_fragment'] : ['fog_pars_vertex', 'logdepthbuf_pars_vertex']) {
+        const chunk = THREE.ShaderChunk[name];
+        if (chunk) src = src.replace(`#include <${name}>`, chunk.replace(/varying\s+float\s+(fogDepth|vFragDepth|vIsPerspective)\s*;/g, ''));
+    }
+    return src;
+}
+// シェーダーにまとめる仕掛けを入れる（2 度入れない）
+function _shipPackShader(shader) {
+    if (shader.vertexShader.indexOf('varying vec4 vShipPk;') >= 0) return;
+    shader.vertexShader = _shipPackVaryings(shader.vertexShader.replace('#include <common>', '#include <common>\n' + _SHIP_PK_DEF), false);
+    shader.fragmentShader = _shipPackVaryings(shader.fragmentShader.replace('#include <common>', '#include <common>\n' + _SHIP_PK_DEF), true);
+}
+// 船の陰影の仕掛けを付けない部品（透ける物・スクリューなど：60-ship-solid.js の _ssMeshes に入らない物）にも、まとめる仕掛けだけ付ける
+function _shipPackPatch(mat) {
+    if (!mat || mat.userData.aoPatched || mat.userData.pkPatched) return;
+    if (!(mat.isMeshStandardMaterial || mat.isMeshPhongMaterial || mat.isMeshLambertMaterial)) return;
+    mat.userData.pkPatched = true;
+    const prev = mat.onBeforeCompile, prevKey = mat.customProgramCacheKey;
+    mat.onBeforeCompile = function (shader, r) {
+        if (typeof prev === 'function') prev.call(this, shader, r);
+        _shipPackShader(shader);
+    };
+    mat.customProgramCacheKey = function () { return 'shipPk|' + ((typeof prevKey === 'function') ? prevKey.call(this) : ''); };
+    mat.needsUpdate = true;
+}
 // opts.skyOcc：自分の船のマテリアルだけ（他の船は、自分の船の地図を使えないので付けない：59-traffic.js）
 function _aoPatchMaterial(mat, opts) {
     if (!mat || mat.userData.aoPatched) return;
@@ -175,15 +208,16 @@ function _aoPatchMaterial(mat, opts) {
         shader.uniforms.uAOStrength = shipAOUniforms.uAOStrength; shader.uniforms.uAODebug = shipAOUniforms.uAODebug;
         shader.uniforms.uIndirK = shipAOUniforms.uIndirK; shader.uniforms.uDirectK = shipAOUniforms.uDirectK;
         if (occ) for (const k of ['uSkyOccMap', 'uSkyOccMat', 'uSkyOccOn', 'uSkyOccR', 'uSkyOccBias', 'uSkyOccMin', 'uSkyOccOff']) shader.uniforms[k] = shipAOUniforms[k];
-        shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nattribute float aSky;\nvarying float vSkyAO;\n')
+        _shipPackShader(shader);   // vSkyAO もまとめた値の 1 つ
+        shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nattribute float aSky;\n')
             .replace(/\}\s*$/, '    vSkyAO = aSky;\n}\n');
         // 間接光（半球光・環境光・光のプローブ・環境マップ）に掛ける。少し強めに効くよう曲げる
         const occF = occ ? '      if (uSkyOccOn > 0.5) { float so = mix(uSkyOccMin, 1.0, skyOccVis(normal, -vViewPosition)); reflectedLight.indirectDiffuse *= so; reflectedLight.indirectSpecular *= mix(1.0, so, 0.6); }\n' : '';
-        shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uAOStrength;\nuniform float uAODebug;\nuniform float uIndirK;\nuniform float uDirectK;\nvarying float vSkyAO;\n' + (occ ? _SKY_OCC_GLSL : ''))
+        shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uAOStrength;\nuniform float uAODebug;\nuniform float uIndirK;\nuniform float uDirectK;\n' + (occ ? _SKY_OCC_GLSL : ''))
             .replace('#include <aomap_fragment>', '#include <aomap_fragment>\n    { float sk = mix(1.0, pow(clamp(vSkyAO * 1.15, 0.0, 1.0), 1.4), uAOStrength);\n      reflectedLight.indirectDiffuse *= sk * uIndirK; reflectedLight.indirectSpecular *= mix(1.0, sk, 0.7) * uIndirK;\n' + occF + '      reflectedLight.directDiffuse *= uDirectK; }\n')
             .replace(/\}\s*$/, '    if (uAODebug > 0.5) gl_FragColor = vec4(vec3(vSkyAO), 1.0);\n}\n');
     };
-    mat.customProgramCacheKey = function () { return 'skyAO' + (mat.userData.skyOcc ? 'o2' : '') + (typeof gpuDbgKey === 'function' ? gpuDbgKey() : '') + '|' + ((typeof prevKey === 'function') ? prevKey.call(this) : ''); };
+    mat.customProgramCacheKey = function () { return 'skyAOpk' + (mat.userData.skyOcc ? 'o2' : '') + (typeof gpuDbgKey === 'function' ? gpuDbgKey() : '') + '|' + ((typeof prevKey === 'function') ? prevKey.call(this) : ''); };
     mat.defaultAttributeValues = Object.assign({}, mat.defaultAttributeValues || {}, { aSky: [1] });
     mat.needsUpdate = true;
 }
@@ -292,6 +326,8 @@ function updateShipAO() {
         if (now - shipAO.checkT < 2000) return;
         shipAO.checkT = now;
         for (const m of (typeof _ssMeshes === 'function' ? _ssMeshes() : [])) (Array.isArray(m.material) ? m.material : [m.material]).forEach(x => _aoPatchMaterial(x));
+        // それ以外の船の部品には、varying をまとめる仕掛けだけ
+        if (typeof shipGroup !== 'undefined' && shipGroup) shipGroup.traverse(o => { if (o.isMesh) (Array.isArray(o.material) ? o.material : [o.material]).forEach(x => _shipPackPatch(x)); });
         // 空の遮られ方の地図：モデル・縮尺が変わったら描き直す（船の形の升目ができてから＝モデルの読み込みが落ち着いてから）
         if (window.shipSolid && shipSolid.G) { const key = _skyOccKey(); if (key && key !== skyOcc.key) { skyOcc.key = key; try { _skyOccBuild(); } catch (e) { console.warn('空の遮られ方の地図を作れませんでした', e); shipAOUniforms.uSkyOccOn.value = 0; } } }
         return;
