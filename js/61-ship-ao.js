@@ -127,20 +127,58 @@ function* _aoMeshes(G, F, list, root) {
 const shipAOUniforms = { uAOStrength: { value: 0 }, uAODebug: { value: 0 }, uIndirK: { value: 1 }, uDirectK: { value: 1 },
     // 空の遮られ方（下の skyOcc：上から見た船の奥行きの地図）
     uSkyOccMap: { value: null }, uSkyOccMat: { value: new THREE.Matrix4() }, uSkyOccOn: { value: 0 }, uSkyOccR: { value: new THREE.Vector2(0.001, 0.001) },
-    uSkyOccBias: { value: 0.002 }, uSkyOccMin: { value: 0.35 }, uSkyOccOff: { value: 1 } };    // uAODebug=1：空の見え方を白黒で表示（調整用）
-// 空の遮られ方を調べる（地図の 8 点：やわらかい縁）。上に何かある所は 0、空が見える所は 1
+    uSkyOccBias: { value: 0.002 }, uSkyOccMin: { value: 0.35 }, uSkyOccOff: { value: 1 }, uSkyOccDepthM: { value: 50 } };    // uAODebug=1：空の見え方を白黒で表示（調整用）
+// 空の遮られ方を調べる。上に何かある所は 0、空が見える所は 1
 // ・面の向きは、カメラから見えている側を外とする（厚さの無い一枚の面の、プロムナードの内側から見た面・内向きの法線の部品でも正しく）
-// ・地図を引く前後左右の位置は面の外へ少し出した所、比べる高さは面そのものの高さ（出しすぎて薄い天井を突き抜けて、
+// ・上を向いた面（甲板など）：真上に何かあるか（地図の 5 点：やわらかい縁）。あれば、その物の高さと、前後左右へ 1.2・3・6m
+//   どこまで続いているかで、隠す空の割合を決める（高い所の小さな物（見張り台・ボートなど）の真下は少しだけ、低く広い屋根の下は深く）。
+//   地図を引く前後左右の位置は面の外へ少し出した所、比べる高さは面そのものの高さ（出しすぎて薄い天井を突き抜けて、
 //   天井のすぐ下の角が明るく残っていた）
+// ・壁：壁から外へ 0.6・1.6・3.2・6m の所の、上にある物（張り出した甲板・ブリッジの翼・ボートなど）の高さを見て、
+//   それが隠す空の割合を足す（壁の真正面と左右 50° の 3 方向）。以前は壁にも「真上に何かあるか」だけを使っていたので、
+//   上の甲板が少しでも張り出している壁は、張り出しがどれだけ高くても一様に暗い四角になり、太陽が船尾から当たって
+//   前向きの壁が間接光だけになると、ブリッジ周りに変な影の塊が見えた（甲板も同じで、高い所の小さな物の真下が真っ黒な八角形になっていた）。
+//   今は、張り出しのすぐ下ほど暗く、下へ行くほど明るい。壁から離れて立つ物は数えない（甲板・壁の隅を汚さないように）
 // ・下を向いた面は空が見えない
 // 面の位置と向きは、three.js がもともと画素へ渡している値（カメラから見た位置 vViewPosition と面の向き normal）から
 // 世界の座標へ直して使う。以前は世界の位置と向きを自前の値（varying）として 2 つ余分に渡していたが、Adreno の GPU
 // （Xperia 5 III で確認）では、それと太陽の影が同じシェーダーに入ると、船の白い所などが真っ青・真っ黒になった
 // （GPU のドライバーの不具合。実機の検査で、余分に渡した値を画素で読むと壊れ、読まなければ直ると分かった）
 const _SKY_OCC_GLSL = `
-uniform sampler2D uSkyOccMap; uniform float uSkyOccOn, uSkyOccBias, uSkyOccMin, uSkyOccOff; uniform vec2 uSkyOccR;
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+uniform highp sampler2D uSkyOccMap;
+#else
+uniform sampler2D uSkyOccMap;
+#endif
+uniform float uSkyOccOn, uSkyOccBias, uSkyOccMin, uSkyOccOff, uSkyOccDepthM; uniform vec2 uSkyOccR;
 uniform mat4 uSkyOccMat;
-float skyOccTap(vec3 c, vec2 o) { return step(c.z - uSkyOccBias, texture2D(uSkyOccMap, c.xy + o * uSkyOccR).r); }
+// 地図の q の所で、いちばん上の面が奥行き z（面の高さ）より何 m 上にあるか（0.2 未満：上に何も無い）
+float skyOccUp(vec2 q, float z) { return (z - texture2D(uSkyOccMap, q).r) * uSkyOccDepthM; }
+// 高さ h m 上の薄い屋根の、面から水平に d0〜d1 m の部分が隠す空の割合（面が見る空を 1 として）。
+// 壁（縦の面）は壁に直角な断面で、甲板（上向きの面）は真上からの向きの重み（cos）で
+float skyOccSlab(float h, float d0, float d1) { return h / sqrt(h * h + d0 * d0) - h / sqrt(h * h + d1 * d1); }
+float skyOccDisk(float h, float d0, float d1) { h *= h; return h / (h + d0 * d0) - h / (h + d1 * d1); }
+// 壁から st の向き（地図の上の 1m）へ：壁のすぐ外から続いて張り出している屋根だけを数える（離れて立つ物は数えない）
+float skyOccWall(vec2 q, float z, vec2 st) {
+    float h = skyOccUp(q + st * 0.6, z);
+    if (h < 0.2) return 1.0;
+    float b = skyOccSlab(h, 0.0, 1.0);
+    h = skyOccUp(q + st * 1.6, z);
+    if (h >= 0.2) { b += skyOccSlab(h, 1.0, 2.4); h = skyOccUp(q + st * 3.2, z);
+        if (h >= 0.2) { b += skyOccSlab(h, 2.4, 4.5); h = skyOccUp(q + st * 6.0, z);
+            if (h >= 0.2) b += skyOccSlab(h, 4.5, 8.0); } }
+    return 1.0 - clamp(b, 0.0, 1.0);
+}
+// 甲板の真上の屋根が、st の向きへどこまで続いているか（1.2・3・6m）
+float skyOccRoof(vec2 q, float z, vec2 st) {
+    float h = skyOccUp(q + st * 1.2, z);
+    if (h < 0.2) return 0.0;
+    float b = skyOccDisk(h, 0.6, 1.8);
+    h = skyOccUp(q + st * 3.0, z);
+    if (h >= 0.2) { b += skyOccDisk(h, 1.8, 4.0); h = skyOccUp(q + st * 6.0, z);
+        if (h >= 0.2) b += skyOccDisk(h, 4.0, 8.0); }
+    return b;
+}
 float skyOccVis(vec3 nV, vec3 pV) {
     vec3 n = normalize((vec4(nV, 0.0) * viewMatrix).xyz);
     vec3 sP = cameraPosition + (vec4(pV, 0.0) * viewMatrix).xyz;
@@ -149,9 +187,29 @@ float skyOccVis(vec3 nV, vec3 pV) {
     vec4 cq = uSkyOccMat * vec4(sP + n * uSkyOccOff, 1.0);
     vec3 c = vec3(cq.xy / cq.w, cp.z / cp.w) * 0.5 + 0.5;
     if (c.x <= 0.0 || c.x >= 1.0 || c.y <= 0.0 || c.y >= 1.0 || c.z >= 1.0 || c.z <= 0.0) return 1.0;
-    float v = skyOccTap(c, vec2(0.0)) * 2.0 + skyOccTap(c, vec2(1.0, 0.0)) + skyOccTap(c, vec2(-1.0, 0.0)) + skyOccTap(c, vec2(0.0, 1.0)) + skyOccTap(c, vec2(0.0, -1.0))
-            + skyOccTap(c, vec2(0.7, 0.7)) + skyOccTap(c, vec2(-0.7, 0.7)) + skyOccTap(c, vec2(0.7, -0.7)) + skyOccTap(c, vec2(-0.7, -0.7));
-    return v / 10.0 * smoothstep(-0.9, -0.2, n.y);
+    float lh = length(n.xz), k = smoothstep(0.35, 0.75, lh), v = 1.0, w = 1.0;
+    if (k < 1.0) {
+        // 甲板など：真上に何かあるか（やわらかい縁）。あれば、その高さと広がりで暗さを決める
+        // （高い所の小さな物（見張り台・ボートなど）の真下は少し、低く広い屋根の下は深く）
+        vec2 rx = vec2(uSkyOccR.x, 0.0), ry = vec2(0.0, uSkyOccR.y);
+        float u0 = skyOccUp(c.xy, c.z), u1 = skyOccUp(c.xy + rx, c.z), u2 = skyOccUp(c.xy - rx, c.z), u3 = skyOccUp(c.xy + ry, c.z), u4 = skyOccUp(c.xy - ry, c.z);
+        float f = (step(u0, 0.2) * 2.0 + step(u1, 0.2) + step(u2, 0.2) + step(u3, 0.2) + step(u4, 0.2)) / 6.0;
+        if (f < 1.0) {
+            float h0 = max(max(u0, u1), max(max(u2, u3), max(u4, 0.2)));
+            vec2 sx = rx * 4.0, sy = ry * 4.0;
+            float b = skyOccDisk(h0, 0.0, 0.6) + 0.25 * (skyOccRoof(c.xy, c.z, sx) + skyOccRoof(c.xy, c.z, -sx) + skyOccRoof(c.xy, c.z, sy) + skyOccRoof(c.xy, c.z, -sy));
+            v = 1.0 - (1.0 - f) * clamp(b, 0.0, 1.0);
+        }
+    }
+    if (k > 0.0) {
+        // 壁：壁の外へ張り出した屋根の高さと長さ（真正面と左右 50°。地図の上で、壁から外へ水平に 1m 進む量）
+        vec2 h = n.xz / max(lh, 1.0e-3), q = cp.xy * 0.5 + 0.5;
+        vec2 s0 = (uSkyOccMat * vec4(h.x, 0.0, h.y, 0.0)).xy * 0.5;
+        vec2 s1 = (uSkyOccMat * vec4(h.x * 0.643 - h.y * 0.766, 0.0, h.y * 0.643 + h.x * 0.766, 0.0)).xy * 0.5;
+        vec2 s2 = (uSkyOccMat * vec4(h.x * 0.643 + h.y * 0.766, 0.0, h.y * 0.643 - h.x * 0.766, 0.0)).xy * 0.5;
+        w = (skyOccWall(q, c.z, s0) + 0.64 * (skyOccWall(q, c.z, s1) + skyOccWall(q, c.z, s2))) / 2.28;
+    }
+    return mix(v, w, k) * smoothstep(-0.9, -0.2, n.y);
 }
 `;
 // 船のシェーダーで画素へ渡す小さな値（float の varying）を、1 つの vec4 にまとめる。
@@ -207,7 +265,7 @@ function _aoPatchMaterial(mat, opts) {
         const occ = mat.userData.skyOcc && window.gpuDbg !== 'skyocc' && (mat.isMeshStandardMaterial || mat.isMeshPhongMaterial);
         shader.uniforms.uAOStrength = shipAOUniforms.uAOStrength; shader.uniforms.uAODebug = shipAOUniforms.uAODebug;
         shader.uniforms.uIndirK = shipAOUniforms.uIndirK; shader.uniforms.uDirectK = shipAOUniforms.uDirectK;
-        if (occ) for (const k of ['uSkyOccMap', 'uSkyOccMat', 'uSkyOccOn', 'uSkyOccR', 'uSkyOccBias', 'uSkyOccMin', 'uSkyOccOff']) shader.uniforms[k] = shipAOUniforms[k];
+        if (occ) for (const k of ['uSkyOccMap', 'uSkyOccMat', 'uSkyOccOn', 'uSkyOccR', 'uSkyOccBias', 'uSkyOccMin', 'uSkyOccOff', 'uSkyOccDepthM']) shader.uniforms[k] = shipAOUniforms[k];
         _shipPackShader(shader);   // vSkyAO もまとめた値の 1 つ
         shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nattribute float aSky;\n')
             .replace(/\}\s*$/, '    vSkyAO = aSky;\n}\n');
@@ -217,7 +275,7 @@ function _aoPatchMaterial(mat, opts) {
             .replace('#include <aomap_fragment>', '#include <aomap_fragment>\n    { float sk = mix(1.0, pow(clamp(vSkyAO * 1.15, 0.0, 1.0), 1.4), uAOStrength);\n      reflectedLight.indirectDiffuse *= sk * uIndirK; reflectedLight.indirectSpecular *= mix(1.0, sk, 0.7) * uIndirK;\n' + occF + '      reflectedLight.directDiffuse *= uDirectK; }\n')
             .replace(/\}\s*$/, '    if (uAODebug > 0.5) gl_FragColor = vec4(vec3(vSkyAO), 1.0);\n}\n');
     };
-    mat.customProgramCacheKey = function () { return 'skyAOpk' + (mat.userData.skyOcc ? 'o2' : '') + (typeof gpuDbgKey === 'function' ? gpuDbgKey() : '') + '|' + ((typeof prevKey === 'function') ? prevKey.call(this) : ''); };
+    mat.customProgramCacheKey = function () { return 'skyAOpk' + (mat.userData.skyOcc ? 'o3' : '') + (typeof gpuDbgKey === 'function' ? gpuDbgKey() : '') + '|' + ((typeof prevKey === 'function') ? prevKey.call(this) : ''); };
     mat.defaultAttributeValues = Object.assign({}, mat.defaultAttributeValues || {}, { aSky: [1] });
     mat.needsUpdate = true;
 }
@@ -263,9 +321,12 @@ function _skyOccBuild() {
     const sc = physics.scale || 1, pad = 2 / sc;
     const hx = (box.max.x - box.min.x) / 2 + pad, hz = (box.max.z - box.min.z) / 2 + pad, cx = (box.min.x + box.max.x) / 2, cz = (box.min.z + box.max.z) / 2;
     const top = box.max.y + pad, depth = box.max.y - box.min.y + 2 * pad;
-    // 地図の大きさ：前後 2048（スマホ 1024）、左右は船の幅の割合で
-    const maxT = Math.min(renderer.capabilities.maxTextureSize || 2048, (typeof _texIsMobile === 'function' && _texIsMobile()) ? 1024 : 2048);
-    const H = maxT, W = Math.max(64, Math.min(maxT, Math.round(maxT * hx / hz)));
+    // 地図の大きさ：前後 2048、左右は船の幅の割合で。画素の数はスマホで 2048×512 分、パソコンで 2048×2048 分まで
+    // （細長い船ならスマホでも前後 2048。以前はスマホだけ 1024 で、升目の段々が影の縁に出やすかった）
+    const maxT = Math.min(renderer.capabilities.maxTextureSize || 2048, 2048);
+    const area = (typeof _texIsMobile === 'function' && _texIsMobile()) ? maxT * 512 : maxT * maxT;
+    let H = maxT, W = Math.max(64, Math.min(maxT, Math.round(maxT * hx / hz)));
+    if (W * H > area) { const k = Math.sqrt(area / (W * H)); W = Math.max(64, Math.round(W * k)); H = Math.max(64, Math.round(H * k)); }
     if (!skyOcc.rt || skyOcc.rt.width !== W || skyOcc.rt.height !== H) {
         if (skyOcc.rt) { skyOcc.rt.depthTexture.dispose(); skyOcc.rt.dispose(); }
         const rt = new THREE.WebGLRenderTarget(W, H, { depthBuffer: true });
@@ -303,6 +364,7 @@ function _skyOccBuild() {
     // やわらかい縁の幅 0.25m・奥行きの余裕 0.2m・面の外へ出す長さ（船の長さの 0.2％、0.25〜0.6m）
     U.uSkyOccR.value.set(0.25 / sc / (2 * hx), 0.25 / sc / (2 * hz));
     U.uSkyOccBias.value = 0.2 / sc / depth;
+    U.uSkyOccDepthM.value = depth * sc;   // 地図の奥行き 0〜1 → m（壁の上の張り出しの高さ）
     U.uSkyOccOff.value = Math.max(0.25, Math.min(0.6, Lm * 0.002));
     skyOcc.ok = true;
     U.uSkyOccOn.value = 1;
