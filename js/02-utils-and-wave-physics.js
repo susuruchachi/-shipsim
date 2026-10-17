@@ -223,7 +223,9 @@ function sanitizePhysics() {
     // 潜水艦（54-submarine.js）が潜っている分は、下げてよい
     // （上下の限界は設けない。数の上の安全のため、いちばん深い海より深くはしない）
     physics.y = THREE.MathUtils.clamp(physics.y, -11000 - ((window.sub && sub.applied) || 0), 11000);
-    physics.vy = THREE.MathUtils.clamp(physics.vy, -12, 12);
+    // （船体が水から出て飛んでいる間は、重力どおりに速くなってよい：17-main-loop.js の physics.hullWet）
+    const vyLim = 12 + 48 * (1 - (Number.isFinite(physics.hullWet) ? THREE.MathUtils.clamp(physics.hullWet, 0, 1) : 1));
+    physics.vy = THREE.MathUtils.clamp(physics.vy, -vyLim, vyLim);
     physics.speed = THREE.MathUtils.clamp(physics.speed, -physics.maxSpeed * 0.5, physics.maxSpeed);
     physics.turnRate = THREE.MathUtils.clamp(physics.turnRate, -15, 15);
     physics.rudderAngle = THREE.MathUtils.clamp(physics.rudderAngle, -35, 35);

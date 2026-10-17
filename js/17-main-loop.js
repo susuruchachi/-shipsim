@@ -1,4 +1,10 @@
 let _calUiT = 0;
+// 船が水に触れている度合い（physics.hullWet）：没水の割合（設計喫水で 1）がこれ以上なら「ふつうに浮いている」（1）
+const HULL_WET_FULL = 0.25;
+// 陸・海底に載っている間だけ残す、上下・縦横の揺れの減衰（水の中での減衰に対する割合）
+const AIR_DAMP_FRAC = 0.15;
+// 空中で落ちる速さの上限[m/s]（数の上の安全のためだけ）
+const VY_FREE_MAX = 60;
 function animate() {
     requestAnimationFrame(animate);
     // 描画頻度の上限（33-performance.js）。120Hz 表示の端末などで、必要以上に
@@ -178,7 +184,9 @@ function animate() {
         // 船体ピッチ角だけ傾けて鉛直成分も加えるために保持しておく。
         // 機関の馬力（56-engines.js）が見積もりより大きければ加速も速い
         const _kThrust = (0.3 / physics.mass) * ((typeof enginePowerFactor === 'function') ? enginePowerFactor() : 1);
-        const thrustAccMag = (propTargetSpeed - physics.speed) * _kThrust;
+        // 船体が水から出ている間は、推力も水の抵抗も無い（飛んでいる間は前後の速さを保つ。physics.hullWet：前の刻みの、水に触れている度合い）
+        const _wetPrev = isDesignMode ? 1 : (Number.isFinite(physics.hullWet) ? physics.hullWet : 1);
+        const thrustAccMag = (propTargetSpeed - physics.speed) * _kThrust * _wetPrev;
         physics.speed += thrustAccMag * subDt;
         // スクリューそのものの推力（抵抗を引く前）：k×目標の速さ。走り続けている間（速さ＝目標）も推力は出ている。
         // 推力はスクリューの軸（船首尾の向き）に沿って押すので、波で船首が上がれば上向きにも押す（下の上下の計算）
@@ -210,7 +218,8 @@ function animate() {
         } else {
             // 左右の機関の推力の差でも回る（56-engines.js：左舷前進・右舷後進でその場で右へ回る）
             const _twist = ((typeof engineTwistDeg === 'function') ? engineTwistDeg() : 0) * (physics.propImmersion ?? 1);
-            physics.turnRate += (targetTurnRateDeg * rudderEffectiveness + _twist - physics.turnRate) * 3.0 * subDt;
+            // 舵も、船体の回る向きを変える水の力も、水に触れている分だけ（空中では回る勢いをそのまま保つ）
+            physics.turnRate += (targetTurnRateDeg * rudderEffectiveness + _twist - physics.turnRate) * 3.0 * subDt * _wetPrev;
             physics.heading += physics.turnRate * subDt;
         }
 
@@ -264,6 +273,7 @@ function animate() {
             physics.vy = 0; physics.vPitch = 0; physics.vRoll = 0;
             physics.pitch = 0; physics.roll = 0;
             physics.y = _targetYBase;
+            physics.hullWet = 1;
         } else {
             // ════════════════════════════════════════════════════════════
             //  完全物理浮力計算（アルキメデスの原理）── heave + pitch
@@ -309,6 +319,13 @@ function animate() {
             // 力そのものはvolSubmerged/momentVolAboutCGがゼロから連続的に立ち上がるので
             // 人為的なon/off処理は不要）。
             const submergedFrac = _buoy ? _buoy.submergedFrac : 0;
+            // 船が水に触れている度合い（0＝船体がまるごと水面より上、1＝ふつうに浮いている）。
+            // 水から受ける力（波に合わせた横揺れ・舵・水の抵抗）はこれで弱め、完全に空中の間は重力だけで飛ぶ
+            //（以前は空中でも、横揺れは下の波の傾きへ引かれ、落ちる速さも波の上下の速さで決まる上限に抑えられていた）
+            const hullWet = _buoy ? THREE.MathUtils.clamp(submergedFrac / HULL_WET_FULL, 0, 1) : 1;
+            physics.hullWet = hullWet;
+            // 空中の減衰は、海底・陸に載っている間だけ（底とこすれる代わり）。ただ飛んでいる間は空気の抵抗くらいしかない
+            const airDamp = (physics.groundLift || 0) > 0.02 ? AIR_DAMP_FRAC : 0;
 
             // ════════════════════════════════════════════════════════════
             //  船首補正（Stage 1）── 波切りリフト・船首抵抗・スラミング
@@ -441,10 +458,8 @@ function animate() {
             const K_heaveReal = RHO_WATER * G_REAL * AwpReal * buoyMult;
             const zetaHeave   = 0.35; // 実船のヒーブ減衰比の目安(0.2〜0.4)
             const C_heave     = 2.0 * zetaHeave * Math.sqrt(Math.max(1, K_heaveReal * massKg));
-            // 完全空中(submergedFrac=0)のときも最低限の減衰(空気抵抗相当)は残す。
-            // ゼロにすると「波を跳ね飛んでバウンドし続ける」現象が収束しなくなる。
-            const AIR_DAMP_FRAC = 0.15;
-            const C_heaveEff = C_heave * Math.max(AIR_DAMP_FRAC, submergedFrac);
+            // 水に浸かっている分だけ効かせる（空中では、底に載っているときだけ少し残す：airDamp）
+            const C_heaveEff = C_heave * Math.max(airDamp, submergedFrac);
 
             // ── 推進器の鉛直成分：船首尾軸（ピッチ込み）に沿って推力が働くため、
             //   船がピッチしているときは推力の一部が鉛直方向にも加わる。
@@ -472,12 +487,16 @@ function animate() {
             // 出せるが、大型船ほど慣性で抑えられ、現実の大型客船の上下動速度の目安
             // (おおむね1m/s前後)に近づくようにする。
             const vyMaxBase = THREE.MathUtils.clamp(Math.sqrt(physScale) * 5.0 * massFactor, 0.4, 9.0);
-            const vyMax = Math.max(vyMaxBase, Math.abs(waveSurfaceVel) * 1.3 * Math.max(massFactor, 0.3));
+            // （これらの上限は水が船を押す力の安全弁なので、水から離れるほど外す：空中では重力どおりに落ちる。
+            //   以前は空中でも効いていて、大きな船は重力の半分ほどの加速度・波の上下の速さで決まる速さでしか落ちなかった）
+            const vyMax = THREE.MathUtils.lerp(VY_FREE_MAX,
+                Math.max(vyMaxBase, Math.abs(waveSurfaceVel) * 1.3 * Math.max(massFactor, 0.3)), hullWet);
+            const accDownMax = THREE.MathUtils.lerp(Math.max(maxHeaveAcc, G_REAL), maxHeaveAcc, hullWet);
 
             const accY = THREE.MathUtils.clamp(
                 (F_netHeave - physics.vy * C_heaveEff) / massKg
                     + thrustVertAcc + waveFollowAcc,
-                -maxHeaveAcc, maxHeaveAcc
+                -accDownMax, maxHeaveAcc
             );
             physics.vy += accY * subDt;
             physics.vy = THREE.MathUtils.clamp(physics.vy, -vyMax, vyMax);
@@ -501,8 +520,9 @@ function animate() {
             // 復元モーメントになるよう符号を反転する。
             // 浸水した水の重さのモーメント（船首寄りの水は船首を下げる：63-flooding.js）も
             // （沈みきって海底で横たわっていく間は、縦のモーメントで起こし直さない：44-world-terrain.js の flood.settle）
+            // （空中では、中の水も船といっしょに落ちるので傾けない）
             const torqueBuoyPitch = (typeof flood !== 'undefined' && flood.settle) ? 0 : -RHO_WATER * G_REAL * momentVolAboutCG * buoyMult
-                + ((typeof flood !== 'undefined' && flood.torqueP) || 0); // N・m
+                + ((typeof flood !== 'undefined' && flood.torqueP) || 0) * hullWet; // N・m
 
             const k_gyro_pitch = len * 0.25; // 慣性半径（質量分布の代理指標）
             const h_pend = (physics.waterlineOffsetY - physics.cgOffset.y) * physScale;
@@ -513,9 +533,8 @@ function animate() {
             const K_pitchReal = RHO_WATER * G_REAL * IwpLong * buoyMult;
             const zetaPitch   = 0.5; // 妥当な近似的減衰比
             const C_pitch     = 2.0 * zetaPitch * Math.sqrt(Math.max(1, K_pitchReal * IPitch_real));
-            // ピッチも同様に、完全空中時は最低限の減衰のみ残す
-            // （角運動量がいつまでも保存されて跳ね続けるのを防ぐ）。
-            const C_pitchEff = C_pitch * Math.max(AIR_DAMP_FRAC, submergedFrac);
+            // ピッチも同様に、水に浸かっている分だけ（空中では回る勢いをそのまま保つ）
+            const C_pitchEff = C_pitch * Math.max(airDamp, submergedFrac);
 
             // v105: ケルビン波の波長は、船が縦揺れ(ピッチ)する周期に由来するという
             // 着想に基づき、ここで求めたピッチの自然角周波数を引き波の波長計算
@@ -566,7 +585,8 @@ function animate() {
             }
             const targetRoll  = -waveRoll + turnRollBias + floodRoll;
 
-            const accRoll  = ((targetRoll  - physics.roll)  * KRoll  - physics.vRoll  * CRoll)  / IRoll;
+            // 横揺れの復原（波の傾きへ合わせる・旋回で傾く・浸水で傾く）はどれも水が押す力なので、水に触れている分だけ
+            const accRoll  = ((targetRoll  - physics.roll)  * KRoll * hullWet  - physics.vRoll  * CRoll * Math.max(airDamp, hullWet))  / IRoll;
             physics.vRoll  += THREE.MathUtils.clamp(accRoll, -maxAcc, maxAcc) * subDt;
             physics.vRoll   = THREE.MathUtils.clamp(physics.vRoll, -maxAngVel, maxAngVel);
             physics.roll   += physics.vRoll * subDt;
