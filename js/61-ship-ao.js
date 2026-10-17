@@ -127,7 +127,7 @@ function* _aoMeshes(G, F, list, root) {
 const shipAOUniforms = { uAOStrength: { value: 0 }, uAODebug: { value: 0 }, uIndirK: { value: 1 }, uDirectK: { value: 1 },
     // 空の遮られ方（下の skyOcc：上から見た船の奥行きの地図）
     uSkyOccMap: { value: null }, uSkyOccMat: { value: new THREE.Matrix4() }, uSkyOccOn: { value: 0 }, uSkyOccR: { value: new THREE.Vector2(0.001, 0.001) },
-    uSkyOccBias: { value: 0.002 }, uSkyOccMin: { value: 0.35 }, uSkyOccOff: { value: 1 }, uSkyOccDepthM: { value: 50 } };    // uAODebug=1：空の見え方を白黒で表示（調整用）
+    uSkyOccBias: { value: 0.002 }, uSkyOccMin: { value: 0.35 }, uSkyOccOff: { value: 1 }, uSkyOccDepthM: { value: 50 }, uSkyOccWall: { value: 0.4 } };    // uAODebug=1：空の見え方を白黒で表示（調整用）
 // 空の遮られ方を調べる。上に何かある所は 0、空が見える所は 1
 // ・面の向きは、カメラから見えている側を外とする（厚さの無い一枚の面の、プロムナードの内側から見た面・内向きの法線の部品でも正しく）
 // ・上を向いた面（甲板など）：真上に何かあるか（地図の 5 点：やわらかい縁）。あれば、その物の高さと、前後左右へ 1.2・3・6m
@@ -150,7 +150,7 @@ uniform highp sampler2D uSkyOccMap;
 #else
 uniform sampler2D uSkyOccMap;
 #endif
-uniform float uSkyOccOn, uSkyOccBias, uSkyOccMin, uSkyOccOff, uSkyOccDepthM; uniform vec2 uSkyOccR;
+uniform float uSkyOccOn, uSkyOccBias, uSkyOccMin, uSkyOccOff, uSkyOccDepthM, uSkyOccWall; uniform vec2 uSkyOccR;
 uniform mat4 uSkyOccMat;
 // 地図の q の所で、いちばん上の面が奥行き z（面の高さ）より何 m 上にあるか（0.2 未満：上に何も無い）
 float skyOccUp(vec2 q, float z) { return (z - texture2D(uSkyOccMap, q).r) * uSkyOccDepthM; }
@@ -209,7 +209,9 @@ float skyOccVis(vec3 nV, vec3 pV) {
         vec2 s2 = (uSkyOccMat * vec4(h.x * 0.643 + h.y * 0.766, 0.0, h.y * 0.643 - h.x * 0.766, 0.0)).xy * 0.5;
         w = (skyOccWall(q, c.z, s0) + 0.64 * (skyOccWall(q, c.z, s1) + skyOccWall(q, c.z, s2))) / 2.28;
     }
-    return mix(v, w, k) * smoothstep(-0.9, -0.2, n.y);
+    // 暗さは強めに曲げる（2 乗：低く広い屋根の下のプロムナードは以前のように濃く）。壁はもともと空の半分しか見えないので、
+    // 何も張り出していなくても uSkyOccWall 倍（影側の側面が日なたの側面と同じ明るさに浮かないように）
+    return mix(v * v, w * w * uSkyOccWall, k) * smoothstep(-0.9, -0.2, n.y);
 }
 `;
 // 船のシェーダーで画素へ渡す小さな値（float の varying）を、1 つの vec4 にまとめる。
@@ -265,7 +267,7 @@ function _aoPatchMaterial(mat, opts) {
         const occ = mat.userData.skyOcc && window.gpuDbg !== 'skyocc' && (mat.isMeshStandardMaterial || mat.isMeshPhongMaterial);
         shader.uniforms.uAOStrength = shipAOUniforms.uAOStrength; shader.uniforms.uAODebug = shipAOUniforms.uAODebug;
         shader.uniforms.uIndirK = shipAOUniforms.uIndirK; shader.uniforms.uDirectK = shipAOUniforms.uDirectK;
-        if (occ) for (const k of ['uSkyOccMap', 'uSkyOccMat', 'uSkyOccOn', 'uSkyOccR', 'uSkyOccBias', 'uSkyOccMin', 'uSkyOccOff', 'uSkyOccDepthM']) shader.uniforms[k] = shipAOUniforms[k];
+        if (occ) for (const k of ['uSkyOccMap', 'uSkyOccMat', 'uSkyOccOn', 'uSkyOccR', 'uSkyOccBias', 'uSkyOccMin', 'uSkyOccOff', 'uSkyOccDepthM', 'uSkyOccWall']) shader.uniforms[k] = shipAOUniforms[k];
         _shipPackShader(shader);   // vSkyAO もまとめた値の 1 つ
         shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nattribute float aSky;\n')
             .replace(/\}\s*$/, '    vSkyAO = aSky;\n}\n');
