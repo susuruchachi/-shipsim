@@ -958,11 +958,28 @@ function renderTugPanel() {
     const st = (typeof shipGroup !== 'undefined' && shipGroup) ? tugStations() : [];
     const stateLabel = (t) => t.aground ? (t.replacedBy ? '座礁（代わりのタグを呼びました）' : '座礁') : t.state === 'coming' ? (t.blockedTarget ? '近づけません（岸・浅瀬）' : t.stuck ? '入れません（すき間が狭い）' : '向かっています') : t.state === 'leaving' ? '帰ります' : (t.action === 'standby' ? '待機中' : t.action === 'push' ? '押しています' : '引いています');
     const active = tugs.filter(t => t.state !== 'leaving');
+    const inWorld = !!(window.world && world.mode === 'world');
+    const HA = typeof harborAuto !== 'undefined' ? harborAuto : null;
+    const jobMode = HA && (HA.mode === 'rotate' || HA.mode === 'refloat');
+    // タグの作業：決めた向きまで回す・座礁から引き出す・前へ／後ろへ曳航（50-harbor-auto.js）
+    let jobs = '';
+    if (HA && typeof harborTugRotate === 'function' && !(HA.mode && !jobMode)) {
+        const cur = Math.round(inWorld && typeof worldTrueCompass === 'function' ? worldTrueCompass() : (typeof worldCompass === 'function' ? worldCompass(physics.heading) : 0)) % 360;
+        const deg = HA.rotDeg !== undefined && HA.rotDeg !== '' ? HA.rotDeg : cur;
+        const aground = inWorld && typeof terrain !== 'undefined' && (terrain.grounded || (physics.groundLift || 0) > 0);
+        jobs = `<div class="tg-jobs">${jobMode ? `<div class="tg-row"><button onclick="harborAutoStop('タグの作業を止めました')">■ タグの作業を止める</button></div>`
+            : `<div class="tg-row"><input id="tg-rot-deg" type="number" min="0" max="359" step="1" inputmode="numeric" value="${deg}" oninput="harborAuto.rotDeg = this.value">°
+                <button onclick="harborTugRotate(document.getElementById('tg-rot-deg').value)" title="タグで、その場で船をこの向き（羅針盤の度）まで回す">🧭 まで回す</button></div>
+            <div class="tg-row">${inWorld ? `<button onclick="harborTugRefloat()" ${aground ? '' : 'disabled title="座礁していません"'}>⚓ 座礁から引き出す</button>` : ''}
+                <button onclick="harborTugTow('fwd')" title="船首の金物にタグの索を取り、前へ引いてもらう">⬆ 前へ曳航</button>
+                <button onclick="harborTugTow('aft')" title="船尾の金物にタグの索を取り、後ろへ引いてもらう">⬇ 後ろへ曳航</button></div>`}
+            ${!inWorld && HA.msg ? `<div class="tg-automsg">${HA.msg}</div>` : ''}</div>`;
+    }
     uiSetHTML(panel, `<div class="tg-head"><span class="tg-title">タグボート</span>
         <button class="tg-call" onclick="tugCall()" ${active.length >= TUG_MAX ? 'disabled' : ''}>＋ 呼ぶ</button>
-        ${active.length ? '<button onclick="tugReleaseAll()">全部帰す</button>' : ''}</div>` +
+        ${active.length ? '<button onclick="tugReleaseAll()">全部帰す</button>' : ''}</div>` + jobs +
         (window.world && world.mode === 'world' && typeof harborAuto !== 'undefined' ? `<div class="tg-row tg-auto">
-            ${harborAuto.mode ? `<button onclick="harborAutoStop('自動の離着岸を止めました')">■ 自動の離着岸を止める</button>`
+            ${harborAuto.mode && !jobMode ? `<button onclick="harborAutoStop('自動の離着岸を止めました')">■ 自動の離着岸を止める</button>` : jobMode ? ''
                 : `<button onclick="harborAutoBerthNow()">🤖 自動着岸</button><button onclick="harborAutoDepartNow()">🤖 自動離岸</button>`}
             ${!harborAuto.mode ? `<div class="tg-row tg-side">接舷：${[['auto', '自動'], ['port', '左舷'], ['starboard', '右舷']].map(([k, l]) => `<button class="${(harborAuto.sidePref || 'auto') === k ? 'on' : ''}" onclick="harborSetSidePref('${k}')">${l}</button>`).join('')}</div>` : ''}
             ${!harborAuto.mode && typeof tugEscort !== 'undefined' ? (tugEscort.manual
@@ -986,7 +1003,11 @@ function renderTugPanel() {
 window.renderTugPanel = renderTugPanel;
 document.addEventListener('DOMContentLoaded', () => { setTimeout(_tugSetup, 0); });
 // 状態の表示（向かっています→待機中 など）を時々更新
-setInterval(() => { const p = document.getElementById('tug-panel'); if (p && p.classList.contains('open') && tugs.length) {
+setInterval(() => { const p = document.getElementById('tug-panel');
+    // 座礁した・抜けたら、「座礁から引き出す」を押せる・押せないを変える
+    const ag = !!(window.world && world.mode === 'world' && typeof terrain !== 'undefined' && (terrain.grounded || (physics.groundLift || 0) > 0));
+    if (p && p.classList.contains('open') && ag !== renderTugPanel._ag) { renderTugPanel._ag = ag; renderTugPanel(); }
+    if (p && p.classList.contains('open') && tugs.length) {
     // 押しているボタンの上で書き換えないように、ボタンに触っていないときだけ
     if (!p.matches(':active')) p.querySelectorAll('.tg-state').forEach((el, i) => { const t = tugs[i]; if (t) el.textContent = t.state === 'coming' ? '向かっています' : t.state === 'leaving' ? '帰ります' : (t.action === 'standby' ? '待機中' : t.action === 'push' ? '押しています' : '引いています'); });
 } }, 1000);

@@ -892,6 +892,10 @@ body.hud-hidden #ap-panel { display: none !important; }
 /* タグでの自動離着岸（50-harbor-auto.js） */
 #tug-panel .tg-auto { border-bottom: 1px solid rgba(0, 255, 204, 0.2); padding-bottom: 6px; }
 #tug-panel .tg-automsg { width: 100%; color: #ffe38a; margin-top: 2px; }
+/* タグの作業（回す・座礁から引き出す・曳航） */
+#tug-panel .tg-jobs { border-bottom: 1px solid rgba(0, 255, 204, 0.2); padding-bottom: 4px; margin-bottom: 6px; }
+#tug-panel .tg-jobs input { width: 52px; font-family: inherit; font-size: 11px; color: #e8fff8; background: #0a1932;
+    border: 1px solid rgba(0, 255, 204, 0.4); border-radius: 6px; padding: 4px 6px; }
 #ap-panel label { cursor: pointer; }
 
 /* 自動航行パネルをたたむ */

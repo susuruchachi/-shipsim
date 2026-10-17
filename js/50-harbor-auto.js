@@ -520,6 +520,10 @@ function harborTugCount() { const L = _haDims().L; return L < 120 ? 2 : L < 230 
 window.harborTugCount = harborTugCount;
 // 持ち場の並び：沖側（open）の船首・船尾、4 隻なら反対舷の船首・船尾も、6 隻なら両舷の中央も
 function _haStationKeys(open, n) {
+    return _haPickKeys([[open, 'fwd'], [open, 'aft'], [-open, 'fwd'], [-open, 'aft'], [open, 'mid'], [-open, 'mid']].slice(0, Math.max(1, n)));
+}
+// [舷, 'fwd'|'aft'|'mid'] の並びの持ち場（船首寄り・船尾寄りは端にいちばん近い金物、無ければ舷側）
+function _haPickKeys(order) {
     const all = tugStations();
     const hp = window.hullProfile, hl = (hp && hp.ready) ? hp.halfLen : 6;
     const used = new Set();
@@ -532,7 +536,6 @@ function _haStationKeys(open, n) {
         if (q) used.add(q.key);
         return q ? q.key : null;
     };
-    const order = [[open, 'fwd'], [open, 'aft'], [-open, 'fwd'], [-open, 'aft'], [open, 'mid'], [-open, 'mid']].slice(0, Math.max(1, n));
     return order.map(([sd, w]) => pick(sd, w)).filter(Boolean);
 }
 function _haSide(t) { const s = t && tugStations().find(q => q.key === t.station); return s && s.side ? s.side : 0; }
@@ -656,15 +659,15 @@ function harborAutoStart(mode, plan, then) {
     Object.assign(harborAuto, { mode, plan, then: then || null, phase: 'tugs', t: 0, phaseT: 0, lastOrderT: -99, tugIds: [], resume: null, holdH: null, turning: false, alignDone: false, offA: undefined, w1: null });
     _haClearLines();
     // タグ：もう付いているタグ（狭い水路で付き添ってきたタグなど）はそのまま使い、足りなければ呼ぶ
-    const T = _haTakeTugs(_haStationKeys(plan.open, harborTugCount()));
+    const T = _haTakeTugs(plan.keys || _haStationKeys(plan.open, harborTugCount()));
     harborAuto.tugIds = T.map(t => t.id);
     tugEscort.active = false; tugEscort.held = null; tugEscort.manual = false;
-    _haMsg(mode === 'berth' ? `${plan.port.name}：タグを待っています（着岸）` : `${plan.port.name}：タグを待っています（離岸）`);
+    _haMsg(plan.waitMsg || (mode === 'berth' ? `${plan.port.name}：タグを待っています（着岸）` : `${plan.port.name}：タグを待っています（離岸）`));
     return true;
 }
 function harborAutoStop(msg) {
-    // 途中で止めたときは「再開」できるように
-    if (harborAuto.mode && msg) harborAuto.resume = { mode: harborAuto.mode, port: harborAuto.plan.port, then: harborAuto.then };
+    // 途中で止めたときは「再開」できるように（離着岸だけ）
+    if ((harborAuto.mode === 'berth' || harborAuto.mode === 'depart') && msg) harborAuto.resume = { mode: harborAuto.mode, port: harborAuto.plan.port, then: harborAuto.then };
     harborAuto.mode = null; harborAuto.phase = '';
     for (const t of (window.tugs || [])) { delete t.autoPower; delete t.awaySide; }
     if (typeof _apOrder === 'function') _apOrder(0);
@@ -722,6 +725,89 @@ function harborAutoResume() {
     else if (!harborAutoDepartNow(r.then)) { if (r.then && typeof autopilotStart === 'function') autopilotStart(r.then); }
 }
 Object.assign(window, { harborAutoStart, harborAutoStop, harborAutoBerthNow, harborAutoDepartNow, harborAutoResume });
+
+// ── タグの作業：決めた向きまで回す・座礁から引き出す・前へ／後ろへ曳航 ──
+// 船の真方位（羅針盤の度。画面の針路の表示と同じ）→ 物理の向き
+function _haHeadingFromCompass(c) {
+    if (window.world && world.mode === 'world' && typeof _apNorthHeading === 'function') return ((_apNorthHeading() - c) % 360 + 360) % 360;
+    return worldHeadingFromCompass(c);
+}
+// 左右の舷の外（30〜90m）に、どれだけ水があるか。広い方の舷を沖側に（タグはその舷から先に付く）
+function _haRoomSide() {
+    if (!(window.world && world.mode === 'world') || typeof worldSeabedAt !== 'function') return 1;
+    const D = _haDims(), h = physics.heading * _haRad, fx = Math.sin(h), fz = Math.cos(h), sx = Math.cos(h), sz = -Math.sin(h);
+    const need = -worldShipDraft() * 0.6;
+    const room = (sd) => {
+        let n = 0;
+        for (const a of [-0.7, 0, 0.7]) for (const d of [30, 60, 90]) {
+            if (worldSeabedAt(physics.cgWorldX + fx * a * D.HL + sx * sd * (D.hw + d), physics.cgWorldZ + fz * a * D.HL + sz * sd * (D.hw + d)) < need) n++;
+        }
+        return n;
+    };
+    return room(1) >= room(-1) ? 1 : -1;
+}
+// 決めた向き（羅針盤の度）まで、その場でタグで回す（近い方の回り方で。位置は機関で保つ）
+function harborTugRotate(compass) {
+    const c = ((Math.round(+compass) % 360) + 360) % 360;
+    if (!Number.isFinite(c) || String(compass).trim() === '') { _haMsg('回す向き（0〜359°）を入れてください'); return false; }
+    harborAuto.rotDeg = c;
+    const plan = { ok: true, kind: 'rotate', port: { name: '回頭' }, open: _haRoomSide(), hold: { x: physics.cgWorldX, z: physics.cgWorldZ },
+        hT: _haHeadingFromCompass(c), compass: c, waitMsg: `タグを待っています（${c}° まで回します）` };
+    return harborAutoStart('rotate', plan);
+}
+// 座礁から引き出す：前後・左右に少し動かしたときに、船体が海底・岸に入る量がいちばん減る向きへ、タグに全力で引かせる
+//（前後へ引くときは機関も半速で同じ向きに）。浮いて 6 秒たち、10m 以上動いたら終わり
+function harborTugRefloat() {
+    if (!(window.world && world.mode === 'world') || typeof worldGroundTry !== 'function') { _haMsg('座礁は世界を航海するモードのときだけです'); return false; }
+    if (!(terrain.grounded || (physics.groundLift || 0) > 0)) { _haMsg('座礁していません'); return false; }
+    let best = null;
+    for (const [k, a, sd] of [['aft', -1, 0], ['fwd', 1, 0], ['port', 0, 1], ['stbd', 0, -1]]) {
+        let sc = 0;
+        for (const d of [15, 35, 60]) { const r = worldGroundTry(a * d, sd * d * 0.6, 0); sc += r.score + r.hard * 50; }
+        if (sd) sc = sc * 1.3 + 1;                 // 同じくらいなら、前後へ引く方を
+        if (!best || sc < best.sc) best = { k, sc };
+    }
+    const n = Math.min(4, harborTugCount()), k = best.k;
+    const order = k === 'aft' ? [[1, 'aft'], [-1, 'aft'], [1, 'mid'], [-1, 'mid']]
+        : k === 'fwd' ? [[1, 'fwd'], [-1, 'fwd'], [1, 'mid'], [-1, 'mid']]
+        : [[k === 'port' ? 1 : -1, 'fwd'], [k === 'port' ? 1 : -1, 'aft'], [k === 'port' ? 1 : -1, 'mid']];
+    const label = { aft: '後ろへ', fwd: '前へ', port: '左舷の方へ', stbd: '右舷の方へ' }[k];
+    const plan = { ok: true, kind: 'refloat', port: { name: '座礁' }, open: k === 'stbd' ? -1 : 1, keys: _haPickKeys(order.slice(0, k === 'port' || k === 'stbd' ? Math.min(3, n) : n)),
+        pull: k, label, start: { x: physics.cgWorldX, z: physics.cgWorldZ }, waitMsg: `タグを待っています（座礁から${label}引き出します）` };
+    return harborAutoStart('refloat', plan);
+}
+// 前へ・後ろへ曳航：船首（船尾）の金物にタグを取り、船の前（後ろ）へ半分の力で引かせる（大きな船は 2 隻）。
+// 強さ・索の長さは、それぞれのタグの所で変えられる。舵・機関はそのまま手で
+function harborTugTow(dir) {
+    if (typeof shipGroup === 'undefined' || !shipGroup) return false;
+    if (harborAuto.mode) harborAutoStop('');
+    const where = dir === 'aft' ? 'aft' : 'fwd';
+    const keys = _haPickKeys(_haDims().L < 150 ? [[1, where]] : [[1, where], [-1, where]]);
+    const st = tugStations();
+    const ok = keys.filter(k => tugPullHook(st.find(s => s.key === k), st));
+    if (!ok.length) { _haMsg(`${where === 'fwd' ? '船首' : '船尾'}の近くに、曳航の索を取れる金物（クリート・索をかけてよいビット）がありません`); return false; }
+    const have = (window.tugs || []).filter(t => t.state !== 'leaving');
+    let n = 0;
+    for (const k of ok) {
+        const t = have.find(q => q.station === k) || tugCall(k);
+        if (!t) continue;
+        delete t.autoPower; delete t.awaySide;
+        Object.assign(t, { action: 'pull', dir: where, power: 'half', lineLen: 'long' });
+        n++;
+    }
+    if (typeof renderTugPanel === 'function') renderTugPanel();
+    _haMsg(n ? `タグ${n}隻で${where === 'fwd' ? '前へ' : '後ろへ'}曳航します（強さ・索の長さはそれぞれのタグで。やめるときは「帰す」）` : 'タグを呼べませんでした（もう 6 隻います）');
+    return n > 0;
+}
+// 作業を終える：機関を止め、タグを帰す
+function _haJobDone(msg) {
+    if (typeof _apOrder === 'function') _apOrder(0);
+    tugReleaseAll();
+    harborAuto.mode = null; harborAuto.phase = '';
+    for (const q of (window.tugs || [])) { delete q.autoPower; delete q.awaySide; }
+    _haMsg(msg);
+}
+Object.assign(window, { harborTugRotate, harborTugRefloat, harborTugTow });
 
 // 横の力 Fs（＋x＝左舷へ）と回す力 Mz を、付いているタグ（何隻でも・両舷でも）に割り振る。
 // 各タグの力 f = a + b·z（z：船首尾方向の位置）で、合計が Fs、モーメントが Mz になるうち、いちばん小さい力で。
@@ -986,8 +1072,8 @@ function updateHarborAuto(t, dt) {
     }
     if (!harborAuto.mode) return;
     dt = Math.min(2, Math.max(0, dt || 0));
-    if (!window.world || world.mode !== 'world') { harborAutoStop('世界を航海するモードではないので止めました'); return; }
-    if ((typeof keys !== 'undefined' && (keys.a || keys.d)) || (typeof _br !== 'undefined' && _br.wheelDrag)) { harborAutoStop('手で舵を取ったので、自動の離着岸を止めました'); return; }
+    if ((!window.world || world.mode !== 'world') && harborAuto.mode !== 'rotate') { harborAutoStop('世界を航海するモードではないので止めました'); return; }
+    if ((typeof keys !== 'undefined' && (keys.a || keys.d)) || (typeof _br !== 'undefined' && _br.wheelDrag)) { harborAutoStop(harborAuto.mode === 'rotate' || harborAuto.mode === 'refloat' ? '手で舵を取ったので、タグの作業を止めました' : '手で舵を取ったので、自動の離着岸を止めました'); return; }
     const P = harborAuto.plan;
     harborAuto.phaseT += dt;
     const next = (ph, msg) => { harborAuto.phase = ph; harborAuto.phaseT = 0; harborAuto.sideGo = false; _haMsg(msg); };
@@ -1000,6 +1086,53 @@ function updateHarborAuto(t, dt) {
     const partialMsg = () => !RS.partial ? '' : RS.stuck > 0
         ? `（${RS.stuck}隻は今は入れないので、入れるようになったら加わります${RS.all - RS.on - RS.stuck > 0 ? `。ほかの${RS.all - RS.on - RS.stuck}隻は着きしだい加わります` : ''}）`
         : `（残りの${RS.all - RS.on}隻は着きしだい加わります）`;
+    if (harborAuto.mode === 'rotate') {
+        // 決めた向きまで回す（位置は始めた所に機関で保つ）
+        if (harborAuto.phase === 'tugs') {
+            _haControl({ x: P.hold.x, z: P.hold.z, h: physics.heading }, dt, { vA: 0.3 });
+            for (const q of TL) q.autoPower = 0;
+            if (ready) next('rot', `タグ${RS.on}隻で ${P.compass}° まで回しています${partialMsg()}`);
+            else if (harborAuto.phaseT > 900) harborAutoStop('タグが持ち場に着けないので止めました');
+        } else {
+            const e = _haControl({ x: P.hold.x, z: P.hold.z, h: P.hT }, dt, { vA: 0.3, r: 0.006 });
+            harborAuto.remain = Math.abs(e.eY);
+            if (Math.abs(e.eY) < 1 && Math.abs(e.r) < 0.0015) {
+                _tugShip.yawRate = 0; physics.turnRate = 0;
+                _haJobDone(`${P.compass}° まで回しました。タグを帰します`);
+            }
+        }
+        return;
+    }
+    if (harborAuto.mode === 'refloat') {
+        if (harborAuto.phase === 'tugs') {
+            for (const q of TL) { q.autoPower = 0; q.action = 'standby'; }
+            if (typeof _apOrder === 'function' && harborAuto.phaseT < 1) _apOrder(0);
+            if (ready) { harborAuto.freeT = 0; next('pull', `タグ${RS.on}隻で、座礁から${P.label}引いています${partialMsg()}`); }
+            else if (harborAuto.phaseT > 900) harborAutoStop('タグが持ち場に着けないので止めました');
+        } else {
+            // 着いたタグから全力で引く（前後へ引くときは、船首尾の先へ出て。横へは舷の外へ）
+            const dir = P.pull === 'aft' ? 'aft' : P.pull === 'fwd' ? 'fwd' : 'side';
+            for (const q of TL) {
+                if (!_haWorking(q)) { q.autoPower = 0; continue; }
+                if (q.action !== 'pull' || q.dir !== dir) { q.action = 'pull'; q.dir = dir; q.lineLen = 'long'; }
+                q.autoPower = 1;
+            }
+            // 機関も同じ向きに半速（横へ引くときは止めたまま）
+            const o = P.pull === 'aft' ? -2 : P.pull === 'fwd' ? 2 : 0;
+            if (typeof _apOrder === 'function' && (autopilot.lastOrder || 0) !== o) _apOrder(o);
+            if (typeof _apHelm === 'function') _apHelm(0, dt);
+            const afloat = !terrain.grounded && !((physics.groundLift || 0) > 0);
+            harborAuto.freeT = afloat ? (harborAuto.freeT || 0) + dt : 0;
+            const moved = Math.hypot(physics.cgWorldX - P.start.x, physics.cgWorldZ - P.start.z);
+            harborAuto.remain = moved;
+            if (harborAuto.freeT > 6 && moved > 10) {
+                _haJobDone(`座礁から引き出しました（${Math.round(moved)}m）。機関を止め、タグを帰します`);
+            } else if (harborAuto.phaseT > 240 && moved < 3) {
+                _haJobDone(`タグ${TL.length}隻で引いても動きません。深く乗り上げています（ほかの向き・機関も使ってみてください）`);
+            }
+        }
+        return;
+    }
     if (harborAuto.mode === 'berth') {
         if (harborAuto.phase === 'tugs') {
             _haControl({ x: P.turn.x, z: P.turn.z, h: physics.heading }, dt, { vA: 0.4 });
