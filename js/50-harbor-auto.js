@@ -109,7 +109,7 @@ function harborBerthPlan(port, prefHeading, asBerthed) {
         const PLb = (PL.free[1] - PL.free[0] < D.L) ? 0 : (PL.free[0] + PL.free[1]) / 2;
         // （この港の岸壁の前の掘り込みは、港の形がまだ読み込まれていなくても足して見る）
         const loaded = typeof terrain !== 'undefined' && terrain.ports && terrain.ports.has(port.id);
-        const depthAt = (a, b) => { const w = Q.toW(a, b); let h = worldSeabedAt(w.x, w.z); if (!loaded && typeof _portAdjust === 'function') h = _portAdjust(h, w.x, w.z, [S0]); return -h; };
+        const depthAt = (a, b) => { const w = Q.toW(a, b); let h = worldSeabedAt(w.x, w.z); if (!loaded && !port.adhoc && typeof _portAdjust === 'function') h = _portAdjust(h, w.x, w.z, [S0]); return -h; };
         // 船の幅（＋余裕）の分だけ続けて深い所の、いちばん岸寄りの始まり（岸の先の桟橋などの浅い所の外側）
         // その深い所は、沖の水へ続いていること（リヴァプールの浮き桟橋と岸の間のすき間のような、
         // 船の幅ほどしかない水に付けない）：船の幅＋40m（80m まで）続けて深い所の始まり
@@ -235,7 +235,21 @@ function harborBerthPlan(port, prefHeading, asBerthed) {
     const outerWall = port.type !== 'cargo' && !port.real ? S.basin * 0.95 * 0.8 - 8 : S.basin - 40;
     const lo = 6 + 12 + D.HL, hi = outerWall - 15 - D.HL;
     if (lo > hi) return { ok: false, why: `${port.name}の泊地（防波堤まで ${Math.round(outerWall)}m）は、この船（${Math.round(D.L)}m）を回すには狭すぎます` };
-    const aE = Math.max(lo, Math.min(hi, aB + 3 * D.B + 60));
+    let aE = Math.max(lo, Math.min(hi, aB + 3 * D.B + 60));
+    // 登録されていない岸壁（harborAdhocQuay）：岸壁の前の水の幅（向かいの岸・ドックの向かいの岸壁まで）の中で動かす。
+    // 着岸：船がもう岸壁とほぼ平行なら回さずに、今の沖の距離から岸壁沿いに合わせて横へ寄せる（平行でなく、回す広さも無ければ付けない）。
+    // 離岸：水の幅の真ん中か、船幅の 2 倍＋30m の所まで離して、そのまま（岸壁と平行のまま：狭い所で回して当てないように）
+    if (port.adhoc && quayExt) {
+        let wFree = 800;
+        for (let a = aB; a <= 800; a += 4) { const w = Q.toW(a, bCq); if (worldSeabedAt(w.x, w.z) > -draft) { wFree = a; break; } }
+        if (asBerthed) aE = Math.max(aB + 10, Math.min(aB + 2 * D.B + 30, wFree / 2));
+        else {
+            const qS = Q.toQ(physics.cgWorldX || 0, physics.cgWorldZ || 0), hq = Math.atan2(S.sz, -S.sx) / _haRad;
+            const par = Math.min(Math.abs(_haWrap(physics.heading - hq)), Math.abs(_haWrap(physics.heading - hq - 180)));
+            if (par < 25) aE = Math.max(aB + 5, Math.min(wFree - D.hw - 8, qS.a));
+            else if (aE > wFree - D.HL - 10) return { ok: false, why: `${port.name}の前は、この船を回して横付けするには狭すぎます。岸壁と平行にしてから着岸してください` };
+        }
+    }
     // 岸沿いの位置：空いている区間の真ん中。回るときの円（半径 HL）が桟橋の軍艦や防波堤に掛からないように
     let bLo = PL.free[0] + D.HL + 10, bHi = PL.free[1] - D.HL - 10;
     if (PL.keepOut) bLo = Math.max(bLo, PL.keepOut[1] + D.HL + 15);
@@ -269,7 +283,7 @@ function harborBerthPlan(port, prefHeading, asBerthed) {
         return { h: fallback, pt: null };
     };
     const OUT = outToward(pE, Math.atan2(S.sx, S.sz) / _haRad);
-    const hOut = OUT.h;
+    const hOut = port.adhoc ? hB : OUT.h;
     // 回っている間に船体が通る円（回す所 Tq のまわり）の中が、どこも船の喫水より深いか
     //（真ん中・船首尾の近く・端の外の 3 つの輪で、その所の喫水＋余裕）
     const hpD = window.hullProfile, hlL = (hpD && hpD.ready) ? hpD.halfLen : 6;
@@ -286,7 +300,7 @@ function harborBerthPlan(port, prefHeading, asBerthed) {
     // 桟橋の間の岸壁（ニューヨークのハドソン川の埠頭など）：岸壁の前（aE）で回すと、回っている船体が隣の桟橋や
     // 浅い所に掛かる。そのときはドックと同じく、桟橋の先の外（川の上）で岸壁と平行に回してから、桟橋の間を
     // まっすぐ入り（出るときはまっすぐ出て）、岸壁の前で横へ寄せる
-    const slip = !port.dock && port.real && quayExt && typeof worldSeabedAt === 'function' && !sweepOk(pE)
+    const slip = !port.dock && !port.adhoc && port.real && quayExt && typeof worldSeabedAt === 'function' && !sweepOk(pE)
         ? _haSlipPlan(port, S, Q, D, aB, aE, bC, drMid, sweepOk) : null;
     // ドックの中の岸壁（43-world.js の dock）：ドックの外（入口の外の真ん中の線の上）で向きを合わせ、
     // 船首からまっすぐ入って、岸壁の前（ドックの真ん中の線の上）で止め、横へ寄せる。出るときは後ろへまっすぐ出る
@@ -399,9 +413,106 @@ function harborBerthedAt() {
             return harborBerthPlan(np.port, physics.heading, true);
         }
     }
+    // 登録されていない岸壁に横付けしている
+    const aq = harborAdhocQuay({ alongside: true });
+    if (aq) { const plan = harborBerthPlan(aq, physics.heading, true); if (plan.ok) return plan; }
     return null;
 }
 window.harborBerthedAt = harborBerthedAt;
+
+// ── 登録されていない岸壁 ──
+// 作り込んだ港（43-world.js の細かい地形）の中で、港の埠頭として登録されていない岸壁にも、タグで離着岸できるように、
+// 船のまわりから「まっすぐで、係船設備のある（陸の側が港の敷地か桟橋：細かい地形の種類 3・4）岸壁」を探し、
+// 港の埠頭の形（harborBerthPlan に渡せる。adhoc）にして返す。いちばん近い岸壁（船の真ん中から岸の線までの距離）。
+//  near：これより近い岸壁だけ[m]。alongside：横付けしている岸壁だけ（離岸：船と平行で、舷のすぐ外）
+const _haAdhocMemo = { key: '', t: -1e9, port: null };
+function harborAdhocQuay(opt) {
+    opt = opt || {};
+    if (!window.world || world.mode !== 'world' || typeof _rwDetailOf !== 'function' || typeof worldSeabedAt !== 'function') return null;
+    const here = worldShipLatLon(), DH = _rwDetailOf(here.lat, here.lon);
+    if (!DH || !DH.k) return null;
+    const x0 = physics.cgWorldX || 0, z0 = physics.cgWorldZ || 0;
+    const memoKey = [Math.round(x0), Math.round(z0), Math.round(physics.heading || 0), !!opt.alongside, opt.near || 0].join(',');
+    const now = performance.now();
+    if (_haAdhocMemo.key === memoKey && now - _haAdhocMemo.t < 2000) return _haAdhocMemo.port;
+    const D = _haDims(), draft = worldShipDraft();
+    const near = opt.near || (opt.alongside ? D.hw + 30 : 600);
+    const isLand = (x, z) => worldSeabedAt(x, z) > 0.5;
+    const kindAt = (x, z) => { const ll = worldUnitToLatLon(worldLocalToUnit(x, z)); return _rwDetailKindAt(DH, ll.lat, ll.lon); };
+    // 船の真ん中から 48 方向へ、最初に陸に当たる所（近い順に調べる）
+    const hits = [];
+    for (let k = 0; k < 48; k++) {
+        const th = k / 48 * Math.PI * 2, ux = Math.sin(th), uz = Math.cos(th);
+        for (let d = Math.max(2, D.hw * 0.5); d <= near + D.hw; d += 3) if (isLand(x0 + ux * d, z0 + uz * d)) { hits.push({ d, ux, uz }); break; }
+    }
+    hits.sort((a, b) => a.d - b.d);
+    let best = null;
+    for (const H of hits.slice(0, 12)) {
+        if (best && H.d > best.dist + D.hw + 40) break;
+        // 当たった所のまわりの岸の線を直線に合わせる（3 回：向きを合わせ直す）。(s, a)：岸沿い・沖への距離
+        let nx = -H.ux, nz = -H.uz, cx = x0 + H.ux * H.d, cz = z0 + H.uz * H.d, P = null;
+        const W = D.HL + 60;
+        for (let it = 0; it < 3; it++) {
+            const tx = -nz, tz = nx;
+            P = [];
+            for (let s = -W; s <= W; s += 5) {
+                const px = cx + tx * s + nx * 30, pz = cz + tz * s + nz * 30;
+                let a = null;
+                if (!isLand(px, pz)) for (let d = 0; d <= 60; d += 0.5) if (isLand(px - nx * d, pz - nz * d)) { a = 30 - d; break; }
+                P.push(a === null ? null : [s, a]);
+            }
+            const F = P.filter(p => p && Math.abs(p[0]) <= Math.min(W, D.HL));
+            if (F.length < 8) { P = null; break; }
+            let n = F.length, sb = 0, sa = 0, sbb = 0, sab = 0;
+            for (const [b, a] of F) { sb += b; sa += a; sbb += b * b; sab += a * b; }
+            const m = (n * sab - sb * sa) / ((n * sbb - sb * sb) || 1), c = (sa - m * sb) / n, l = Math.hypot(1, m);
+            cx += nx * c; cz += nz * c;
+            const nnx = (nx - m * tx) / l, nnz = (nz - m * tz) / l; nx = nnx; nz = nnz;
+        }
+        if (!P) continue;
+        // まっすぐ続いている所（線からのずれ 3m まで。升目 1 つ分の切れ目は飛ばす）
+        const tx = -nz, tz = nx;
+        const onLine = (i) => { const p = P[i]; return p && Math.abs(p[1]) <= 3; };
+        const ic = Math.round(W / 5), i0 = onLine(ic) ? ic : onLine(ic - 1) ? ic - 1 : onLine(ic + 1) ? ic + 1 : -1;
+        if (i0 < 0) continue;
+        let hi = i0, lo = i0;
+        for (let i = i0 + 1, miss = 0; i < P.length; i++) { if (onLine(i)) { hi = i; miss = 0; } else if (++miss > 1) break; }
+        for (let i = i0 - 1, miss = 0; i >= 0; i--) { if (onLine(i)) { lo = i; miss = 0; } else if (++miss > 1) break; }
+        const sMin = P[lo][0], sMax = P[hi][0];
+        if (sMax - sMin < D.L * 0.85) continue;
+        // 岸壁らしいか（陸の側が 0.6m より高く、すぐ前が 1.5m より深い）・係船設備（陸の側が港の敷地・桟橋）
+        let quay = 0, fac = 0, tot = 0;
+        for (let s = sMin; s <= sMax; s += 10) {
+            const lx = cx + tx * s, lz = cz + tz * s;
+            tot++;
+            if (worldSeabedAt(lx - nx * 6, lz - nz * 6) > 0.6 && worldSeabedAt(lx + nx * 3, lz + nz * 3) < -1.5) quay++;
+            const kd = kindAt(lx - nx * 8, lz - nz * 8);
+            if (kd === 3 || kd === 4) fac++;
+        }
+        if (quay < tot * 0.7 || fac < tot * 0.6) continue;
+        // 船の真ん中から岸の線まで・岸壁との向きのずれ
+        const sShip = (x0 - cx) * tx + (z0 - cz) * tz, dist = (x0 - cx) * nx + (z0 - cz) * nz;
+        if (dist < 0) continue;
+        const qh = Math.atan2(tx, tz) / _haRad, par = Math.min(Math.abs(_haWrap(physics.heading - qh)), Math.abs(_haWrap(physics.heading - qh - 180)));
+        if (opt.alongside && (par > 25 || dist > D.hw + 25 || sShip < sMin - 20 || sShip > sMax + 20)) continue;
+        if (best && dist >= best.dist) continue;
+        // 港の真ん中（harborBerthPlan が測り直す基準）：船の横の所（岸壁に収まるように）
+        const sC = Math.max(sMin + D.HL * 0.9, Math.min(sMax - D.HL * 0.9, sShip));
+        best = { dist, x: cx + tx * sC, z: cz + tz * sC, nx, nz, len: sMax - sMin };
+    }
+    let port = null;
+    if (best) {
+        const ll = worldUnitToLatLon(worldLocalToUnit(best.x, best.z));
+        // 沖の向き（羅針盤の方位）：物理の面では東が −x（44-world-terrain.js の _portShape：sx ＝ −sin、sz ＝ cos）
+        const seaBearing = (Math.atan2(-best.nx, best.nz) / _haRad + 360) % 360;
+        port = { id: `adhoc:${ll.lat.toFixed(4)},${ll.lon.toFixed(4)}`, adhoc: true, type: 'passenger', name: `${DH.name || ''}の岸壁`,
+            lat: ll.lat, lon: ll.lon, u: worldLatLonToUnit(ll.lat, ll.lon), real: true, seaBearing, seed: 1, quay: Math.round(best.len),
+            fixed: true, group: null, berth: null, fairway: null, dock: null };
+    }
+    Object.assign(_haAdhocMemo, { key: memoKey, t: now, port });
+    return port;
+}
+window.harborAdhocQuay = harborAdhocQuay;
 
 // ── タグの数と持ち場 ──
 // 船の長さで：小さい船 2 隻、大きい船 4 隻、とても大きい船 6 隻
@@ -562,8 +673,17 @@ function harborAutoStop(msg) {
 }
 function harborAutoBerthNow() {
     const ll = worldShipLatLon(), np = worldNearestPort(ll.lat, ll.lon);
-    if (!np || np.dist > 6000) { _haMsg('港の近くではありません'); return; }
-    harborAutoStart('berth', harborBerthPlan(np.port));
+    let plan = np && np.dist <= 6000 ? harborBerthPlan(np.port) : null;
+    // 登録されていない岸壁（近くの、まっすぐで係船設備のある岸壁）：登録された埠頭の着岸位置よりはっきり近ければ、そちらへ
+    const aq = harborAdhocQuay();
+    if (aq) {
+        const p2 = harborBerthPlan(aq);
+        const dOf = (p) => Math.hypot(p.berth.x - physics.cgWorldX, p.berth.z - physics.cgWorldZ);
+        if (p2.ok && (!plan || !plan.ok || dOf(p2) + 150 < dOf(plan))) plan = p2;
+        else if (!p2.ok && (!plan || !plan.ok)) plan = p2;
+    }
+    if (!plan) { _haMsg('港・岸壁の近くではありません'); return; }
+    harborAutoStart('berth', plan);
 }
 function harborAutoDepartNow(then) {
     const plan = harborBerthedAt();
@@ -837,6 +957,25 @@ function _haMakeLines(plan) {
 function updateHarborAuto(t, dt) {
     // 着岸した状態で始めたときのもやい綱（船の位置が画面に反映されてから張る）
     if (harborAuto.pendingLines && ++harborAuto.pendingT > 3) { _haMakeLines(harborAuto.pendingLines); harborAuto.pendingLines = null; }
+    // 着岸した状態で始めたとき：見えている岸壁の線（44-world-terrain.js の terrain.quay。細かい地形ができてから）で
+    // 着岸の位置を決め直して寄せる（始めた時点では地形の格子の階段で測っていて、岸壁から数 m 離れて止まっていた）
+    const SS = harborAuto.startSnap;
+    if (SS) {
+        SS.t += Math.max(0, dt || 0);
+        const moved = Math.hypot(physics.cgWorldX - SS.x, physics.cgWorldZ - SS.z) > 3 || Math.abs(physics.speed || 0) > 0.3 || harborAuto.mode;
+        if (moved || SS.t > 120) harborAuto.startSnap = null;
+        else if (typeof terrain !== 'undefined' && terrain.quay && !harborAuto.pendingLines) {
+            harborAuto.startSnap = null;
+            const plan = harborBerthPlan(SS.port, physics.heading, true);
+            const dx = plan.ok ? plan.berth.x - physics.cgWorldX : 0, dz = plan.ok ? plan.berth.z - physics.cgWorldZ : 0, dd = Math.hypot(dx, dz);
+            if (dd > 0.3 && dd < 20) {
+                physics.cgWorldX += dx; physics.cgWorldZ += dz;
+                if (typeof shipGroup !== 'undefined' && shipGroup) { shipGroup.position.x += dx; shipGroup.position.z += dz; shipGroup.updateMatrixWorld(); }
+                terrain.good = null;
+                _haMakeLines(plan);
+            }
+        }
+    }
     // 綱を取っている間に船が動いたら綱を外す
     if (harborAuto.lines.length && harborAuto.linePose && Math.hypot(physics.cgWorldX - harborAuto.linePose.x, physics.cgWorldZ - harborAuto.linePose.z) > 4) _haClearLines();
     // 離岸のあと待たせているタグ：航路が決まらない・狭くない航路なら帰す

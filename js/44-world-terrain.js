@@ -379,7 +379,11 @@ function _trSmoothCoast(H, n, P, step) {
         if (bd >= R) continue;
         // 陸は左（bs > 0）。陸の点が右（水の側）、水の点が左（陸の側）にあれば寄せる。
         // 陸の点が線のすぐ内側（2m 以内）なら線の上へ（そこから水へ下る斜面が線の外へ出ないように）
-        if ((!w && (bs < 0 || bd < 2)) || (w && bs > 0)) { P[k * 3] = bx; P[k * 3 + 2] = bz; }
+        // 岸壁（すぐそばの陸が 0.6m より高く、この水の点が 1.5m より深い）の前の水の点も線の上へ：陸の点（線の上）から
+        // 升目 1 つ先の深い水の点まで下る斜面が、岸壁の前に水面から出たぎざぎざの歯のように並んでいた
+        let quayW = false;
+        if (w && H[k] < -1.5) for (let b = -1; b <= 1 && !quayW; b++) for (let a = -1; a <= 1; a++) if (H[k + b * n + a] > 0.6) { quayW = true; break; }
+        if ((!w && (bs < 0 || bd < 2)) || (w && (bs > 0 || quayW))) { P[k * 3] = bx; P[k * 3 + 2] = bz; }
     }
     return lines;
 }
@@ -415,6 +419,7 @@ function _trQuayWalls(lines, H, n, step, cx, cz, detail) {
         pos.push(...a, ...b, ...c); col.push(...ca, ...cb, ...cc);
     };
     const UP = [0, 1, 0];
+    const segs = [];        // 壁を置いた線分（物理の岸壁にも使う：_trQuayIndex）[ax, az, bx, bz, 陸の側の向き nx, nz, 上の高さ]
     for (const L of lines) {
         const m = L.length / 2;
         if (m < 2) continue;
@@ -439,6 +444,7 @@ function _trQuayWalls(lines, H, n, step, cx, cz, detail) {
                 return (Number.isFinite(t) ? Math.min(8, Math.max(0.8, t)) : hin) + 0.1;
             };
             const ta = topAt(ax, az), tb = topAt(bx, bz);
+            segs.push(ax, az, bx, bz, nx, nz, Math.min(ta, tb));
             const A1 = [ax, ta - drop(ax, az), az], B1 = [bx, tb - drop(bx, bz), bz];
             const A0 = [ax, BOT, az], B0 = [bx, BOT, bz];
             const ct = sq(C_WALL_TOP), cb = sq(C_WALL_BOT);
@@ -475,7 +481,47 @@ function _trQuayWalls(lines, H, n, step, cx, cz, detail) {
     }
     const mesh = new THREE.Mesh(geo, _trQuayWalls.mat);
     mesh.receiveShadow = true; mesh.userData.noLightBake = true;
+    mesh.userData.quaySegs = segs;
     return mesh;
+}
+// ── 物理の岸壁（見えている岸壁と同じ線）──
+// 岸壁の壁を置いた線分（_trQuayWalls）を升目の索引にしておき、worldSeabedAt で、その線の近くでは線のどちら側かで
+// 陸（岸壁の上の高さ）か水（線から 12m 沖の深さ）かを決める。地形の高さの格子（10m）のままだと、斜めの岸壁は
+// 升目の階段（±4m ほど）になり、見えている岸壁より出っ張った所に船体が当たり、着岸した船が岸壁から離れて止まっていた
+const QW_CELL = 16, QW_BAND = 12;
+function _trQuayIndex(mesh) {
+    terrain.quay = null;
+    let qs = null;
+    if (mesh) mesh.traverse(o => { if (o.userData && o.userData.quaySegs && o.userData.quaySegs.length) qs = o.userData.quaySegs; });
+    if (!qs) return;
+    const grid = new Map(), N = qs.length / 7;
+    for (let i = 0; i < N; i++) {
+        const ax = qs[i * 7], az = qs[i * 7 + 1], bx = qs[i * 7 + 2], bz = qs[i * 7 + 3];
+        const i0 = Math.floor((Math.min(ax, bx) - QW_BAND) / QW_CELL), i1 = Math.floor((Math.max(ax, bx) + QW_BAND) / QW_CELL);
+        const j0 = Math.floor((Math.min(az, bz) - QW_BAND) / QW_CELL), j1 = Math.floor((Math.max(az, bz) + QW_BAND) / QW_CELL);
+        for (let j = j0; j <= j1; j++) for (let ii = i0; ii <= i1; ii++) { const k = ii + ',' + j; let A = grid.get(k); if (!A) grid.set(k, A = []); A.push(i); }
+    }
+    terrain.quay = { segs: qs, grid };
+}
+// (x, z) にいちばん近い岸壁の線分：符号付きの距離 d（＋：陸の側）と、その線分の陸の側の向き・上の高さ。線分の端の外・帯の外は null
+const _qwOut = { d: 0, nx: 0, nz: 0, top: 0 };
+function _trQuayNear(x, z) {
+    const Q = terrain.quay;
+    if (!Q) return null;
+    const A = Q.grid.get(Math.floor(x / QW_CELL) + ',' + Math.floor(z / QW_CELL));
+    if (!A) return null;
+    const S = Q.segs;
+    let bd = QW_BAND, bi = -1, bs = 0;
+    for (const i of A) {
+        const ax = S[i * 7], az = S[i * 7 + 1], dx = S[i * 7 + 2] - ax, dz = S[i * 7 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;
+        const u = ((x - ax) * dx + (z - az) * dz) / L2;
+        if (u < -0.02 || u > 1.02) continue;
+        const d = (x - ax) * S[i * 7 + 4] + (z - az) * S[i * 7 + 5];
+        if (Math.abs(d) < bd) { bd = Math.abs(d); bi = i; bs = d; }
+    }
+    if (bi < 0) return null;
+    _qwOut.d = bs; _qwOut.nx = S[bi * 7 + 4]; _qwOut.nz = S[bi * 7 + 5]; _qwOut.top = S[bi * 7 + 6];
+    return _qwOut;
 }
 function _trBuildMesh(H, n, half, cx, cz, lowerInside, opts) {
     const geo = new THREE.BufferGeometry();
@@ -629,7 +675,7 @@ function _trRequest(cx, cz) {
     // 作り込んだ港のそばなら、船のまわりをもっと細かく
     terrain.fineOn = _trNearDetail(cx, cz);
     if (terrain.fineOn) w.postMessage({ id, which: 'fine', frame, n: TR_FINE.n, half: TR_FINE.half, cx, cz, oct: WORLD_OCT_FULL, shapes });
-    else { _trDispose(terrain.fine); terrain.fine = null; }
+    else { _trDispose(terrain.fine); terrain.fine = null; terrain.quay = null; }
     w.postMessage({ id, which: 'near', frame, n: TR_NEAR.n, half: TR_NEAR.half, cx, cz, oct: WORLD_OCT_FULL, shapes });
     w.postMessage({ id, which: 'far', frame, n: TR_FAR.n, half: TR_FAR.half, cx, cz, oct: 15, shapes: [] });
 }
@@ -647,6 +693,7 @@ function _trOnHeights(msg) {
         _trDispose(terrain.fine);
         const ll = worldUnitToLatLon(worldLocalToUnit(cx, cz));
         terrain.fine = _trBuildMesh(msg.H, TR_FINE.n, TR_FINE.half, cx, cz, null, { coastOnly: 10, smoothCoast: true, quayWalls: true, detail: _rwDetailOf(ll.lat, ll.lon) || (typeof _hdNearDetail === 'function' ? _hdNearDetail(cx, cz) : null) });
+        _trQuayIndex(terrain.fine);
         if (terrain.fine) scene.add(terrain.fine);
     } else {
         _trDispose(terrain.far);
@@ -852,6 +899,7 @@ function _trClearAll() {
     if (typeof _hdClear === 'function') _hdClear();
     _trDispose(terrain.near); _trDispose(terrain.far); _trDispose(terrain.fine);
     terrain.near = terrain.far = terrain.fine = null;
+    terrain.quay = null;
     terrain.center = null;
     terrain.reqId++;
     for (const [, P] of terrain.ports) { scene.remove(P.group); P.group.traverse(o => { if (o.geometry) o.geometry.dispose(); }); }
@@ -1149,10 +1197,21 @@ function _trInCollider(x, z) {
 }
 function worldSeabedAt(x, z) {
     if (!window.world || world.mode !== 'world') return oceanSeabedAt(x, z);    // 外洋のモード：平均 3000m の海底
-    let h = worldHeightAtLocal(x, z, 16);
+    let h = worldHeightAtLocal(x, z, 16, true);      // 岸壁は垂直に（43-world.js の _rwDetailAtSharp）
     const shapes = [];
     for (const [, P] of terrain.ports) shapes.push(P.shape);
     if (shapes.length) h = _portAdjust(h, x, z, shapes);
+    // 見えている岸壁の線の近くは、その線で切る（陸の側は岸壁の上の高さ、水の側は線から 12m 沖の深さ）
+    const q = terrain.quay ? _trQuayNear(x, z) : null;
+    if (q) {
+        if (q.d >= 0) h = Math.max(h, q.top);
+        else if (h > -1.5) {
+            const k = QW_BAND + q.d;          // 線から 12m 沖まで
+            let hw = worldHeightAtLocal(x - q.nx * k, z - q.nz * k, 16, true);
+            if (shapes.length) hw = _portAdjust(hw, x - q.nx * k, z - q.nz * k, shapes);
+            h = Math.min(h, hw);
+        }
+    }
     for (const [, P] of terrain.ports) {
         const S = P.shape;
         const dx = x - S.x, dz = z - S.z;

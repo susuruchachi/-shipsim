@@ -595,6 +595,17 @@ function scanHullProfile() {
                 for (let b = 0; b < HULL_TOP_BINS; b++) {
                     if (binCount[b] >= densityThresh && binWidth[b] >= widthThresh) hullTopBin = b;
                 }
+                // 上端が全高の 75% より上（マストの高さ）になったときは、下から続いている所までにする（条件に合わない段が
+                // 3 つ続いたら、そこで終わり）。細長い船体の上の、離れて高い所にあるマストのヤード（横の桁）が幅の条件に合い、
+                // 船体の上端をマストの高さまで取っていた（大田：甲板の高さ・浸水の区画の天井が水面の 48m 上になっていた）
+                if (hullTopBin >= 0 && (hullTopBin + 1) / HULL_TOP_BINS > 0.75) {
+                    let top = -1, miss = 0;
+                    for (let b = 0; b < HULL_TOP_BINS; b++) {
+                        if (binCount[b] >= densityThresh && binWidth[b] >= widthThresh) { top = b; miss = 0; }
+                        else if (top >= 0 && ++miss >= 3) break;
+                    }
+                    if (top >= 0 && top < hullTopBin) hullTopBin = top;
+                }
                 if (hullTopBin >= 0) {
                     const hullTopY = minY + (hullTopBin + 1) * edgeStep;
                     const candidateHeight = hullTopY - minY;
@@ -605,8 +616,16 @@ function scanHullProfile() {
     }
 
     const wlFrac = 0.30;   // 船体本体高さの下から30%を「喫水線付近」とみなす
-    const wlY    = minY + hullHeight * wlFrac;   // この高さ以下の頂点が対象
+    let   wlY    = minY + hullHeight * wlFrac;   // この高さ以下の頂点が対象
     const keelY  = minY + hullHeight * 0.05;
+    // 推した喫水線が、船が実際に浮く水面（設定の喫水線 physics.waterlineOffsetY）よりはっきり上（喫水の 3 割より上）なら、
+    // 実際の水面を使う。細長い船体に幅の広い砲塔・マストのヤードが載った模型（大田）では、上の「船体の上端」が
+    // マストの高さまで行き、喫水線を甲板の近く（実際の水面の 8.7m 上）としていた：喫水を 16.8m（本当は 8m）、
+    // 喫水線の輪郭・引き波の端を甲板の高さの船体の形で測る など
+    {
+        const wlUser = +physics.waterlineOffsetY;
+        if (Number.isFinite(wlUser) && wlUser > keelY + hullHeight * 0.02 && wlY - wlUser > (wlUser - keelY) * 0.3) wlY = wlUser;
+    }
     // 排水量自動計算（estimateDisplacementTons）で使うため保存しておく
     hp.designWaterlineY = wlY;
     hp.keelY = keelY;

@@ -250,6 +250,27 @@ function _rwDetailAt(d, lat, lon) {
     const tx = fx - x0, ty = fy - y0, H = d.h, k = y0 * d.cols + x0;
     return ((H[k] * (1 - tx) + H[k + 1] * tx) * (1 - ty) + (H[k + d.cols] * (1 - tx) + H[k + d.cols + 1] * tx) * ty) * 0.1;
 }
+// 物理の海底（座礁・岸壁の当たり・着岸の位置）用：岸壁の升目（陸の角と深い水の角が並ぶ升目）は、間を斜面でつながず、
+// 高さ 0.5m の線（見えている岸壁の線と同じ）で垂直に切る。線の陸の側は陸の角だけ、水の側は水の角だけで補う。
+// 4 点から直線で補ったままだと、岸壁の前に升目 1 つ分（10m）の斜面ができ、ぶつかった船がそれを登って岸壁に乗り上げ、
+// 着岸でも船底がその斜面に掛かるので、岸壁から数 m 離れて止まっていた
+function _rwDetailAtSharp(d, lat, lon) {
+    const fy = (d.lat1 - lat) / d.dLat, fx = (lon - d.lon0) / d.dLon;
+    if (!(fx >= 0 && fy >= 0 && fx <= d.cols - 1 && fy <= d.rows - 1)) return NaN;
+    const x0 = Math.min(d.cols - 2, Math.floor(fx)), y0 = Math.min(d.rows - 2, Math.floor(fy));
+    const tx = fx - x0, ty = fy - y0, H = d.h, k = y0 * d.cols + x0;
+    const h0 = H[k] * 0.1, h1 = H[k + 1] * 0.1, h2 = H[k + d.cols] * 0.1, h3 = H[k + d.cols + 1] * 0.1;
+    const w0 = (1 - tx) * (1 - ty), w1 = tx * (1 - ty), w2 = (1 - tx) * ty, w3 = tx * ty;
+    const v = h0 * w0 + h1 * w1 + h2 * w2 + h3 * w3;
+    if (!(Math.max(h0, h1, h2, h3) >= 0.5 && Math.min(h0, h1, h2, h3) < -1.5)) return v;
+    const land = v >= 0.5;
+    let sw = 0, sh = 0;
+    if ((h0 >= 0.5) === land) { sw += w0; sh += h0 * w0; }
+    if ((h1 >= 0.5) === land) { sw += w1; sh += h1 * w1; }
+    if ((h2 >= 0.5) === land) { sw += w2; sh += h2 * w2; }
+    if ((h3 >= 0.5) === land) { sw += w3; sh += h3 * w3; }
+    return sw > 1e-6 ? sh / sw : v;
+}
 // 作り込んだ港の升目の種類（0 海・1 陸・2 ドックの水・3 桟橋・4 港の敷地）。範囲の外は -1
 function _rwDetailKindAt(d, lat, lon) {
     const j = Math.round((d.lat1 - lat) / d.dLat), i = Math.round((lon - d.lon0) / d.dLon);
@@ -275,12 +296,12 @@ function _rwDetailBoxOf(lat, lon) {
 }
 window._rwDetailBoxOf = _rwDetailBoxOf;
 // その緯度・経度の高さ[m]（格子の 4 点から直線で補う）。範囲の外は低い陸（行き止まり）。
-// 作り込んだ港の中はその細かい地形（縁の 250m で、粗い地形となめらかにつなぐ）
-function _rwSample(lat, lon) {
+// 作り込んだ港の中はその細かい地形（縁の 250m で、粗い地形となめらかにつなぐ）。sharp：岸壁を垂直に（物理の海底）
+function _rwSample(lat, lon, sharp) {
     const R = _RW;
     const d = R.hd ? _rwDetailOf(lat, lon) : null;
     if (d) {
-        const hd = _rwDetailAt(d, lat, lon);
+        const hd = sharp ? _rwDetailAtSharp(d, lat, lon) : _rwDetailAt(d, lat, lon);
         const e = Math.min((lat - d.lat0) / d.dLat, (d.lat1 - lat) / d.dLat, (lon - d.lon0) / d.dLon, (d.lon1 - lon) / d.dLon) * d.cell;
         if (e >= 250) return hd;
         const t = Math.max(0, e / 250);
@@ -339,9 +360,9 @@ function _rwInside(lat, lon) {
 }
 // 球の上の点の高さ。oct が細かいとき（船のまわり）は、岸の近くに小さな起伏を足す
 //（格子は 460m ごとなので、そのままでは海岸線がのっぺりする。ずれは数十 m まで）
-function _rwHeight(ux, uy, uz, oct) {
+function _rwHeight(ux, uy, uz, oct, sharp) {
     const lat = Math.asin(Math.max(-1, Math.min(1, uy))) * 57.29577951308232, lon = Math.atan2(uz, ux) * 57.29577951308232;
-    let h = _rwSample(lat, lon);
+    let h = _rwSample(lat, lon, sharp);
     if (oct >= 12 && h > -20 && h < 20 && !(_RW.hd && _rwDetailOf(lat, lon))) {
         const n = 0.65 * _wNoise3(ux * 9000 + 1.7, uy * 9000 - 2.9, uz * 9000 + 4.1) + 0.35 * _wNoise3(ux * 30000 - 5.3, uy * 30000 + 0.7, uz * 30000 - 2.2);
         h += n * 3 * (1 - Math.abs(h) / 20);
@@ -370,6 +391,7 @@ function worldWorkerSource() {
         let _RW = null;
         const _rwHook = (ev) => { if (ev.data && ev.data.__rw) { _RW = ev.data.rw; WORLD_R = ev.data.R; return true; } return false; };
         ${_rwDetailAt.toString()}
+        ${_rwDetailAtSharp.toString()}
         ${_rwDetailOf.toString()}
         ${_rwSample.toString()}
         ${_rwGridAt.toString()}
@@ -468,8 +490,8 @@ function worldShoalFree(ux, uy, uz) {
     return _wNoise3(ux * 140 + 11.3, uy * 140 - 4.1, uz * 140 + 7.7) < 0.15;
 }
 // 球の上の点の高さ[m]（浅瀬・岩礁込み）
-function worldHeightAt(ux, uy, uz, oct) {
-    if (_RW) return _rwHeight(ux, uy, uz, oct);
+function worldHeightAt(ux, uy, uz, oct, sharp) {
+    if (_RW) return _rwHeight(ux, uy, uz, oct, sharp);
     return worldShoal(ux, uy, uz, worldHeightFromE(worldNoiseE(ux, uy, uz, oct)), oct);
 }
 
@@ -543,9 +565,9 @@ function worldHeadingFromCompass(c) { return ((360 - c) % 360 + 360) % 360; }
 window.worldCompass = worldCompass;
 // 物理の面の点の高さ[m]（oct を省くと一番細かく）
 const _wTmpU = {};
-function worldHeightAtLocal(x, z, oct) {
+function worldHeightAtLocal(x, z, oct, sharp) {
     worldLocalToUnit(x, z, _wTmpU);
-    return worldHeightAt(_wTmpU.x, _wTmpU.y, _wTmpU.z, oct || WORLD_OCT_FULL);
+    return worldHeightAt(_wTmpU.x, _wTmpU.y, _wTmpU.z, oct || WORLD_OCT_FULL, sharp);
 }
 // 大円距離[m]
 function worldDistance(latA, lonA, latB, lonB) {
@@ -1446,14 +1468,24 @@ function worldSetMode(mode) {
 window.worldSetMode = worldSetMode;
 
 // 船の喫水[m]（喫水線からキールまで）
+// 輪切りの draft は、船体の形から推した喫水線（hullProfile.designWaterlineY：船体の高さの下から 3 割）から測ってある。
+// 推した喫水線が、船が実際に浮く水面（設定の喫水線 physics.waterlineOffsetY：模型の座標）より上なら、その差の分を引く。
+// （細長い船体に幅の広い砲塔・マストのヤードが載った模型（大田）では、推した喫水線が甲板の近くになり、
+//  喫水を 16.8m（本当は 8m ほど）としていた：自動航行・離着岸が浅すぎると断る など。
+//  推した喫水線が水面より下の船（オリンピックなど）は今まで通り：自動航行・離着岸の深さの見方を変えないように）
+function _worldDraftShift(hp) {
+    const wl = +physics.waterlineOffsetY;
+    return (hp && Number.isFinite(hp.designWaterlineY) && Number.isFinite(wl)) ? Math.max(0, hp.designWaterlineY - wl) : 0;
+}
 // 模型の形から決めた喫水（いちばん深い所）[m]
 function worldShipDraftAuto() {
     const hp = window.hullProfile;
     const sy = (typeof shipGroup !== 'undefined' && shipGroup) ? Math.abs(shipGroup.scale.y) || 1 : 1;
     if (hp && hp.ready) {
+        const sh = _worldDraftShift(hp);
         let d = 0;
-        for (const sl of hp.slices || []) d = Math.max(d, sl.draft || 0);
-        if (!(d > 0) && hp.designWaterlineY > hp.keelY) d = hp.designWaterlineY - hp.keelY;
+        for (const sl of hp.slices || []) d = Math.max(d, (sl.draft || 0) - sh);
+        if (!(d > 0) && hp.designWaterlineY - sh > hp.keelY) d = hp.designWaterlineY - sh - hp.keelY;
         if (d > 0) return d * sy;
     }
     return 0.4 * (physics.scale || 1);
@@ -1485,7 +1517,7 @@ function worldHullAt(zLocal) {
     const A = sl[i], B = sl[i + 1];
     const u = Math.max(0, Math.min(1, (a - A.alongNorm) / ((B.alongNorm - A.alongNorm) || 1)));
     const hw = (A.halfWidth + (B.halfWidth - A.halfWidth) * u) * sc;
-    let d = (A.draft + (B.draft - A.draft) * u) * sy;
+    let d = Math.max(0, A.draft + (B.draft - A.draft) * u - _worldDraftShift(hp)) * sy;
     if (physics.draftOverride > 0) d *= physics.draftOverride / Math.max(1e-3, worldShipDraftAuto());
     // レバーで沈めた・浮かせた分は船の全長で同じだけ（水面より上の所は 0 のまま）
     if (lever && d > 0) d = Math.max(0, d + lever);
@@ -1620,7 +1652,7 @@ function worldStartAtPort(port) {
         const plan = harborBerthPlan(port, physics.heading);
         if (plan.ok) {
             physics.cgWorldX = plan.berth.x; physics.cgWorldZ = plan.berth.z; physics.heading = plan.berth.h;
-            if (typeof harborAuto !== 'undefined') { harborAuto.pendingLines = plan; harborAuto.pendingT = 0; }
+            if (typeof harborAuto !== 'undefined') { harborAuto.pendingLines = plan; harborAuto.pendingT = 0; harborAuto.startSnap = { port, x: plan.berth.x, z: plan.berth.z, t: 0 }; }
         }
     }
     if (typeof shipHistory !== 'undefined') shipHistory.length = 0;
