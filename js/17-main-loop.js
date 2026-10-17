@@ -650,27 +650,10 @@ function animate() {
         if (shipHistory.length > perf.historyMax) shipHistory.shift();
     }
 
-    updateWaterReflection();
-    // 船の後ろに残る泡の帯（68-wake-foam-map.js。物理の時間で薄れる）
-    if (typeof updateWakeFoamMap === 'function') updateWakeFoamMap(isDesignMode ? 0 : physicsDt);
-    // SWE流体シミュ（海面を消しているときは結果を使わないので止める）
-    if (typeof updateSWE === 'function' && !(waterMesh && !waterMesh.visible)) updateSWE(dt, t);
-    updateWater(t);
-    updateSky(t);
+    // 船をこのフレームの位置・姿勢に置く（水面の穴＝喫水線の輪郭（updateWater の updateHullWaterlinePolygon）・しぶきなどは
+    // この置いた船の行列から求める。以前は置く前の、前のフレームの位置で求めていたので、早送りで船の 1 フレームの動きが
+    // 大きいほど、水面の穴が船体に追いつかずに後ろへずれて見えた）
     sanitizePhysics();
-
-    if (typeof updateShipSolid === 'function') updateShipSolid(t);   // 船の形の中（60-ship-solid.js）：煙などが船を突き抜けないように
-    if (typeof updateShipAO === 'function') updateShipAO();          // 船の空の見え方（61-ship-ao.js）：かぶさった所の環境光を暗く
-    animateSmoke(t, dt);
-    animatePropellers(t, dt);
-    animateBubbles(t, dt);
-    animateWakeParticles(t, dt);
-    if (typeof emitHullWakeParticles === 'function' && !(typeof subSurfaceFxOff === 'function' && subSurfaceFxOff())) emitHullWakeParticles(t, dt);
-    if (typeof emitTrafficWakeParticles === 'function') emitTrafficWakeParticles(t, dt);   // 他の船の喫水線の泡・しぶき（18-hull-wake-physics.js）
-    updateNavLightsVisibility();
-    updateDeckLightPool();
-    updateFunnelUplights();
-
     // 座礁して乗り上げているときの傾き（44-world-terrain.js の _trGroundAttitude）を描く姿勢に足す
     const gAtt = (window.world && world.mode === 'world') ? 1 : 0;
     // 潜水艦（54-submarine.js）：潜っているほど波の揺れが小さく、潜航・浮上で艦首が上下する
@@ -692,6 +675,26 @@ function animate() {
         if (typeof updateSightAim === 'function') updateSightAim();      // 捉えた目標を追いかける（66-sights.js）
         updateViewpointCamera();
     }
+
+    updateWaterReflection();
+    // 船の後ろに残る泡の帯（68-wake-foam-map.js。物理の時間で薄れる）
+    if (typeof updateWakeFoamMap === 'function') updateWakeFoamMap(isDesignMode ? 0 : physicsDt);
+    // SWE流体シミュ（海面を消しているときは結果を使わないので止める）
+    if (typeof updateSWE === 'function' && !(waterMesh && !waterMesh.visible)) updateSWE(dt, t);
+    updateWater(t);
+    updateSky(t);
+
+    if (typeof updateShipSolid === 'function') updateShipSolid(t);   // 船の形の中（60-ship-solid.js）：煙などが船を突き抜けないように
+    if (typeof updateShipAO === 'function') updateShipAO();          // 船の空の見え方（61-ship-ao.js）：かぶさった所の環境光を暗く
+    animateSmoke(t, dt);
+    animatePropellers(t, dt);
+    animateBubbles(t, dt);
+    animateWakeParticles(t, dt);
+    if (typeof emitHullWakeParticles === 'function' && !(typeof subSurfaceFxOff === 'function' && subSurfaceFxOff())) emitHullWakeParticles(t, dt);
+    if (typeof emitTrafficWakeParticles === 'function') emitTrafficWakeParticles(t, dt);   // 他の船の喫水線の泡・しぶき（18-hull-wake-physics.js）
+    updateNavLightsVisibility();
+    updateDeckLightPool();
+    updateFunnelUplights();
 
     // LODグリッドの中心を船位置に追従（1unit刻みでスナップ）
     //（他の船をカメラで追っている間は、その船のまわりに：59-traffic.js の window._waterCenter）

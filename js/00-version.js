@@ -440,7 +440,10 @@
 //                 動かなければ知らせる
 //               ・「前へ曳航」「後ろへ曳航」：船首（船尾）の金物にタグの索を取って、前（後ろ）へ半分の力で引いてもらう
 //                 （大きな船は 2 隻）。強さ・索の長さはそれぞれのタグで変えられる。舵・機関は手で
-var APP_VERSION = '0.03.020.000';
+// 0.03.020.001 早送りで、水面の穴（喫水線の輪郭）が船体に追いつかない（17-main-loop.js）：輪郭を、このフレームの位置に船を
+//               置く前（前のフレームの位置）で求めていた。船を先に置いてから水面・輪郭・しぶきを求める（ずれ：20 倍で 6.6m・
+//               100 倍で 38m → どちらも 0.3m ほど）
+var APP_VERSION = '0.03.020.001';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
