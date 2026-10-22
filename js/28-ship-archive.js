@@ -53,13 +53,15 @@ async function _crc32Blob(blob, onProgress) {
     return (c ^ 0xFFFFFFFF) >>> 0;
 }
 // モデルの CRC は中身（＝モデルのID）が同じなら変わらないので、覚えておいて次から計算しない
-function _crcCacheGet(id) {
-    try { const m = JSON.parse(localStorage.getItem('susuru_model_crc') || '{}'); return Number.isFinite(m[id]) ? m[id] : null; } catch (e) { return null; }
+//（大きさも合わせて覚える：iPad で壊れていた記録（27-model-store.js の modelRecordRepair）の CRC を、直した後に使わない）
+function _crcCacheGet(id, size) {
+    try { const m = JSON.parse(localStorage.getItem('susuru_model_crc') || '{}'), v = m[id + '/' + size]; return Number.isFinite(v) ? v : null; } catch (e) { return null; }
 }
-function _crcCacheSet(id, crc) {
+function _crcCacheSet(id, size, crc) {
     try {
         const m = JSON.parse(localStorage.getItem('susuru_model_crc') || '{}');
-        m[id] = crc;
+        for (const k of Object.keys(m)) if (k === id || k.startsWith(id + '/')) delete m[k];
+        m[id + '/' + size] = crc;
         const keys = Object.keys(m);
         if (keys.length > 64) delete m[keys[0]];
         localStorage.setItem('susuru_model_crc', JSON.stringify(m));
@@ -278,6 +280,11 @@ async function exportAllShipsZip() {
                     modelNo++;
                     let rec = null;
                     try { rec = await modelStoreGet(ref.id); } catch (e) { rec = null; }
+                    // iPad で ZIP 全体が入ってしまった記録は、直してから入れる（そのまま入れると ZIP が何十倍にも膨らむ）
+                    if (rec && typeof _modelRecordSuspect === 'function' && _modelRecordSuspect(rec)) {
+                        _setArchiveStatus(`モデル ${modelNo}/${modelIds.length}（${rec.name}）の保存を直しています…`);
+                        rec = await modelRecordRepair(rec);
+                    }
                     if (rec && rec.data) {
                         const label = `モデル ${modelNo}/${modelIds.length}（${rec.name}・${formatModelSize(rec.size)}）`;
                         _setArchiveStatus(label + ' を準備しています…');
@@ -292,10 +299,10 @@ async function exportAllShipsZip() {
                                 if (again && again.data instanceof Blob) blob = again.data;
                             } catch (e) { /* そのまま使う */ }
                         }
-                        let crc = _crcCacheGet(ref.id);
+                        let crc = _crcCacheGet(ref.id, blob.size);
                         if (crc === null) {
                             crc = await _crc32Blob(blob, (f) => _setArchiveStatus(`${label} を確認しています… ${Math.round(f * 100)}%`));
-                            _crcCacheSet(ref.id, crc);
+                            _crcCacheSet(ref.id, blob.size, crc);
                         }
                         const path = 'models/' + ref.id + '/' + _archiveSafeName(rec.name);
                         files.push({ name: path, data: blob, crc });
@@ -353,13 +360,18 @@ async function importShipsZip(event) {
             const ent = entries.get(m.file);
             if (!ent) continue;
             _setArchiveStatus(`モデル ${i + 1}/${models.length}（${m.name}）を取り込んでいます…`);
-            const blob = await ent.blob();
-            let id;
-            {
-                const buf = await blob.arrayBuffer();
-                id = await computeModelId(buf);
+            // ZIP のファイルから切り出した Blob はそのまま保存しない：iPad・iPhone（WebKit）では ZIP のファイル全体が
+            // 保存されてしまう（27-model-store.js の modelRecordRepair）。中身を読み込んで、そこから Blob を作り直して保存する
+            let buf = await (await ent.blob()).arrayBuffer();
+            const id = await computeModelId(buf);
+            let have = null;
+            try { have = await modelStoreGet(id); } catch (e) { have = null; }
+            // 同じモデルがもう（壊れずに）保存されていれば、そのまま使う
+            if (!(have && have.data && !(typeof _modelRecordSuspect === 'function' && _modelRecordSuspect(have)))) {
+                const blob = new Blob([buf], { type: 'application/octet-stream' });
+                await modelStorePutData({ id, name: m.name, type: m.type || modelTypeFromName(m.name), size: buf.byteLength, savedAt: Date.now() }, blob);
             }
-            await modelStorePutData({ id, name: m.name, type: m.type || modelTypeFromName(m.name), size: blob.size, savedAt: Date.now() }, blob);
+            buf = null; have = null;
             idMap.set(m.id, id);
             modelCount++;
         }

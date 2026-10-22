@@ -78,10 +78,73 @@ async function modelStorePutData(rec, data) {
         await modelStorePut(Object.assign({}, rec, { data: data instanceof Blob ? await data.arrayBuffer() : data }));
     }
 }
-// 保存したモデルの中身を ArrayBuffer で（Blob・ArrayBuffer のどちらで保存されていても）
+// 保存したモデルの中身を ArrayBuffer で（Blob・ArrayBuffer のどちらで保存されていても）。
+// 中身が壊れていて直せなければ null（読み込まずに「モデルが無い」扱いにする）
 async function modelRecordBuffer(rec) {
     if (!rec || !rec.data) return null;
-    return (rec.data instanceof Blob) ? await rec.data.arrayBuffer() : rec.data;
+    if (_modelRecordSuspect(rec)) {
+        rec = await modelRecordRepair(rec);
+        if (!rec) return null;
+    }
+    const buf = (rec.data instanceof Blob) ? await rec.data.arrayBuffer() : rec.data;
+    if (!_modelBufLooksRight(rec, buf)) return null;
+    return buf;
+}
+
+// ── 壊れたモデルの記録を直す ───────────────────────────────────────
+// iPad・iPhone（どのブラウザも中身は Safari と同じ WebKit）では、ZIP のファイルから切り出した Blob（file.slice）を
+// そのまま IndexedDB に入れると、切り出した所ではなく ZIP のファイル全体が保存されることがある。
+// 以前の「ZIPから取り込み」（28-ship-archive.js）はそうして保存していたので、取り込んだモデルがどれも
+// ZIP 全体（例：25隻で 600MB）になり、ZIP の書き出しが「モデルの数 × ZIP 全体」（15GB）に膨らみ、
+// 船を読み込むと ZIP 全体をモデルとして読もうとして落ちていた。
+// 保存した時の大きさ（rec.size）と中身の大きさが違えば、中からそのモデルを取り出し直して（中身の ID で確かめる）
+// 保存し直す。
+function _modelRecordSuspect(rec) {
+    return !!(rec && rec.data instanceof Blob && Number.isFinite(rec.size) && rec.size > 0 && rec.data.size !== rec.size);
+}
+// GLB なら先頭が 'glTF'（違うものをモデルとして読むと、全体を文字として読もうとしてメモリが溢れる）
+function _modelBufLooksRight(rec, buf) {
+    if (!buf || !buf.byteLength) return false;
+    if (rec.type === 'glb') return buf.byteLength >= 12 && new DataView(buf).getUint32(0, true) === 0x46546C67;
+    return true;
+}
+async function modelRecordRepair(rec) {
+    let fixed = null;
+    try {
+        const head = new Uint8Array(await rec.data.slice(0, 4).arrayBuffer());
+        if (head[0] === 0x50 && head[1] === 0x4b && head[2] === 0x03 && head[3] === 0x04 && typeof readZip === 'function') {
+            // ZIP 全体が入っている：同じ大きさで、中身の ID が同じモデルを探す
+            const entries = await readZip(rec.data);
+            for (const [name, ent] of entries) {
+                if (ent.size !== rec.size || !/^models\//.test(name)) continue;
+                const buf = await (await ent.blob()).arrayBuffer();
+                if (await computeModelId(buf) === rec.id) { fixed = buf; break; }
+            }
+        } else {
+            // 中身は合っていて、大きさだけが違って見える場合
+            const buf = await rec.data.slice(0, rec.size).arrayBuffer();
+            if (await computeModelId(buf) === rec.id) fixed = buf;
+        }
+    } catch (e) { fixed = null; }
+    if (!fixed) { console.warn('[ModelStore] モデルの記録が壊れていて直せません:', rec.name); return null; }
+    // ArrayBuffer から作った Blob（ZIP のファイルとつながっていない）で保存し直す
+    const blob = new Blob([fixed], { type: 'application/octet-stream' });
+    const out = Object.assign({}, rec, { data: blob, size: fixed.byteLength });
+    try { await modelStorePutData(Object.assign({}, rec, { size: fixed.byteLength }), blob); console.info('[ModelStore] モデルの記録を直しました:', rec.name); }
+    catch (e) { console.warn('[ModelStore] 直したモデルを保存できませんでした:', e); }
+    return out;
+}
+// 保存してあるモデルを全部調べて、壊れていれば直す（起動してしばらくしてから：gcModelStore）
+async function repairModelStore() {
+    const keys = await modelStoreKeys();
+    let n = 0;
+    for (const k of keys || []) {
+        let rec = null;
+        try { rec = await modelStoreGet(k); } catch (e) { rec = null; }
+        if (_modelRecordSuspect(rec) && await modelRecordRepair(rec)) n++;
+        rec = null;
+    }
+    return n;
 }
 
 // 中身からIDを作る（SHA-256の先頭16バイト）。crypto.subtle が使えない環境
@@ -186,7 +249,9 @@ async function _loadModelByRefInner(ref) {
     if (!rec || !rec.data) return false;
     const statusText = $('import-status');
     if (statusText) statusText.innerText = 'Loading: ' + rec.name + '...';
-    await loadModelFromBuffer(rec.name, rec.type, await modelRecordBuffer(rec));
+    const buf = await modelRecordBuffer(rec);
+    if (!buf) { if (statusText) statusText.innerText = 'モデルの保存が壊れています: ' + rec.name + '（モデルを選び直すか、ZIPから取り込み直してください）'; return false; }
+    await loadModelFromBuffer(rec.name, rec.type, buf);
     window.currentModelSource = { id: rec.id, name: rec.name, type: rec.type, size: rec.size, stored: true };
     renderShipSaveListSafe();
     return true;
@@ -227,6 +292,8 @@ async function gcModelStore() {
         if (_pendingModelRef && _pendingModelRef.id) keep.add(_pendingModelRef.id);
         const keys = await modelStoreKeys();
         for (const k of keys || []) if (!keep.has(k)) await modelStoreDelete(k);
+        // 壊れた記録（iPad で ZIP 全体が入ってしまったもの：modelRecordRepair）を直して、場所を空ける
+        await repairModelStore();
     } catch (e) { /* IndexedDB が使えない環境では何もしない */ }
 }
 

@@ -450,7 +450,14 @@
 //               ・上下の加速度・速さの上限（水が押す力の安全弁）は水から離れるほど外す。以前は大きな船が空中でも 1.2m/s² ほど・
 //                 秒速 4m（波の上下の速さで変わる）までしか落ちなかった → 9.81m/s² で落ちる。上下・縦の揺れの「空気の減衰」は、
 //                 陸や海底に載っている間だけ残す
-var APP_VERSION = '0.03.021.000';
+// 0.03.021.001 iPad：船をモデルごと ZIP にすると 15GB に膨らみ、保存した船を読み込むと落ちる（27-model-store.js・28-ship-archive.js）。
+//               iPad・iPhone（どのブラウザも WebKit）では、ZIP から取り込むときに ZIP のファイルから切り出した Blob をそのまま
+//               保存していたため、モデルの記録にどれも ZIP 全体（25隻で 600MB）が入っていた（25個 × 600MB ＝ 15GB）。
+//               読み込みでは ZIP 全体をモデルとして読もうとして落ちていた。
+//               ・取り込みは、中身を読んで作り直した Blob で保存する（同じモデルが壊れずにあれば保存しない）
+//               ・壊れた記録は、読み込み・書き出し・起動後の片付けのときに、中からそのモデルを取り出し直して（中身の ID で確かめて）
+//                 保存し直す（場所も空く）。直せなければ読み込まずに「モデルの保存が壊れています」と出す（落ちない）
+var APP_VERSION = '0.03.021.001';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
