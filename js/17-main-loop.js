@@ -1348,7 +1348,10 @@ function updateUI() {
                 const ukc = (T && T.depth != null && typeof worldShipDraft === 'function') ? T.depth - worldShipDraft() : 99;
                 const shallow = !(T && T.grounded) && (ukc < 5 || (T && (T._bowWarn || T._sternWarn)));
                 { const c = (T && T.grounded) ? '#ff8a73' : shallow ? '#ffd35a' : '#c9f0ff'; if (_pp._col !== c) { _pp._col = c; _pp.style.color = c; } }
-                _uiTxt(_pp, (T && T.grounded) ? `⚠ 座礁しています${depth}` : shallow ? `⚠ 浅い！${depth}（キール下 ${Math.max(0, ukc).toFixed(1)} m）` : `Port     : ${np ? np.port.name + ' ' + (np.dist / 1852).toFixed(1) + ' NM' : '—'}${depth}`);
+                // 座礁中：機関をかけ続けると、スクリューの水流で船底の下の砂が流れて抜け出せる（44-world-terrain.js の _gcDigUpdate）
+                const ds = (T && T.grounded && typeof groundDigState === 'function') ? groundDigState() : '';
+                const dig = !(T && T.grounded) ? '' : ds === 'working' ? '（水流で船底の砂を流しています）' : ds === 'blocked' ? '（機関では抜け出せません。タグで引き出してください）' : '（機関をかけ続けると砂が流れて抜け出せます）';
+                _uiTxt(_pp, (T && T.grounded) ? `⚠ 座礁しています${depth}${dig}` : shallow ? `⚠ 浅い！${depth}（キール下 ${Math.max(0, ukc).toFixed(1)} m）` : `Port     : ${np ? np.port.name + ' ' + (np.dist / 1852).toFixed(1) + ' NM' : '—'}${depth}`);
             }
         } else {
             // 海だけのモード：出発点からの位置[m]
