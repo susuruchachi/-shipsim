@@ -818,6 +818,7 @@ function animateSmoke(t, dt) {
     ageAttr.needsUpdate = true;
 }
 
+const _apSpinQ = new THREE.Quaternion();
 function animatePropellers(t, dt) {
     // スクリューの回転の速さは、船の速度ではなく機関の回転数から決める
     // （32-engine-propeller.js）。以前は組み込みの推進器だけ「1フレームあたり」で
@@ -853,12 +854,19 @@ function animatePropellers(t, dt) {
 
                 // 回転軸 (basePos + pivotOffset) を中心に回転させる。
                 // モデル自体の原点は basePos のまま変わらない。
-                const angle = part.baseRot[axis] + part.spin;
-                obj.rotation.copy(part.baseRot);
-                obj.rotation[axis] = angle;
+                if (axis === 'auto' && part.spinVec) {
+                    // 形から求めた軸（斜めのシャフトも：07-glb-movable-parts.js の computeGlbPartSpinAxis）。
+                    // 基準の向きのまま、部品の座標の軸 spinVec のまわりに回す
+                    _apSpinQ.setFromAxisAngle(part.spinVec, part.spin);
+                    obj.quaternion.setFromEuler(part.baseRot).multiply(_apSpinQ);
+                } else {
+                    const angle = part.baseRot[axis] + part.spin;
+                    obj.rotation.copy(part.baseRot);
+                    obj.rotation[axis] = angle;
+                }
 
                 const pvBase = pv.clone().applyEuler(part.baseRot); // 基準姿勢でのオフセット
-                const pvRot = pv.clone().applyEuler(obj.rotation);  // 回転後のオフセット
+                const pvRot = pv.clone().applyQuaternion(obj.quaternion);  // 回転後のオフセット
                 obj.position.copy(part.basePos).add(pvBase).sub(pvRot);
 
             } else if (part.key === 'azipod') {

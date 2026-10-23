@@ -121,6 +121,167 @@ function computeGlbPartCentroidOffset(part) {
     return centroidLocal.applyMatrix4(rotScale);
 }
 
+// ── スクリューの回転軸を形から求める（軸が斜めのスクリュー）─────────────────
+// Blender で部品を回さずに、形そのものを傾けて作ったスクリュー（シャフトが下向き・外向きに傾いている船など）は、
+// 部品の X・Y・Z のどの軸で回しても、軸がずれて首を振るように回っていた。
+// 羽根が 3 枚以上で等間隔なら、面の広がり（面積で重みをつけた分散）は羽根の面の中の 2 方向で同じになり、
+// 回転軸の向きだけが違う大きさになる（軸のまわりに回しても形が変わらないので）。その「1 つだけ違う向き」を軸にし、
+// 面積重心（同じ理由で軸の上にある）を軸が通る点にする。決まらないとき（羽根 2 枚など）や、ありえない向きのときは、
+// 推進器の種類から想定される向き（スクリュー：船首尾、外輪・バウスラスター：左右）にいちばん近い向きを選ぶ。
+// 座標は「部品の向き・位置を除き、拡大縮小だけかけた」部品の座標（部品の quaternion がかかる座標）。
+//   戻り値：{ axis（その座標の単位ベクトル）, center（軸が通る点）, tilt（船首尾・左右の軸からの傾き[度]）}
+function _glbEigSym3(A) {
+    // 3×3 対称行列の固有値・固有ベクトル（ヤコビ法）
+    const a = [A[0].slice(), A[1].slice(), A[2].slice()], v = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    for (let sweep = 0; sweep < 32; sweep++) {
+        const off = Math.abs(a[0][1]) + Math.abs(a[0][2]) + Math.abs(a[1][2]);
+        if (off < 1e-14 * (Math.abs(a[0][0]) + Math.abs(a[1][1]) + Math.abs(a[2][2]) + 1e-30)) break;
+        for (const [p, q] of [[0, 1], [0, 2], [1, 2]]) {
+            if (Math.abs(a[p][q]) < 1e-30) continue;
+            const th = (a[q][q] - a[p][p]) / (2 * a[p][q]);
+            const t = Math.sign(th || 1) / (Math.abs(th) + Math.sqrt(th * th + 1)), c = 1 / Math.sqrt(t * t + 1), sn = t * c;
+            for (let k = 0; k < 3; k++) { const akp = a[k][p], akq = a[k][q]; a[k][p] = c * akp - sn * akq; a[k][q] = sn * akp + c * akq; }
+            for (let k = 0; k < 3; k++) { const apk = a[p][k], aqk = a[q][k]; a[p][k] = c * apk - sn * aqk; a[q][k] = sn * apk + c * aqk; }
+            for (let k = 0; k < 3; k++) { const vkp = v[k][p], vkq = v[k][q]; v[k][p] = c * vkp - sn * vkq; v[k][q] = sn * vkp + c * vkq; }
+        }
+    }
+    return [0, 1, 2].map(i => ({ w: a[i][i], v: new THREE.Vector3(v[0][i], v[1][i], v[2][i]).normalize() })).sort((x, y) => x.w - y.w);
+}
+function computeGlbPartSpinAxis(part) {
+    const obj = part.object;
+    if (!obj) return null;
+    obj.updateMatrixWorld(true);
+    const S = new THREE.Matrix4().makeScale(obj.scale.x, obj.scale.y, obj.scale.z);
+    const toF = new THREE.Matrix4().copy(obj.matrixWorld).invert().premultiply(S);
+    const m = new THREE.Matrix4();
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
+    let A = 0;
+    const m1 = new THREE.Vector3();
+    const M2 = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    obj.traverse((o) => {
+        if (!o.isMesh || !o.geometry || !o.geometry.attributes.position) return;
+        const pos = o.geometry.attributes.position, idx = o.geometry.index;
+        m.multiplyMatrices(toF, o.matrixWorld);
+        const n = Math.floor((idx ? idx.count : pos.count) / 3);
+        for (let i = 0; i < n; i++) {
+            a.fromBufferAttribute(pos, idx ? idx.getX(3 * i) : 3 * i).applyMatrix4(m);
+            b.fromBufferAttribute(pos, idx ? idx.getX(3 * i + 1) : 3 * i + 1).applyMatrix4(m);
+            c.fromBufferAttribute(pos, idx ? idx.getX(3 * i + 2) : 3 * i + 2).applyMatrix4(m);
+            const ar = e1.subVectors(b, a).cross(e2.subVectors(c, a)).length() / 2;
+            if (!(ar > 0)) continue;
+            A += ar;
+            m1.x += ar * (a.x + b.x + c.x) / 3; m1.y += ar * (a.y + b.y + c.y) / 3; m1.z += ar * (a.z + b.z + c.z) / 3;
+            // 三角形の上の ∫x xᵀ dA ＝ A/12・(aaᵀ＋bbᵀ＋ccᵀ＋ssᵀ)（s＝a＋b＋c）
+            const sx = a.x + b.x + c.x, sy = a.y + b.y + c.y, sz = a.z + b.z + c.z, k = ar / 12;
+            const P = [[a.x, a.y, a.z], [b.x, b.y, b.z], [c.x, c.y, c.z], [sx, sy, sz]];
+            for (const q of P) for (let r = 0; r < 3; r++) for (let t = r; t < 3; t++) M2[r][t] += k * q[r] * q[t];
+        }
+    });
+    if (!(A > 0)) return null;
+    const center = m1.clone().divideScalar(A);
+    const C = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], cc = [center.x, center.y, center.z];
+    for (let r = 0; r < 3; r++) for (let t = r; t < 3; t++) C[r][t] = C[t][r] = M2[r][t] / A - cc[r] * cc[t];
+    const eg = _glbEigSym3(C);
+    const d01 = eg[1].w - eg[0].w, d12 = eg[2].w - eg[1].w;
+    // 2 つが同じ大きさ（d が小さい方）で、残りの 1 つが軸
+    let axis = (d12 <= d01 ? eg[0].v : eg[2].v).clone();
+    const ambiguous = Math.min(d01, d12) > 0.35 * Math.max(d01, d12, 1e-30);
+    // 想定される向き（部品の座標で）：スクリューは船首尾、外輪・バウスラスターは左右。
+    // 船首尾は、モデル全体（読み込んだモデルのいちばん上の部品）の、水平でいちばん長い向き
+    //（モデルを読み込んだ直後は、船の向きの補正・船体のスキャンがまだなので、船の向きからは決めない）
+    const fr = _glbPartShipFrame(part);
+    const dirF = (d) => d.clone().applyMatrix4(fr.toPartDir).applyMatrix4(S).normalize();
+    const fwd = dirF(fr.fwd), side = dirF(fr.side), up = dirF(fr.up);
+    const want = part.key === 'screw' ? fwd : side;
+    if (ambiguous || Math.abs(axis.dot(want)) < Math.cos(50 * Math.PI / 180)) {
+        let best = null;
+        for (const e of eg) if (!best || Math.abs(e.v.dot(want)) > Math.abs(best.dot(want))) best = e.v;
+        axis = best.clone();
+    }
+    // 部品の軸にほぼ沿っていれば（2° 以内）、その軸ちょうどにする（形の細かな非対称で軸が首を振らないように）
+    for (const u of [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)]) {
+        if (Math.abs(axis.dot(u)) > Math.cos(2 * Math.PI / 180)) { axis = u.multiplyScalar(Math.sign(axis.dot(u))); break; }
+    }
+    // 向き：いちばん大きい成分を ＋ に（X・Y・Z で回していたときと同じ回り方になるように）
+    const big = Math.abs(axis.x) >= Math.abs(axis.y) && Math.abs(axis.x) >= Math.abs(axis.z) ? axis.x : Math.abs(axis.y) >= Math.abs(axis.z) ? axis.y : axis.z;
+    if (big < 0) axis.negate();
+    // 船首尾（外輪・スラスターは左右）の軸からの傾き：上下・左右の角度
+    const s2 = axis.dot(want) < 0 ? -1 : 1, ax2 = axis.clone().multiplyScalar(s2);
+    const other = part.key === 'screw' ? side : fwd;
+    const tilt = { down: Math.round(-Math.asin(Math.max(-1, Math.min(1, ax2.dot(up)))) * 180 / Math.PI * 10) / 10,
+                   yaw: Math.round(Math.asin(Math.max(-1, Math.min(1, ax2.dot(other)))) * 180 / Math.PI * 10) / 10 };
+    return { axis, center, tilt, ambiguous };
+}
+// 船首尾・左右・上の向き（モデル全体のいちばん上の部品の座標）と、それを部品の座標（向きを除いた部品の親の座標
+// → 基準の向きの逆）へ移す行列
+function _glbPartShipFrame(part) {
+    const obj = part.object;
+    let root = obj;
+    while (root.parent && !(typeof importedModelGroup !== 'undefined' && root.parent === importedModelGroup) && root.parent.type !== 'Scene' && !(typeof shipGroup !== 'undefined' && root.parent === shipGroup)) root = root.parent;
+    root.updateMatrixWorld(true);
+    const invRoot = new THREE.Matrix4().copy(root.matrixWorld).invert(), m = new THREE.Matrix4(), box = new THREE.Box3(), bb = new THREE.Box3();
+    root.traverse((o) => {
+        if (!o.isMesh || !o.geometry) return;
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+        bb.copy(o.geometry.boundingBox).applyMatrix4(m.multiplyMatrices(invRoot, o.matrixWorld)); box.union(bb);
+    });
+    const size = box.isEmpty() ? new THREE.Vector3(0, 0, 1) : box.getSize(new THREE.Vector3());
+    const fwd = size.x > size.z ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
+    const up = new THREE.Vector3(0, 1, 0), side = new THREE.Vector3().crossVectors(up, fwd);
+    // モデル全体の座標の向き → 部品の親の座標 → 部品の基準の向きの逆（部品の座標）
+    const parent = obj.parent || root;
+    const toParent = new THREE.Matrix4().copy(parent.matrixWorld).invert().multiply(root.matrixWorld);
+    toParent.setPosition(0, 0, 0);
+    const qInv = new THREE.Quaternion().setFromEuler(part.baseRot || obj.rotation).invert();
+    const toPartDir = new THREE.Matrix4().makeRotationFromQuaternion(qInv).multiply(toParent);
+    return { fwd, side, up, toPartDir };
+}
+// 以前の回し方（オイラー角の 1 成分を変える）で、実際に回っていた軸（部品の座標）。
+// 部品が回してある（向きが付いている）と、成分によっては部品の軸ではなく親の軸のまわりに回っていた
+function _glbPartEulerAxisF(part, key) {
+    const e = (part.baseRot || part.object.rotation).clone(), q1 = new THREE.Quaternion().setFromEuler(e);
+    e[key] += 0.01;
+    const d = new THREE.Quaternion().setFromEuler(e).multiply(q1.clone().invert());
+    const ax = new THREE.Vector3(d.x, d.y, d.z);
+    if (ax.lengthSq() < 1e-14) return new THREE.Vector3(1, 0, 0);
+    const o = part.object;
+    return ax.normalize().applyQuaternion(q1.invert()).multiply(new THREE.Vector3(o.scale.x, o.scale.y, o.scale.z)).normalize();
+}
+// 「自動」の回転軸にする（part.spinVec・回転の中心）。求められなければ X のまま
+function setGlbPartAutoAxis(part) {
+    const r = computeGlbPartSpinAxis(part);
+    if (!r) return false;
+    part.spinAxis = 'auto';
+    part.spinVec = r.axis;
+    part.spinTilt = r.tilt;
+    part.pivotOffset = r.center.clone();
+    part.spin = 0;
+    part.object.position.copy(part.basePos);
+    part.object.rotation.copy(part.baseRot);
+    if (part.pivotMarker) part.pivotMarker.position.copy(part.basePos).add(part.pivotOffset);
+    return true;
+}
+// 保存した設定の回転軸を当てる（13-save-load-config.js からも）。
+// 以前の既定（X）のまま保存した船でも、形から軸がはっきり斜め（3°〜45°）と分かれば、自動の軸に切り替える
+function applyGlbPartSavedSpin(part, saved) {
+    if (!saved.spinAxis) return;
+    if (saved.spinAxis === 'auto') {
+        if (saved.spinVec) {
+            part.spinAxis = 'auto';
+            part.spinVec = new THREE.Vector3(saved.spinVec.x, saved.spinVec.y, saved.spinVec.z).normalize();
+            const r = computeGlbPartSpinAxis(part); part.spinTilt = r ? r.tilt : null;
+        } else setGlbPartAutoAxis(part);
+        return 'auto';
+    }
+    part.spinAxis = saved.spinAxis;
+    if (saved.spinAxis === 'x' && (part.key === 'screw' || part.key === 'paddle' || part.key === 'thruster')) {
+        const r = computeGlbPartSpinAxis(part);
+        const cx = r ? Math.abs(r.axis.dot(_glbPartEulerAxisF(part, 'x'))) : 1;
+        if (r && !r.ambiguous && cx < Math.cos(3 * Math.PI / 180) && cx > Math.cos(45 * Math.PI / 180)) { setGlbPartAutoAxis(part); return 'auto'; }
+    }
+    return saved.spinAxis;
+}
+
 function createGlbPartPivotMarker(part) {
     const group = new THREE.Group();
     group.visible = false;
@@ -178,6 +339,8 @@ function detectGlbMovableParts(model) {
                 // デフォルトの回転軸は、このパーツの形状の中心に置く
                 part.pivotOffset = computeGlbPartCenterOffset(part);
                 part.pivotMarker = createGlbPartPivotMarker(part);
+                // 回る部品（スクリュー・外輪・スラスター）は、形から求めた軸で回す（軸が斜めのスクリューも）
+                if (pat.key === 'screw' || pat.key === 'paddle' || pat.key === 'thruster') setGlbPartAutoAxis(part);
                 glbMovableParts.push(part);
                 break;
             }
@@ -187,14 +350,15 @@ function detectGlbMovableParts(model) {
 
     if (pendingGlbPartTransforms) {
         glbMovableParts.forEach((part) => {
-            const saved = pendingGlbPartTransforms.find(t => t.name === part.name);
+            let saved = pendingGlbPartTransforms.find(t => t.name === part.name);
             if (saved) {
                 // 旧形式 (pos) は無視 — 位置はモデルの初期位置固定
                 if (saved.rot) part.object.rotation.set(saved.rot.x, saved.rot.y, saved.rot.z);
                 if (typeof saved.invert === 'boolean') part.invert = saved.invert;
-                if (saved.spinAxis) part.spinAxis = saved.spinAxis;
                 if (typeof saved.disabled === 'boolean') part.disabled = saved.disabled;
                 if (saved.kind) setGlbPartKindRaw(part, saved.kind);
+                // 自動の軸は、軸が通る点も形から（保存した回転の中心は使わない）
+                if (applyGlbPartSavedSpin(part, saved) === 'auto') saved = Object.assign({}, saved, { pivotOffset: null });
                 if (saved.pivotOffset) {
                     part.pivotOffset.set(saved.pivotOffset.x, saved.pivotOffset.y, saved.pivotOffset.z);
                     if (part.pivotMarker) part.pivotMarker.position.copy(part.basePos).add(part.pivotOffset);
@@ -210,6 +374,7 @@ function detectGlbMovableParts(model) {
 function buildGlbPartCard(part) {
     const pv = part.pivotOffset || new THREE.Vector3();
     const ax = part.spinAxis || 'x';
+    const spinning = part.key === 'screw' || part.key === 'paddle' || part.key === 'thruster';
     const card = document.createElement('div');
     card.className = 'sp-item-card';
     if (part.disabled) card.style.opacity = '0.5';
@@ -234,13 +399,15 @@ function buildGlbPartCard(part) {
             ${part.key !== part.origKey ? '<span style="font-size:10px;color:#ffaa66;">（名前からは ' + (GLB_PROP_KINDS[part.origKey] || part.origKey) + '）</span>' : ''}
         </div>` : ''}
         ${part.disabled ? '<div style="font-size:10px;color:#888;margin-bottom:4px;">このパーツはアニメーション・回転設定から除外されています。誤って選択した場合は「復活」で元に戻せます。</div>' : `
-        <div class="sp-row" style="gap:6px;margin-bottom:4px;">
+        <div class="sp-row" style="gap:6px;margin-bottom:4px;flex-wrap:wrap;">
             <span class="sp-label" style="min-width:50px;">回転軸:</span>
+            ${spinning ? `<label style="font-size:11px;cursor:pointer;" title="形から回転軸を求める（軸が斜めのスクリューも）"><input type="radio" name="axis-${part.id}" value="auto" ${ax==='auto'?'checked':''} onchange="setGlbPartAxis('${part.id}','auto')"> 自動</label>` : ''}
             <label style="font-size:11px;cursor:pointer;"><input type="radio" name="axis-${part.id}" value="x" ${ax==='x'?'checked':''} onchange="setGlbPartAxis('${part.id}','x')"> X</label>
             <label style="font-size:11px;cursor:pointer;"><input type="radio" name="axis-${part.id}" value="y" ${ax==='y'?'checked':''} onchange="setGlbPartAxis('${part.id}','y')"> Y</label>
             <label style="font-size:11px;cursor:pointer;"><input type="radio" name="axis-${part.id}" value="z" ${ax==='z'?'checked':''} onchange="setGlbPartAxis('${part.id}','z')"> Z</label>
             <button class="sp-add-btn" style="flex:none;margin-left:auto;${part.invert?'color:#ff8866;':''}" onclick="toggleGlbPartInvert('${part.id}')">${part.invert?'🔁反転中':'🔁反転'}</button>
         </div>
+        ${ax === 'auto' && part.spinTilt ? `<div style="font-size:10px;color:#88ccff;margin:-2px 0 4px;">形から求めた軸：${(Math.abs(part.spinTilt.down) < 0.05 && Math.abs(part.spinTilt.yaw) < 0.05) ? `${part.key === 'screw' ? '船首尾' : '左右'}の向きにまっすぐ` : `${part.key === 'screw' ? '船首尾' : '左右'}の向きから 上下に ${Math.abs(part.spinTilt.down).toFixed(1)}°・${part.key === 'screw' ? '左右' : '前後'}に ${Math.abs(part.spinTilt.yaw).toFixed(1)}° 傾いています`}</div>` : ''}
         <div class="sp-row" style="justify-content:space-between;margin-bottom:2px;">
             <span style="font-size:10px;color:#666;">回転軸オフセット (軸のみ移動・モデル位置は変わりません)</span>
             <button class="sp-gizmo-btn" id="gizmo-glbpart-pivot-${part.id}" onclick="toggleGizmo('glbpart_pivot','${part.id}')">📍 ギズモ</button>
@@ -345,8 +512,13 @@ function _glbPropKindChanged() {
 function setGlbPartAxis(id, axis) {
     const part = glbMovableParts.find(p => p.id === id);
     if (!part) return;
-    part.spinAxis = axis;
+    // 回っていた分を戻してから（自動の軸から X・Y・Z へ変えたときも、途中の向きが残らないように）
+    part.object.position.copy(part.basePos);
+    part.object.rotation.copy(part.baseRot);
     part.spin = 0;
+    if (axis === 'auto') { setGlbPartAutoAxis(part); renderGlbPartsList(); return; }
+    part.spinAxis = axis;
+    renderGlbPartsList();
 }
 
 function setGlbPartPivot(id, component, value) {
@@ -385,9 +557,10 @@ function resetGlbPart(id) {
     part.object.position.copy(part.basePos);
     part.object.rotation.copy(part.baseRot);
     part.spin = 0;
-    // 回転軸はデフォルト（パーツの形状中心）に戻す
+    // 回転軸はデフォルト（パーツの形状中心。回る部品は形から求めた軸）に戻す
     part.pivotOffset = computeGlbPartCenterOffset(part);
     if (part.pivotMarker) part.pivotMarker.position.copy(part.basePos).add(part.pivotOffset);
+    if (part.key === 'screw' || part.key === 'paddle' || part.key === 'thruster') setGlbPartAutoAxis(part);
     renderGlbPartsList();
 }
 

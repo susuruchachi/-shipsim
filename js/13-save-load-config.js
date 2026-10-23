@@ -126,6 +126,8 @@ function collectShipConfig() {
             rot: { x: p.object.rotation.x, y: p.object.rotation.y, z: p.object.rotation.z },
             invert: !!p.invert,
             spinAxis: p.spinAxis || 'x',
+            // 形から求めた軸（07-glb-movable-parts.js の computeGlbPartSpinAxis）
+            spinVec: p.spinAxis === 'auto' && p.spinVec ? { x: p.spinVec.x, y: p.spinVec.y, z: p.spinVec.z } : undefined,
             disabled: !!p.disabled,
             kind: p.origKey && p.key !== p.origKey ? p.key : undefined,     // 種類を切り替えた部品（07-glb-movable-parts.js）
             pivotOffset: p.pivotOffset ? { x: p.pivotOffset.x, y: p.pivotOffset.y, z: p.pivotOffset.z } : { x:0, y:0, z:0 },
@@ -446,14 +448,16 @@ function applyShipConfig(cfg) {
     if (Array.isArray(cfg.glbPartTransforms) && cfg.glbPartTransforms.length > 0) {
         if (glbMovableParts.length > 0) {
             glbMovableParts.forEach((part) => {
-                const saved = cfg.glbPartTransforms.find(t => t.name === part.name);
+                let saved = cfg.glbPartTransforms.find(t => t.name === part.name);
                 if (saved) {
                     if (saved.pos) part.object.position.set(saved.pos.x, saved.pos.y, saved.pos.z);
                     if (saved.rot) part.object.rotation.set(saved.rot.x, saved.rot.y, saved.rot.z);
                     if (typeof saved.invert === 'boolean') part.invert = saved.invert;
-                    if (saved.spinAxis) part.spinAxis = saved.spinAxis;
                     if (typeof saved.disabled === 'boolean') part.disabled = saved.disabled;
                     if (saved.kind && typeof setGlbPartKindRaw === 'function') setGlbPartKindRaw(part, saved.kind);
+                    // 回転軸（自動の軸は、軸が通る点も形から：07-glb-movable-parts.js）
+                    if (typeof applyGlbPartSavedSpin === 'function') { if (applyGlbPartSavedSpin(part, saved) === 'auto') saved = Object.assign({}, saved, { pivotOffset: null }); }
+                    else if (saved.spinAxis) part.spinAxis = saved.spinAxis;
                     if (saved.pivotOffset) {
                         if (!part.pivotOffset) part.pivotOffset = new THREE.Vector3();
                         part.pivotOffset.set(saved.pivotOffset.x, saved.pivotOffset.y, saved.pivotOffset.z);

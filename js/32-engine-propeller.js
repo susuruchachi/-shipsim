@@ -178,6 +178,8 @@ function _screwPivotInParent(part) {
 function _screwAxisInParent(part) {
     const obj = part.object;
     const key = part.spinAxis || 'x';
+    // 形から求めた軸（07-glb-movable-parts.js）：基準の向きで親の座標へ（軸のまわりに回っても軸は動かない）
+    if (key === 'auto' && part.spinVec) return part.spinVec.clone().applyEuler(part.baseRot || obj.rotation).normalize();
     _discE.copy(obj.rotation);
     _discQ1.setFromEuler(_discE);
     _discE[key] += 0.01;
@@ -192,7 +194,8 @@ function analyzeScrewDisc(part) {
     const obj = part.object;
     if (!obj) return null;
     const pv = part.pivotOffset || new THREE.Vector3();
-    const cacheKey = (part.spinAxis || 'x') + ':' + pv.x.toFixed(4) + ',' + pv.y.toFixed(4) + ',' + pv.z.toFixed(4);
+    const sv = part.spinAxis === 'auto' && part.spinVec ? part.spinVec : null;
+    const cacheKey = (part.spinAxis || 'x') + (sv ? `(${sv.x.toFixed(4)},${sv.y.toFixed(4)},${sv.z.toFixed(4)})` : '') + ':' + pv.x.toFixed(4) + ',' + pv.y.toFixed(4) + ',' + pv.z.toFixed(4);
     if (part._disc && part._disc.key === cacheKey) return part._disc;
 
     const parent = obj.parent;
