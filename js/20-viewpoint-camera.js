@@ -267,7 +267,9 @@ function updateViewpointCamera() {
     const vpMarker = getActiveViewpointMarker();
     if (!vpMarker || !shipGroup || !camera) return;
 
-    shipGroup.updateMatrixWorld(true);
+    // 船そのものの行列だけ（目印の位置は getWorldPosition が親をたどって求める。以前は毎フレーム、
+    // 船の部品すべての行列を強制的に計算し直していた）
+    shipGroup.updateWorldMatrix(false, false);
 
     const worldPos = new THREE.Vector3();
     vpMarker.getWorldPosition(worldPos);

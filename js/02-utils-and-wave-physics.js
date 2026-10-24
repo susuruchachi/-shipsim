@@ -172,6 +172,28 @@ function _currentPinOffsetScaled() {
 
 
 
+// ── 奥行きを少しずらす（重なる面のちらつき・透け対策）──
+//  対数深度バッファ（04-scene-and-water-init.js）で、画素ごとに奥行きを書く材質（WebGL2 の標準の材質）には
+//  polygonOffset が効かない。代わりに、画素の奥行きを「カメラからの距離 × (1 + rel)」の所にする
+//  （rel が負なら手前、正なら奥。−0.0005 なら 100m 先で 5cm 手前）。
+//  画素ごとに書けない環境では polygonOffset のほうが効くので、両方を付けておく
+function depthBiasMaterial(mat, rel) {
+    if (!mat || !rel) return mat;
+    const k = (1 + rel).toFixed(6);
+    const prev = mat.onBeforeCompile, prevKey = mat.customProgramCacheKey;
+    mat.onBeforeCompile = function (sh, r) {
+        if (typeof prev === 'function') prev.call(this, sh, r);
+        sh.fragmentShader = sh.fragmentShader.replace('#include <logdepthbuf_fragment>',
+            '#include <logdepthbuf_fragment>\n#if defined( USE_LOGDEPTHBUF ) && defined( USE_LOGDEPTHBUF_EXT )\n\tgl_FragDepthEXT = vIsPerspective == 0.0 ? gl_FragCoord.z : log2( vFragDepth * ' + k + ' ) * logDepthBufFC * 0.5;\n#endif');
+    };
+    mat.customProgramCacheKey = function () { return (typeof prevKey === 'function' ? prevKey.call(this) : '') + '|depthBias' + k; };
+    mat.polygonOffset = true;
+    mat.polygonOffsetFactor = rel < 0 ? -2 : 2; mat.polygonOffsetUnits = rel < 0 ? -4 : 4;
+    mat.needsUpdate = true;
+    return mat;
+}
+window.depthBiasMaterial = depthBiasMaterial;
+
 function sanitizePhysics() {
     const values = [
         physics.y, physics.vy, physics.speed, physics.targetSpeed,
@@ -198,8 +220,12 @@ function sanitizePhysics() {
         window.lastHistoryTime = 0;
     }
 
-    physics.y = THREE.MathUtils.clamp(physics.y, -80, 80);
-    physics.vy = THREE.MathUtils.clamp(physics.vy, -12, 12);
+    // 潜水艦（54-submarine.js）が潜っている分は、下げてよい
+    // （上下の限界は設けない。数の上の安全のため、いちばん深い海より深くはしない）
+    physics.y = THREE.MathUtils.clamp(physics.y, -11000 - ((window.sub && sub.applied) || 0), 11000);
+    // （船体が水から出て飛んでいる間は、重力どおりに速くなってよい：17-main-loop.js の physics.hullWet）
+    const vyLim = 12 + 48 * (1 - (Number.isFinite(physics.hullWet) ? THREE.MathUtils.clamp(physics.hullWet, 0, 1) : 1));
+    physics.vy = THREE.MathUtils.clamp(physics.vy, -vyLim, vyLim);
     physics.speed = THREE.MathUtils.clamp(physics.speed, -physics.maxSpeed * 0.5, physics.maxSpeed);
     physics.turnRate = THREE.MathUtils.clamp(physics.turnRate, -15, 15);
     physics.rudderAngle = THREE.MathUtils.clamp(physics.rudderAngle, -35, 35);
@@ -212,9 +238,11 @@ function sanitizePhysics() {
     }
 }
 
+const _wakeHRes = { y: 0, foam: 0 };   // 使い回す（呼び出し側は .y をすぐ読むだけ）
 function getWakeHeight(x, z, t) {
     const historyLen = shipHistory.length;
-    if (historyLen < 2) return { y: 0, foam: 0 };
+    _wakeHRes.y = 0; _wakeHRes.foam = 0;
+    if (historyLen < 2) return _wakeHRes;
 
     let wakeY = 0, wakeFoam = 0;
     const scaleRatio = physics.scale / 12.0;
@@ -237,26 +265,44 @@ function getWakeHeight(x, z, t) {
     // 引き波の発生源が船首から後ろにずれて見える原因だった。
     const L = hullHalfLen;
 
-    for (let i = 0; i < historyLen; i++) {
+    const bandFull = Math.sqrt(Math.max(physics.bowFullness, physics.sternFullness)) * pitchWavelenScale * 1.5;
+
+    // 新しい方から見ていき、15秒より古くなったら打ち切る（履歴は古い順に並んでいる）。
+    // 泡の粒子ごとに呼ばれるので、航跡が伸びて履歴がたまるほど重くなっていた
+    for (let i = historyLen - 1; i >= 0; i--) {
         const p = shipHistory[i];
+        const dt = t - p.t;
+        if (dt > 15.0) break;
+        if (dt <= 0) continue;
         const absSpeed = Math.abs(p.speed);
         if (absSpeed < 0.5) continue;
 
-        const dt = t - p.t;
-        if (dt <= 0 || dt > 15.0) continue;
-
         // Quick bounding-box reject before computing per-source trig
         const dxp = x - p.x, dzp = z - p.z;
-        if (dxp * dxp + dzp * dzp > (maxDist + L) * (maxDist + L)) continue;
+        const dp2 = dxp * dxp + dzp * dzp;
+        if (dp2 > (maxDist + L) * (maxDist + L)) continue;
 
-        const sinH = Math.sin(p.headingRad);
-        const cosH = Math.cos(p.headingRad);
+        // 波が立つのは波源からの「波の輪」（半径 waveSpeed·dt、幅 ±1.5波長）の中だけ。
+        // 船首・船尾の波源は中心から±L なので、どちらの輪にも入らなければ寄与なし
+        // （GPU版 wakeContribution と同じ先回りの判定）
+        {
+            const ring = (3.0 + absSpeed * 0.2) * scaleRatio * dt;
+            const band = (5.0 + absSpeed * 0.3) * scaleRatio * bandFull;
+            const dp = Math.sqrt(dp2);
+            if (dp + L < ring - band || dp - L > ring + band) continue;
+        }
+
+        // 履歴1件ごとの向きの sin/cos は変わらないので、1回だけ計算して持っておく
+        if (p._sinH === undefined) { p._sinH = Math.sin(p.headingRad); p._cosH = Math.cos(p.headingRad); }
+        const sinH = p._sinH;
+        const cosH = p._cosH;
 
         // v103/v104: 船体内側マスク（実喫水線輪郭ベース）
+        // 半幅の探索は、船体の前後の範囲内のときだけ行う（範囲外ではマスクは 1）
         const lateralDist = Math.abs(dxp * cosH - dzp * sinH);
         const alongDist = dxp * sinH + dzp * cosH;
         let hullMask = 1.0;
-        if (hullReady) {
+        if (hullReady && Math.abs(alongDist) < hullHalfLen * 1.08) {
             const alongNorm = THREE.MathUtils.clamp(alongDist / Math.max(0.01, hullHalfLen), -1, 1);
             const hullW = _hullHalfWidthAtNorm(alongNorm) * physics.scale;
             const withinHullLen = 1.0 - smoothstepJS(hullHalfLen * 0.98, hullHalfLen * 1.08, Math.abs(alongDist));
@@ -269,22 +315,22 @@ function getWakeHeight(x, z, t) {
             hullMask = THREE.MathUtils.lerp(1.0, lateralMask, withinHullLen);
         }
 
-        const sources = [
-            { x: p.x + sinH * L, z: p.z + cosH * L, isBow: true },
-            { x: p.x - sinH * L, z: p.z - cosH * L, isBow: false }
-        ];
-
+        // 波源は船首(s=0)と船尾(s=1)。以前は毎回 {x,z,isBow} のオブジェクトを
+        // 2つ作っていたが、泡の粒子ごと・履歴ごとに呼ばれるので大量のごみになり、
+        // スマホではガベージコレクションで周期的にカクつく原因になっていた。
         for (let s = 0; s < 2; s++) {
-            const src = sources[s];
-            const dx = x - src.x;
-            const dz = z - src.z;
+            const srcIsBow = (s === 0);
+            const srcX = srcIsBow ? p.x + sinH * L : p.x - sinH * L;
+            const srcZ = srcIsBow ? p.z + cosH * L : p.z - cosH * L;
+            const dx = x - srcX;
+            const dz = z - srcZ;
             const d2 = dx * dx + dz * dz;
 
             if (d2 > maxDist2) continue;
             const d = Math.sqrt(d2);
             if (d < 0.1) continue;
 
-            const fullness = src.isBow ? physics.bowFullness : physics.sternFullness;
+            const fullness = srcIsBow ? physics.bowFullness : physics.sternFullness;
             const waveSpeed = (3.0 + absSpeed * 0.2) * scaleRatio;
             const waveRadius = waveSpeed * dt;
             const distanceToWaveFront = d - waveRadius;
@@ -293,8 +339,9 @@ function getWakeHeight(x, z, t) {
 
             if (absDistToWaveFront < waveLength * 1.5) {
                 // v122: 「今の倍くらい」の要望でv121の値からさらに2倍(0.033→0.066, 0.024→0.048)
-                const ampFactor = src.isBow ? 0.066 : 0.048;
-                const amp = absSpeed * ampFactor * fullness * scaleRatio * (1.0 - d / (90.0 * scaleRatio)) * (1.0 - dt / 15.0);
+                // （GPU 版 04-scene-and-water-init.js の wakeContribution と同じ式：0.03.016.012 で小さく）
+                const ampFactor = srcIsBow ? 0.028 : 0.020;
+                const amp = absSpeed * ampFactor * Math.min(1.4, Math.max(0.45, Math.sqrt(absSpeed / 20.0))) * fullness * scaleRatio * (1.0 - d / (90.0 * scaleRatio)) * (1.0 - dt / 15.0);
                 if (amp <= 0) continue;
 
                 const k = 6.283 / waveLength;
@@ -318,7 +365,7 @@ function getWakeHeight(x, z, t) {
                     // 角度方向の絞り込み(V字稜線)自体は使うが、先端ブースト(bowTipBoost)は
                     // 今回の件と無関係なので復活させていない。
                     let h;
-                    if (src.isBow) {
+                    if (srcIsBow) {
                         const ridge = Math.exp(-absAngleDist * absAngleDist * (60.0 / fullness)) * sideGate;
                         const innerDip = smoothstepJS(0.0, 0.45, angleDist) * (1.0 - smoothstepJS(0.45, 1.1, angleDist)) * sideGate;
                         const bowProfile = ridge - innerDip * 0.35;
@@ -340,7 +387,8 @@ function getWakeHeight(x, z, t) {
             }
         }
     }
-    return { y: wakeY, foam: Math.min(1.0, wakeFoam) };
+    _wakeHRes.y = wakeY; _wakeHRes.foam = Math.min(1.0, wakeFoam);
+    return _wakeHRes;
 }
 
 // GLSLのsmoothstepと同じ定義（THREE.MathUtils.smoothstepは引数順が異なるため専用ヘルパーを用意）
@@ -349,61 +397,123 @@ function smoothstepJS(edge0, edge1, x) {
     return t * t * (3 - 2 * t);
 }
 
-function getWaveCrestAndHeight(x, z, t) {
+// ════════════════════════════════════════════════════════════════
+//  外洋波の位相（4成分）
+// ════════════════════════════════════════════════════════════════
+// 以前は各成分の位相を
+//     p = (原点まわりに風向で回した座標)·k + t·ω
+// で直接計算していた。この式は風向・波長が一定なら問題ないが、
+//   ・風向が変わると、ワールド原点を中心に波の模様全体が回転する。船が原点から
+//     10万m離れていると、0.01rad/sの風向の揺れでも船の位置では1000m/s級の
+//     見かけの移動になる（天候が風向をゆっくり揺らすと、急に波が暴走して見えた）
+//   ・波長（k）が変わっても同様に、原点からの距離に比例して位相が飛ぶ
+// という問題があった。
+//
+// そこで位相を「船の近くの基準点Aからの相対座標 × 波数ベクトルK ＋ 積み上げた
+// 位相φ」で表す。
+//     p_i(X) = K_i·(X − A) + φ_i
+// 毎フレーム φ_i に ω_i·dt を足し、基準点が動いた分は K·ΔA を足して場を保つ。
+// K が変わるときは基準点での位相φをそのまま保つので、船のまわりの波は
+// 滑らかに形を変えるだけで、飛んだり流れたりしない。
+// GPU側（04-scene-and-water-init.js の oceanWaveHC）も同じ K・A・φ を使う。
+const OCEAN_WAVE_OMEGA = [0.38, 0.52, 0.22, -0.95];
+const oceanWaveState = {
+    t: null,                         // φ を計算した時刻
+    ax: 0, az: 0,                    // 基準点A（ワールドXZ）
+    K: new Float32Array(8),          // 各成分の波数ベクトル (Kx,Kz)×4
+    phi: new Float64Array(4),        // 各成分の位相
+};
+window.oceanWaveState = oceanWaveState;
+
+// 波高に応じて波長の下限を引き上げた「実効波長」
+function oceanWaveEffectiveWidth() {
     const h = physics.waveRoughness;
     // ── 波の急峻さ(高さ÷波長)を現実的な範囲に保つ自動カップリング ──────────
     // waveRoughness(波高)とwaveWidth(波長)が完全に独立したスライダーだと、
     // 波高だけを上げて波長を変えないと「鋭く尖った、非現実的に急な」波になる。
     // 実際の海洋波は波高/波長比(波形勾配)に物理的な上限があり(砕波限界は
     // 概ね1/7、一般的な外洋うねりは1/15〜1/30程度)、これを超えると波は崩れる。
-    // ここでは最も急峻な成分(k1, 振幅係数1.82)を基準に、目標勾配
-    // WAVE_STEEPNESS_MAX(≒1/15)を超えないために必要な最低波長(=最低waveWidth)
-    // を波高から逆算し、ユーザー指定のwaveWidthとの大きい方を採用する。
-    // これにより「波を高くするほど自動的に波長も伸びる」物理的に自然な挙動になり、
-    // 短波長×大振幅という不自然な急加速度の原因を取り除く。
-    const WAVE_STEEPNESS_MAX = 1 / 15;
+    // 最も急峻な成分(k1, 振幅係数1.82)を基準に、目標勾配 1/15 を超えないために
+    // 必要な最低波長を波高から逆算し、ユーザー指定のwaveWidthとの大きい方を採用する。
     // 係数導出: steepness1 = 1.82*h*0.018/(2π*w) ≒ 0.005214*h/w
-    //           → w_min = 0.005214*h / WAVE_STEEPNESS_MAX
-    const AUTO_WIDTH_COEFF = 0.005214 / WAVE_STEEPNESS_MAX; // ≒0.0782
-    const autoWidthMin = h * AUTO_WIDTH_COEFF;
-    const w = Math.max(physics.waveWidth, autoWidthMin);
+    //           → w_min = 0.005214*h / (1/15) ≒ 0.0782*h
+    const autoWidthMin = h * 0.0782;
+    return Math.max(physics.waveWidth, autoWidthMin);
+}
 
-    // ── v95: 風向・風速を波形に反映 ──────────────────────────────
-    // ① 向き: k1〜k4の位相計算に使うxz座標を風向(windDir)の分だけ回転させる。
-    //    元の式は(x, z)を固定の軸に対して斜めに組み合わせていただけ（風とは無関係）
-    //    だったが、この座標系ごと回転させることで「うねり・チョップの向き」が
-    //    風向スライダーと連動するようになる。各成分間の相対角（k1とk2が交差する
-    //    見た目の複雑さ等）は保ったまま、全体の向きだけが風について回る。
-    // ② シャープさ: crest(泡・砕波の判定に使う値)だけ、風速に応じて指数
-    //    (crestPow)を上げてピークをより狭く・鋭くする。height側（浮力計算が
-    //    使う実際の波高）は据え置きなので、波の高さ自体はwaveRoughnessスライダーの
-    //    支配のまま保たれ、見た目の「先端の尖り方」だけが強風ほどシャープになる。
+// 今の波長・風向から、4成分の波数ベクトルを求める。
+// （旧式 p = rx·a + rz·b を、風向回転 rx = x·cos − z·sin, rz = x·sin + z·cos を
+//   展開して x, z の係数にまとめたもの。波の見た目は旧式と同じ）
+function _oceanWaveVectors(out) {
+    const w = oceanWaveEffectiveWidth();
     const windRad = (typeof physics.windDir === 'number') ? physics.windDir * Math.PI / 180 : 0;
-    const wCos = Math.cos(windRad), wSin = Math.sin(windRad);
-    const rx = x * wCos - z * wSin;
-    const rz = x * wSin + z * wCos;
+    const c = Math.cos(windRad), sn = Math.sin(windRad);
+    // 成分ごとの (rx係数, rz係数)
+    const k1 = 0.018 / w, k2 = 0.026 / w, k3 = 0.009 / w, k4 = 0.072 / w;
+    const coef = [[k1, k1 * 0.6], [-k2, k2 * 0.8], [0, k3], [k4 * 0.7, k4]];
+    for (let i = 0; i < 4; i++) {
+        const a = coef[i][0], b = coef[i][1];
+        out[i * 2]     = a * c + b * sn;    // x の係数
+        out[i * 2 + 1] = -a * sn + b * c;   // z の係数
+    }
+    return out;
+}
+
+// 毎フレーム1回、天候（波長・風向）の更新の後、波高を使う処理の前に呼ぶ。
+// ax, az: 基準点（船の位置）
+function updateOceanWaveState(t, ax, az) {
+    const S = oceanWaveState;
+    if (S.t === null) {
+        S.t = t; S.ax = ax; S.az = az;
+        _oceanWaveVectors(S.K);
+        for (let i = 0; i < 4; i++) S.phi[i] = 0;
+        return;
+    }
+    const dt = t - S.t;
+    const dax = ax - S.ax, daz = az - S.az;
+    for (let i = 0; i < 4; i++) {
+        // 時間発展と、基準点の移動ぶん（今の K のまま場を保つ）
+        let ph = S.phi[i] + OCEAN_WAVE_OMEGA[i] * dt + S.K[i * 2] * dax + S.K[i * 2 + 1] * daz;
+        // 延々と大きくならないよう 2π で巻き戻す
+        ph -= Math.floor(ph / (Math.PI * 2)) * Math.PI * 2;
+        S.phi[i] = ph;
+    }
+    S.t = t; S.ax = ax; S.az = az;
+    // K は基準点での位相を保ったまま差し替える
+    _oceanWaveVectors(S.K);
+}
+
+function getWaveCrestAndHeight(x, z, t) {
+    const S = oceanWaveState;
+    if (S.t === null) updateOceanWaveState(t, 0, 0);
+    const h = physics.waveRoughness;
+
+    // ── v95: 風速を波形のシャープさに反映 ──────────────────────────
+    // crest(泡・砕波の判定に使う値)だけ、風速に応じて指数(crestPow)を上げて
+    // ピークをより狭く・鋭くする。height側（浮力計算が使う実際の波高）は据え置き。
+    // （風向は波数ベクトルKの向きとして updateOceanWaveState で反映済み）
     const windSpd = (typeof physics.windSpeed === 'number') ? physics.windSpeed : 0;
     const windSharpen = Math.min(1.6, windSpd / 18); // 無風0 〜 強風(30kt程度)で最大1.6
 
-    const k1 = 0.018 / w;
-    const p1 = rx * k1 + rz * (k1 * 0.6) + t * 0.38;
+    // 基準点からの相対座標と、φ を計算した時刻からの経過時間
+    const dx = x - S.ax, dz = z - S.az, dtp = t - S.t;
+    const K = S.K, P = S.phi, W = OCEAN_WAVE_OMEGA;
+
+    const p1 = K[0] * dx + K[1] * dz + P[0] + W[0] * dtp;
     const s1 = Math.sin(p1);
     const s1Max = Math.max(s1, 0);
     const w1 = (s1Max * s1Max) * 2.0 - 0.6;
 
-    const k2 = 0.026 / w;
-    const p2 = -rx * k2 + rz * (k2 * 0.8) + t * 0.52;
+    const p2 = K[2] * dx + K[3] * dz + P[1] + W[1] * dtp;
     const s2 = Math.sin(p2);
     const s2Max = Math.max(s2, 0);
     const w2 = (s2Max * s2Max) * 2.0 - 0.7;
 
-    const k3 = 0.009 / w;
-    const p3 = rz * k3 + t * 0.22;
+    const p3 = K[4] * dx + K[5] * dz + P[2] + W[2] * dtp;
     const s3 = Math.sin(p3);
     const w3 = s3; // 最も波長が長い成分＝「うねり」
 
-    const k4 = 0.072 / w;
-    const p4 = rx * (k4 * 0.7) + rz * k4 - t * 0.95;
+    const p4 = K[6] * dx + K[7] * dz + P[3] + W[3] * dtp;
     const s4 = Math.sin(p4);
     const w4 = s4 * 0.5; // 最も波長が短い成分＝「チョップ」
 
@@ -424,145 +534,102 @@ function getWaveCrestAndHeight(x, z, t) {
 }
 
 
+// 外洋波の高さだけ（getWaveCrestAndHeight から波頭の計算とオブジェクトの生成を
+// 省いた軽い版）。浮力・粒子など、高さしか要らない所から毎フレーム大量に呼ばれる。
+function getOceanHeight(x, z, t) {
+    const S = oceanWaveState;
+    if (S.t === null) updateOceanWaveState(t, 0, 0);
+    const dx = x - S.ax, dz = z - S.az, dtp = t - S.t;
+    const K = S.K, P = S.phi, W = OCEAN_WAVE_OMEGA;
+    const s1 = Math.sin(K[0] * dx + K[1] * dz + P[0] + W[0] * dtp);
+    const s2 = Math.sin(K[2] * dx + K[3] * dz + P[1] + W[1] * dtp);
+    const s3 = Math.sin(K[4] * dx + K[5] * dz + P[2] + W[2] * dtp);
+    const s4 = Math.sin(K[6] * dx + K[7] * dz + P[3] + W[3] * dtp);
+    const m1 = s1 > 0 ? s1 : 0, m2 = s2 > 0 ? s2 : 0;
+    const swellMul = (typeof physics.swellStrength === 'number') ? physics.swellStrength : 1.0;
+    const chopMul  = (typeof physics.chopStrength  === 'number') ? physics.chopStrength  : 1.0;
+    return physics.waveRoughness * (((m1 * m1) * 2.0 - 0.6) * 1.3 + ((m2 * m2) * 2.0 - 0.7) * 0.7
+        + s3 * 0.55 * swellMul + s4 * 0.5 * 0.22 * chopMul);
+}
+
 function getWaveHeight(x, z, t, excludeWake = false) {
-    const oceanWave = getWaveCrestAndHeight(x, z, t).height;
+    const oceanWave = getOceanHeight(x, z, t);
     const wakeWave = excludeWake ? 0 : getWakeHeight(x, z, t).y;
     return oceanWave + wakeWave;
 }
 
-function createWaterNormalMap(scale, repeatOverride) {
-    const size = 512;
+// 水面の細かい波の法線マップ（512×512、繰り返して貼る）。
+//  R・G：波面の傾き（R＝x方向の -dH/dx、G＝z方向の -dH/dz。1軸の二乗平均が 0.25 になるように）
+//  B：波の高さ（二乗平均が 0.25。視差・白波・波頭の明るさに使う）
+// 以前は向き・周波数を自由に選んだ sin を足してから強いコントラスト曲線を通していたため、
+// 値の1割以上が端（傾き最大）に張り付いて、平らな面が角で折れる「うろこ模様」になり、
+// 周波数も整数でないのでマップの継ぎ目で模様が切れていた。
+// 今は「マップ1枚にちょうど整数回入る波」だけを足した高さの場を作り、その高さを差分して
+// 傾きを出す（高さと傾きが食い違わない）。波頭は少し尖らせる（H + skew·H²：実際の波と同じく
+// 山は細く高く、谷は広く浅く）。
+//  seed：乱数の種、kLo〜kHi：マップ1枚に入る波の数（多いほど細かい）、count：足す波の数
+function createWaterNormalMap(seed, kLo, kHi, count, skew) {
+    const N = 512;
+    let s = seed >>> 0;
+    const rnd = () => { s = (Math.imul(s, 1103515245) + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+    // 波の向きはばらばら、波の数は対数で一様。振幅は 1/k（どの細かさの波も傾きの強さは同じくらい）
+    const comps = [];
+    for (let guard = 0; comps.length < count && guard < count * 50; guard++) {
+        const km = kLo * Math.pow(kHi / kLo, rnd());
+        const ang = rnd() * Math.PI * 2;
+        const mx = Math.round(km * Math.cos(ang)), my = Math.round(km * Math.sin(ang));
+        const k = Math.hypot(mx, my);
+        if (k < kLo * 0.85 || k > kHi * 1.15) continue;
+        comps.push({ mx, my, a: (0.55 + 0.45 * rnd()) / k, ph: rnd() * Math.PI * 2 });
+    }
+    // sin(Ax + By + φ) = sin(Ax)cos(By + φ) + cos(Ax)sin(By + φ)：行ごとに掛けて足すだけにする（三角関数を画素ごとに呼ばない）
+    const H = new Float32Array(N * N), sx = new Float32Array(N), cx = new Float32Array(N);
+    for (const c of comps) {
+        for (let x = 0; x < N; x++) { const A = 2 * Math.PI * c.mx * x / N; sx[x] = Math.sin(A) * c.a; cx[x] = Math.cos(A) * c.a; }
+        for (let y = 0; y < N; y++) {
+            const B = 2 * Math.PI * c.my * y / N + c.ph, sb = Math.sin(B), cb = Math.cos(B), row = y * N;
+            for (let x = 0; x < N; x++) H[row + x] += sx[x] * cb + cx[x] * sb;
+        }
+    }
+    const normalize = () => {
+        let m = 0, v = 0;
+        for (let i = 0; i < H.length; i++) m += H[i];
+        m /= H.length;
+        for (let i = 0; i < H.length; i++) { H[i] -= m; v += H[i] * H[i]; }
+        v = Math.sqrt(v / H.length) || 1;
+        for (let i = 0; i < H.length; i++) H[i] /= v;
+    };
+    normalize();
+    const sk = skew || 0;
+    if (sk) { for (let i = 0; i < H.length; i++) H[i] += sk * (H[i] * H[i] - 1); normalize(); }
+    // 傾き（隣の画素との差。端は反対側へ回り込む＝継ぎ目なし）
+    const GX = new Float32Array(N * N), GY = new Float32Array(N * N);
+    let g2 = 0;
+    for (let y = 0; y < N; y++) {
+        const up = ((y + 1) & (N - 1)) * N, dn = ((y + N - 1) & (N - 1)) * N, row = y * N;
+        for (let x = 0; x < N; x++) {
+            const gx = (H[row + ((x + 1) & (N - 1))] - H[row + ((x + N - 1) & (N - 1))]) * 0.5;
+            const gy = (H[up + x] - H[dn + x]) * 0.5;
+            GX[row + x] = gx; GY[row + x] = gy; g2 += gx * gx + gy * gy;
+        }
+    }
+    const gk = 0.25 / (Math.sqrt(g2 / (2 * N * N)) || 1);
     const canvas = document.createElement('canvas');
-    canvas.width = size; canvas.height = size;
+    canvas.width = N; canvas.height = N;
     const ctx = canvas.getContext('2d');
-    const imgData = ctx.createImageData(size, size);
-    const sc = scale || 1.0;
-
-    // v161-v4: 「波の頭をもっとシャープに」「もう少し荒く」の要望に対応。
-    // v161-v3の12オクターブ(単純なsin合成、丸い凹凸)に加え、"リッジ"成分
-    // （1-|sin(p)|で作る、頂点が尖った山）を別の8オクターブで作り、両者を
-    // ブレンドする。sin成分だけだと山も谷もなだらかな丸みを帯びるが、
-    // リッジ成分を混ぜることで頂点がキュッと立った鋭い凹凸になる。
-    // 周波数もv3よりやや低め(粒を大きく)、振幅もやや強めにして「荒さ」を出す。
-    //
-    // v162: 「凹凸の深さ高さが出てる感じがしない」への対応。上のv4時点では
-    // 山と谷の"形"はシャープになったが、法線ベクトルとしての振幅(sx/sy)が
-    // 素のsin合成のままだったため、多数のオクターブを足し合わせる過程で
-    // 振幅同士が打ち消し合い、中間値付近に収束しがちだった（＝法線マップの
-    // 色が全体的に灰色っぽく平坦になり、結果として陰影が弱く見える）。
-    // → 最終合成後にS字カーブ(コントラストカーブ)を通し、0.5(=平ら)付近の
-    //   値を中央へさらに寄せず、逆に0.5から離れた値ほど強調するようにして、
-    //   谷は谷らしく暗く、山は山らしく明るく出るようにする。
-    const CONTRAST_POW = 0.62; // 1.0=無補正、小さいほど中間値が0/1側へ強く引っ張られコントラストが上がる
-    function applyContrast(v) {
-        // vは0..1。0.5を中心にした符号付き距離をpowで強調してから戻す。
-        const d = v - 0.5;
-        const sign = d >= 0 ? 1 : -1;
-        const strong = Math.pow(Math.abs(d) * 2.0, CONTRAST_POW) * 0.5;
-        return 0.5 + sign * strong;
+    const img = ctx.createImageData(N, N), d = img.data;
+    const enc = (v) => Math.round((Math.max(-1, Math.min(1, v)) * 0.5 + 0.5) * 255);
+    for (let i = 0; i < N * N; i++) {
+        // テクスチャは上下反転して載る（v が上向き＝キャンバスの行と逆）ので、z方向の傾きは行方向の差の符号のまま
+        d[i * 4]     = enc(-GX[i] * gk);
+        d[i * 4 + 1] = enc(GY[i] * gk);
+        d[i * 4 + 2] = enc(H[i] * 0.25);
+        d[i * 4 + 3] = 255;
     }
-    let seed = 20250815; // 固定シード：この関数の結果が毎回同じになるようにする
-    function makeRand(seedStart) {
-        let s = seedStart;
-        return function nextRand() {
-            s = (s * 1103515245 + 12345) & 0x7fffffff;
-            return (s % 100000) / 100000;
-        };
-    }
-    function buildOctaves(n, seedStart, freqLo, freqHi, ampLo, ampHi) {
-        const rnd = makeRand(seedStart);
-        const arr = [];
-        for (let i = 0; i < n; i++) {
-            const ang = rnd() * 360;
-            const freq = (freqLo + rnd() * (freqHi - freqLo)) * sc;
-            const amp = ampLo + rnd() * (ampHi - ampLo);
-            const phase = rnd() * 6.283;
-            const rad = ang * Math.PI / 180;
-            arr.push({ dx: Math.cos(rad) * freq, dy: Math.sin(rad) * freq, amp: amp, phase: phase });
-        }
-        return arr;
-    }
-    // ベース成分（なだらかな凹凸のsin合成）と、リッジ成分（尖った山）を別々の
-    // 乱数列で生成する（同じ乱数を使うと2つの成分が同じ場所で重なり方向性が
-    // 揃ってしまうため、シード違いで独立させる）。
-    const baseOctaves  = buildOctaves(12, seed,       0.11, 0.65, 0.10, 0.34);
-    const ridgeOctaves = buildOctaves(8,  seed + 7654, 0.15, 0.80, 0.13, 0.32);
-    const ridgeMix = 0.5; // リッジ成分の混ぜ具合（0=丸い凹凸のみ、1=尖った山のみ）
-
-    // v163: 視差マッピング(Parallax Mapping)用のハイトマップをBチャンネルに追加。
-    // 「水平に近い角度で見ると法線マップだけでは立体感が出ない」という相談への対応。
-    // 法線マップは陰影を偽装するだけで実際の凹凸位置はズレないため、水平視点では
-    // 「本来手前の波が奥を隠すはず」の視差が一切出ず、平坦さがバレやすい。
-    // 視差マッピングはこの高さ情報を使ってUVをずらし、疑似的な視差を作る。
-    //
-    // 高さの合成には既存のbaseOctaves/ridgeOctavesをそのまま再利用する（新しい
-    // 乱数列は増やさない＝計算コストの増加をこのループ内のsin加算1回分に留める）。
-    // ただし既存のnx/ny(XY法線)と同じ位相のままだと相関が強く出すぎ、視差の
-    // ズレる方向がXY法線の陰影と重なりすぎて不自然になるため、定数位相オフセット
-    // (HEIGHT_PHASE_OFFSET)を1つ加えて緩く独立させている（Node.js上で相関係数
-    // 約-0.09、ほぼ無相関であることを検証済み）。
-    // これは物理的に厳密な「法線=高さの勾配」の関係ではないが、視差マッピング
-    // 自体が元々疑似効果なので、視覚的にそれらしい視差が付けば十分という判断。
-    const HEIGHT_PHASE_OFFSET = 1.732;
-
-    for (let y = 0; y < size; y++) {
-        for (let x = 0; x < size; x++) {
-            const idx = (y * size + x) * 4;
-            let sx = 0, sy = 0;
-            for (let i = 0; i < baseOctaves.length; i++) {
-                const o = baseOctaves[i];
-                const p = x * o.dx + y * o.dy;
-                sx += Math.sin(p) * o.amp;
-                sy += Math.sin(p + o.phase) * o.amp;
-            }
-            let rx = 0, ry = 0;
-            let hBase = 0, hRidge = 0;
-            for (let i = 0; i < ridgeOctaves.length; i++) {
-                const o = ridgeOctaves[i];
-                const p = x * o.dx + y * o.dy;
-                const s1 = Math.sin(p);
-                const s2 = Math.sin(p + o.phase);
-                // 1 - |sin| で頂点が尖った山を作り、元のsinの符号を掛けて
-                // 山と谷それぞれの向きを保つ。
-                rx += (1.0 - Math.abs(s1)) * (s1 >= 0 ? 1 : -1) * o.amp;
-                ry += (1.0 - Math.abs(s2)) * (s2 >= 0 ? 1 : -1) * o.amp;
-            }
-            // 高さ専用の合成（baseOctavesはHEIGHT_PHASE_OFFSET付きのsinで、
-            // ridgeOctavesは同じオフセットを使ったリッジ成分で計算）。
-            for (let i = 0; i < baseOctaves.length; i++) {
-                const o = baseOctaves[i];
-                const p = x * o.dx + y * o.dy + HEIGHT_PHASE_OFFSET;
-                hBase += Math.sin(p) * o.amp;
-            }
-            for (let i = 0; i < ridgeOctaves.length; i++) {
-                const o = ridgeOctaves[i];
-                const p = x * o.dx + y * o.dy + HEIGHT_PHASE_OFFSET;
-                const s1 = Math.sin(p);
-                hRidge += (1.0 - Math.abs(s1)) * (s1 >= 0 ? 1 : -1) * o.amp;
-            }
-            const fx = sx * (1.0 - ridgeMix) + rx * ridgeMix;
-            const fy = sy * (1.0 - ridgeMix) + ry * ridgeMix;
-            const fh = hBase * (1.0 - ridgeMix) + hRidge * ridgeMix;
-            const nx = applyContrast(Math.max(0, Math.min(1, fx + 0.5)));
-            const ny = applyContrast(Math.max(0, Math.min(1, fy + 0.5)));
-            const nh = applyContrast(Math.max(0, Math.min(1, fh + 0.5)));
-
-            imgData.data[idx] = Math.floor(Math.max(0, Math.min(1, nx)) * 255);
-            imgData.data[idx + 1] = Math.floor(Math.max(0, Math.min(1, ny)) * 255);
-            imgData.data[idx + 2] = Math.floor(Math.max(0, Math.min(1, nh)) * 255);
-            imgData.data[idx + 3] = 255;
-        }
-    }
-    ctx.putImageData(imgData, 0, 0);
+    ctx.putImageData(img, 0, 0);
     const tex = new THREE.CanvasTexture(canvas);
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
-    // v162: 大波用の第3マップは模様自体の周波数(scale)を下げただけでは足りず、
-    // テクスチャのタイリング回数(repeat)も一緒に下げないと、結局細かく繰り返されて
-    // 「大きなうねり」には見えない。第3引数で個別に指定できるようにする
-    // （未指定時は従来通り88のまま＝wNorm1/wNorm2の挙動は変えない）。
-    const rep = repeatOverride || 88;
-    tex.repeat.set(rep, rep);
     return tex;
 }
 

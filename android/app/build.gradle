@@ -1,0 +1,49 @@
+plugins {
+    id 'com.android.application'
+}
+
+// 署名の鍵（アプリを上書き更新するには、毎回同じ鍵で署名する必要がある）
+def keyProps = new Properties()
+def keyPropsFile = rootProject.file('keystore/keystore.properties')
+if (keyPropsFile.exists()) keyPropsFile.withInputStream { keyProps.load(it) }
+
+android {
+    namespace 'io.github.susuruchachi.shipsim'
+    compileSdk 36
+    buildToolsVersion '36.0.0'
+
+    defaultConfig {
+        applicationId 'io.github.susuruchachi.shipsim'
+        minSdk 24
+        targetSdk 35
+        versionCode 1
+        versionName '1.0'
+    }
+
+    signingConfigs {
+        release {
+            if (keyPropsFile.exists()) {
+                storeFile rootProject.file(keyProps['storeFile'])
+                storePassword keyProps['storePassword']
+                keyAlias keyProps['keyAlias']
+                keyPassword keyProps['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+}

@@ -1,31 +1,59 @@
+let _calUiT = 0;
+// 船が水に触れている度合い（physics.hullWet）：没水の割合（設計喫水で 1）がこれ以上なら「ふつうに浮いている」（1）
+const HULL_WET_FULL = 0.25;
+// 陸・海底に載っている間だけ残す、上下・縦横の揺れの減衰（水の中での減衰に対する割合）
+const AIR_DAMP_FRAC = 0.15;
+// 空中で落ちる速さの上限[m/s]（数の上の安全のためだけ）
+const VY_FREE_MAX = 60;
 function animate() {
     requestAnimationFrame(animate);
-    const dt = Math.min(clock.getDelta(), 0.02);
+    // 描画頻度の上限（33-performance.js）。120Hz 表示の端末などで、必要以上に
+    // 描いて発熱→性能低下するのを防ぐ。描かないフレームは経過時間を消費しない
+    // （clock.getDelta() を呼ばない）ので、次に描くフレームの dt に繰り越される。
+    const _frameNow = performance.now();
+    if (typeof perfShouldRenderFrame === 'function' && !perfShouldRenderFrame(_frameNow)) return;
+    if (typeof perfRecordFrame === 'function') perfRecordFrame(_frameNow);
+    // 1フレームで進める時間の上限。止まった直後・タブを戻した直後に巨大な一歩を踏まないためのもの。
+    // 以前は 0.02 秒（50fps ぶん）で切っていて、それより重い端末（スマホの 30fps など）では、時計も船も
+    // 実際の時間より遅く進んでいた（30fps なら 6 割の速さ：×10 で 6 秒たっても 1 分進まない）。
+    // 0.1 秒（10fps）までは実際の時間どおりに進める。物理はこの中で0.02秒刻みのサブステップに分けて計算する。
+    const dt = Math.min(clock.getDelta(), 0.1);
     if (dt <= 0) return;
     const t = clock.getElapsedTime();
-    // 物理早送り倍率を適用したdt（見た目・時刻はdtのまま、船の動き・加速・揺れだけ早送り）
-    const physicsDt = dt * (typeof physicsSpeed !== 'undefined' ? physicsSpeed : 1.0);
+    // 時間速度（時刻と物理を同じ倍率で：以前の物理早送り倍率は時間速度にまとめた）
+    physicsSpeed = TIME_SPEED_STEPS[timeSpeedIndex] || 1;
+    // 時間速度を適用したdt（船の動き・加速・揺れ・他の船など。見た目の動き（波の模様など）は dt のまま）。
+    // 1フレームで進める物理の時間は 5 秒まで（他の船・タグ・浸水などを 1 回の計算で進める上限。×100 で 20fps を
+    // 下回るときだけ効き、そのときは時計も船も同じだけゆっくりになる）
+    const physicsDt = Math.min(dt * physicsSpeed, 5.0);
 
-    // 時間速度倍率を適用（固定時は進めない、等速(1:1)はsec/secで実時間1日=24h）
+    // 時刻も同じ倍率で進める（固定時は進めない。等速(×1)は実時間1日=24h）
     if (!timeFrozen) {
         // dayDuration=15*60秒でゲーム内1日 → 等速(×1)は実時間86400秒(24h)で1日
         const baseSpeed = physics.dayDuration / 86400; // 通常速度の比率
-        const mult = TIME_SPEED_STEPS[timeSpeedIndex] || 96;
-        physics.gameTime += dt * baseSpeed * mult;
+        physics.gameTime += physicsDt * baseSpeed;
     }
     physics.dayProgress = (physics.gameTime / physics.dayDuration) % 1;
-    if (!physics.moonPhaseManual) {
-        const totalDays = physics.gameTime / physics.dayDuration;
-        physics.moonPhase = (totalDays / 29.5) % 1.0;
-        $('phase-slider').value = physics.moonPhase;
-        $('phase-num').value = physics.moonPhase.toFixed(2);
+    // 月齢は日付と時刻から（16-daynight-and-telegraph.js の暦）。時間が進めば月齢も進む
+    if (typeof calMoonPhase === 'function') {
+        physics.moonPhase = calMoonPhase();
+        if (!(_calUiT > 0)) { _calUiT = 0.5; calSyncUI(false); auroraSyncUI(); }
+        _calUiT -= dt;
     }
+    // v170: 天候を先に進める。ここで physics.windSpeed/waveRoughness 等が
+    // 書き換わり、この後の波・浮力・描画がすべて新しい海況で計算される。
+    // updateDayNightCycle より前に置くのは、天候が決める減光倍率
+    // (window.weatherLightMul) を同じフレームの時刻計算に反映させるため。
+    if (typeof updateWeather === 'function') updateWeather(dt, t);
+    // 外洋波の位相を進める。天候が決めた波長・風向を受けて、波高を使う処理
+    // （浮力・パーティクル・水面描画）より前に1回だけ行う。基準点は船の位置。
+    if (typeof updateOceanWaveState === 'function') updateOceanWaveState(t, physics.cgWorldX, physics.cgWorldZ);
+
     updateDayNightCycle(physics.dayProgress);
     updateSunShadowFollow();               // v83: 太陽シャドウカメラを船へ追従
     if (typeof maybeUpdateEnvironmentMap === 'function') maybeUpdateEnvironmentMap(dt); // v83: 空のIBL環境光を数秒おきに再撮影
     // 引き波波源点のワールド座標を heading+modelOffset.ry で毎フレーム更新
     if (typeof updateHullSlicePositions === 'function') updateHullSlicePositions();
-    updateHullGlowUniforms(); // 船の移動・回転に合わせて内壁グローの位置・反転設定をGPUへ反映
     // エリアライト枠をareaNodeの変換に追随させる
     if (typeof glbLights !== 'undefined') {
         glbLights.forEach(l => {
@@ -36,7 +64,7 @@ function animate() {
     }
 
     if (skyMesh && skyMesh.material.uniforms) {
-        const isNightNow = (physics.dayProgress > 0.75 || physics.dayProgress < 0.25);
+        const isNightNow = Number.isFinite(physics.sunElev) ? physics.sunElev < -0.1 : (physics.dayProgress > 0.75 || physics.dayProgress < 0.25);
         if (t >= nextMeteorTime && isNightNow) {
             skyMesh.material.uniforms.meteorTime.value = t;
             nextMeteorTime = t + 20.0 + Math.random() * 70.0;
@@ -44,12 +72,14 @@ function animate() {
         const totalDays2 = physics.gameTime / physics.dayDuration;
         if (totalDays2 >= nextAuroraDay) {
             auroraActive = Math.min(1.0, auroraActive + dt * 0.04);
+            // （天候の欄のボタンで出したときは、止めるまで続ける）
+            if (window._auroraHold) nextAuroraDay = Math.max(nextAuroraDay, totalDays2 - 0.3);
             if (totalDays2 >= nextAuroraDay + 0.35) {
                 auroraActive = Math.max(0.0, auroraActive - dt * 0.015);
                 if (auroraActive <= 0.0) nextAuroraDay = totalDays2 + 25.0 + Math.random() * 9.0;
             }
         }
-        const sunH2 = Math.sin((physics.dayProgress - 0.25) * Math.PI * 2);
+        const sunH2 = Number.isFinite(physics.sunElev) ? physics.sunElev : Math.sin((physics.dayProgress - 0.25) * Math.PI * 2);
         const nightF2 = Math.max(0.0, -sunH2);
         skyMesh.material.uniforms.auroraStrength.value += (auroraActive * nightF2 - skyMesh.material.uniforms.auroraStrength.value) * 0.05;
     }
@@ -59,11 +89,11 @@ function animate() {
         $('time-slider').value = currentHour;
         $('time-num').value = currentHour.toFixed(1);
     }
-    // time-speed-label を timeFrozen 状態で常時更新
+    // time-speed-label を常時更新
     const tsl = $('time-speed-label');
-    if (tsl && !timeFrozen) {
-        const m = TIME_SPEED_STEPS[timeSpeedIndex];
-        tsl.textContent = m === 1 ? '×1 等速' : '×' + m;
+    if (tsl && typeof timeSpeedLabelText === 'function') {
+        const s = timeSpeedLabelText();
+        if (tsl.textContent !== s) tsl.textContent = s;
     }
 
     const isDesignMode = $('settings-panel').classList.contains('open');
@@ -93,7 +123,7 @@ function animate() {
 
     // ============================================================
     // 物理サブステップ
-    // physicsSpeed(早送り倍率)を上げて1フレームあたりのphysicsDtが大きくなると、
+    // physicsSpeed(時間速度)を上げて1フレームあたりのphysicsDtが大きくなると、
     // 横揺れ/縦揺れ/上下動のばね-ダンパー系や旋回追従の積分が数値的に発散し、
     // 「船が空を飛ぶ」「船の回転軸が暴れ出す」といった破綻を起こしていた。
     // これは「stiffなばね系を粗い時間刻みでオイラー積分する」典型的な数値不安定化。
@@ -107,11 +137,28 @@ function animate() {
 
     let rotY = (physics.heading * Math.PI) / 180;
 
+    // 潜水艦（54-submarine.js）：深さの分だけ下げて描いていた高さを、水上の船としての高さへ戻してから計算する
+    if (typeof subPreStep === 'function') subPreStep();
+    // 海底との当たり（44-world-terrain.js）：刻みごとに、船底・甲板の縁の点が海底より下に入らないように支える
+    const _gcOn = !isDesignMode && typeof groundContactPrepare === 'function' && groundContactPrepare(cgXScaled, waterlineYScaled, cgZScaled);
     for (let _sub = 0; _sub < numSubsteps; _sub++) {
         // --- 舵 ---
         if (!isDesignMode) {
-            if (keys.a || touchLeft) physics.rudderAngle = Math.max(-35.0, physics.rudderAngle - 50 * subDt);
+            if (typeof bridgeWheelActive === 'function' && bridgeWheelActive()) {
+                // 舵輪（37-bridge-controls.js）：舵は舵輪の指示へ舵取機の速さで追いつき、
+                // 手を離してもその角度を保つ
+                const target = THREE.MathUtils.clamp(physics.helmOrder || 0, -35, 35);
+                const step = bridgeHelmRate() * subDt;
+                const d = target - physics.rudderAngle;
+                physics.rudderAngle += Math.abs(d) <= step ? d : Math.sign(d) * step;
+            }
+            else if (keys.a || touchLeft) physics.rudderAngle = Math.max(-35.0, physics.rudderAngle - 50 * subDt);
             else if (keys.d || touchRight) physics.rudderAngle = Math.min(35.0, physics.rudderAngle + 50 * subDt);
+            else if (window.autopilot && (autopilot.active || autopilot.selfDepart || autopilot.chase) && Number.isFinite(physics.autoRudder)) {
+                // 自動航行（49-autopilot.js）：ボタン操作の船でも、指示の舵角へ舵取機の速さで
+                const d = physics.autoRudder - physics.rudderAngle, step = 8 * subDt;
+                physics.rudderAngle += Math.abs(d) <= step ? d : Math.sign(d) * step;
+            }
             else physics.rudderAngle += (0.0 - physics.rudderAngle) * 6 * subDt;
         } else {
             physics.rudderAngle += (0.0 - physics.rudderAngle) * 6 * subDt;
@@ -120,28 +167,59 @@ function animate() {
         // --- 速度（テレグラフ追従） ---
         const maxSpd = physics.maxSpeed;
         const speeds = { '-3': -maxSpd * 0.5, '-2': -maxSpd * 0.3, '-1': -maxSpd * 0.15, '0': 0.0, '1': maxSpd * 0.3, '2': maxSpd * 0.6, '3': maxSpd };
-        physics.targetSpeed = isDesignMode ? 0.0 : speeds[physics.telegraphState];
+        // 機関は機関室が応答してから指令どおりに動かす（37-bridge-controls.js の telegraphAnswer）
+        const _tgOrder = Number.isFinite(physics.telegraphAnswer) ? physics.telegraphAnswer : physics.telegraphState;
+        // 他の船と並走するとき（49-autopilot.js）は、テレグラフの段ではなく、機関の回転数（連続）で速さを合わせる
+        physics.targetSpeed = isDesignMode ? 0.0 : Number.isFinite(physics.apRpm) ? physics.apRpm * maxSpd : speeds[_tgOrder];
+        // スクリューの回転数は、機関指令（テレグラフ）を目標に加減速する
+        // （32-engine-propeller.js）。推力もこの回転数で決まるので、後進を
+        // かけると先にスクリューが逆転し、その力で船が止まってから後ろへ進む。
+        if (typeof updatePropRpm === 'function') updatePropRpm(subDt, isDesignMode);
+        // スクリューは水の中にある分しか効かない（32-engine-propeller.js：波で船尾が浮く・浸水で船首が沈み船尾が上がるなど）。
+        // 水から出たスクリューは推力が出ないので、機関を止めたときと同じように水の抵抗で遅くなる
+        physics.propImmersion = (typeof propImmersion === 'function' && !isDesignMode) ? propImmersion(t) : 1;
+        const propTargetSpeed = ((typeof getPropThrustTargetSpeed === 'function')
+            ? getPropThrustTargetSpeed() : physics.targetSpeed) * physics.propImmersion;
         // 推進器の加速度（船首尾軸に沿った推力）。この後の heave 計算で、
         // 船体ピッチ角だけ傾けて鉛直成分も加えるために保持しておく。
-        const thrustAccMag = (physics.targetSpeed - physics.speed) * (0.3 / physics.mass);
+        // 機関の馬力（56-engines.js）が見積もりより大きければ加速も速い
+        const _kThrust = (0.3 / physics.mass) * ((typeof enginePowerFactor === 'function') ? enginePowerFactor() : 1);
+        // 船体が水から出ている間は、推力も水の抵抗も無い（飛んでいる間は前後の速さを保つ。physics.hullWet：前の刻みの、水に触れている度合い）
+        const _wetPrev = isDesignMode ? 1 : (Number.isFinite(physics.hullWet) ? physics.hullWet : 1);
+        const thrustAccMag = (propTargetSpeed - physics.speed) * _kThrust * _wetPrev;
         physics.speed += thrustAccMag * subDt;
+        // スクリューそのものの推力（抵抗を引く前）：k×目標の速さ。走り続けている間（速さ＝目標）も推力は出ている。
+        // 推力はスクリューの軸（船首尾の向き）に沿って押すので、波で船首が上がれば上向きにも押す（下の上下の計算）
+        const thrustGrossAcc = propTargetSpeed * _kThrust * 0.514444;
         physics.speed = THREE.MathUtils.clamp(physics.speed, -maxSpd * 0.5, maxSpd);
+        // 海底に乗り上げているときの摩擦（44-world-terrain.js の groundContactStep が、底に載った重さから決める）。
+        // 進む前にかける：推力が摩擦に勝たなければ動かない（後でかけると、刻みごとに推力のぶんだけ這い上がっていた）
+        if (physics.groundFriction > 0) {
+            const dvF = physics.groundFriction * subDt / 0.514444;
+            physics.speed = Math.abs(physics.speed) <= dvF ? 0 : physics.speed - Math.sign(physics.speed) * dvF;
+        }
+        // 離岸のスプリング（49-autopilot.js）：綱で留めているので、機関を回しても前後には進まない
+        if (!isDesignMode && window.autopilot && autopilot.selfDepart && autopilot.selfDepart.spring) physics.speed = 0;
 
         // --- 旋回・船首方位 ---
         const LReal = 12.0 * physics.scale;
         const R = LReal * physics.turningRadiusFactor;
-        const speedMps = physics.speed * 0.514;
+        const speedMps = physics.speed * 0.514444;
         const maxRudder = 35.0;
 
         const rudderLeverArm = Math.abs(physics.rudderOffset.z * physics.scale - physics.cgOffset.z * physics.scale);
         const rudderEffectiveness = 1.0 + rudderLeverArm * 0.02;
         const targetTurnRateRad = -(speedMps / R) * (physics.rudderAngle / maxRudder);
-        const targetTurnRateDeg = targetTurnRateRad * (180.0 / Math.PI);
+        // アジポッドを個別・ジョイスティックで動かしているときは舵が無い（58-maneuvering.js）
+        const targetTurnRateDeg = targetTurnRateRad * (180.0 / Math.PI) * ((typeof maneuverRudderFactor === 'function') ? maneuverRudderFactor() : 1);
 
         if (isDesignMode) {
             physics.turnRate += (0.0 - physics.turnRate) * 3.0 * subDt;
         } else {
-            physics.turnRate += (targetTurnRateDeg * rudderEffectiveness - physics.turnRate) * 3.0 * subDt;
+            // 左右の機関の推力の差でも回る（56-engines.js：左舷前進・右舷後進でその場で右へ回る）
+            const _twist = ((typeof engineTwistDeg === 'function') ? engineTwistDeg() : 0) * (physics.propImmersion ?? 1);
+            // 舵も、船体の回る向きを変える水の力も、水に触れている分だけ（空中では回る勢いをそのまま保つ）
+            physics.turnRate += (targetTurnRateDeg * rudderEffectiveness + _twist - physics.turnRate) * 3.0 * subDt * _wetPrev;
             physics.heading += physics.turnRate * subDt;
         }
 
@@ -150,8 +228,10 @@ function animate() {
         // 水平方向の進出量は cos(pitch) 分だけ減る（ピッチが付くほど、推力の一部が
         // 鉛直成分に回される）。鉛直成分は下のheave計算で thrustAccMag から加える。
         const cosPitchFwd = Math.cos(physics.pitch);
-        const dx = isDesignMode ? 0 : Math.sin(rotY) * cosPitchFwd * physics.speed * subDt;
-        const dz = isDesignMode ? 0 : Math.cos(rotY) * cosPitchFwd * physics.speed * subDt;
+        // 速さ（physics.speed）はノット。進む距離は m/s（×0.514444）で（以前は値をそのまま m/s として進めていて、
+        // 表示の 2 倍ほどの速さで進んでいた：表示 20 ノットで実は 39 ノット。他の船・タグ・旋回はノットで計算していた）
+        const dx = isDesignMode ? 0 : Math.sin(rotY) * cosPitchFwd * speedMps * subDt;
+        const dz = isDesignMode ? 0 : Math.cos(rotY) * cosPitchFwd * speedMps * subDt;
         physics.cgWorldX += dx; physics.cgWorldZ += dz;
 
         // ── 喫水線基準の目標Y計算 ──────────────────────────────────
@@ -193,6 +273,7 @@ function animate() {
             physics.vy = 0; physics.vPitch = 0; physics.vRoll = 0;
             physics.pitch = 0; physics.roll = 0;
             physics.y = _targetYBase;
+            physics.hullWet = 1;
         } else {
             // ════════════════════════════════════════════════════════════
             //  完全物理浮力計算（アルキメデスの原理）── heave + pitch
@@ -205,7 +286,8 @@ function animate() {
             //  buoyancyスライダーは、この実物理量に対する倍率（既定1.0=純物理）として残す。
             const RHO_WATER = 1025;          // kg/m³（海水密度）
             const G_REAL    = 9.81;          // m/s²
-            const massKg    = physics.mass * 1e6; // 「千トン」単位 → kg（千トン×1000=トン、×1000=kg）
+            // 「千トン」単位 → kg（千トン×1000=トン、×1000=kg）。浸水した水の重さも（63-flooding.js）
+            const massKg    = physics.mass * 1e6 + ((typeof flood !== 'undefined' && flood.massKg) || 0);
             const buoyMult  = physics.buoyancy / (physics.buoyancyBase || 12.0); // スライダー倍率（既定1.0）
 
             // ── 質量に応じた応答減衰係数（ヒーブ応答・スラミング減速など複数箇所で共用）──
@@ -216,10 +298,19 @@ function animate() {
             const MASS_REF = 1.5;
             const massFactor = THREE.MathUtils.clamp(Math.sqrt(MASS_REF / physics.mass), 0.12, 1.0);
 
-            const _buoy = computeHullBuoyancyPhysics(
-                physics.cgWorldX, physics.cgWorldZ, rotY, physics.pitch,
-                physics.y, waterlineYScaled, physScale, len, t, cgZScaled
-            );
+            // v165-fix: このファイル(17)はindex.htmlで18-hull-wake-physics.jsより
+            // 先に読み込まれ、末尾で即座にanimate()を開始する。そのため最初の
+            // 数フレームは computeHullBuoyancyPhysics がまだ未定義で、ここが
+            // ReferenceErrorを投げ、animate()の残り（船体姿勢の更新やレンダリング
+            // 呼び出しを含む）がまるごと飛ばされていた。下の `_buoy ? ... : 既定値`
+            // というフォールバックが元々あるので、未定義のうちはnullを入れて
+            // そのフォールバックに乗せればよい。
+            const _buoy = (typeof computeHullBuoyancyPhysics === 'function')
+                ? computeHullBuoyancyPhysics(
+                    physics.cgWorldX, physics.cgWorldZ, rotY, physics.pitch,
+                    physics.y, waterlineYScaled, physScale, len, t, cgZScaled
+                  )
+                : null;
             const volSubmerged   = _buoy ? Math.max(0, _buoy.volSubmerged) : 0;
             const AwpReal        = _buoy ? Math.max(0.05, _buoy.Awp) : 1.0;
             const momentVolAboutCG = _buoy ? _buoy.momentVolAboutCG : 0;
@@ -228,6 +319,13 @@ function animate() {
             // 力そのものはvolSubmerged/momentVolAboutCGがゼロから連続的に立ち上がるので
             // 人為的なon/off処理は不要）。
             const submergedFrac = _buoy ? _buoy.submergedFrac : 0;
+            // 船が水に触れている度合い（0＝船体がまるごと水面より上、1＝ふつうに浮いている）。
+            // 水から受ける力（波に合わせた横揺れ・舵・水の抵抗）はこれで弱め、完全に空中の間は重力だけで飛ぶ
+            //（以前は空中でも、横揺れは下の波の傾きへ引かれ、落ちる速さも波の上下の速さで決まる上限に抑えられていた）
+            const hullWet = _buoy ? THREE.MathUtils.clamp(submergedFrac / HULL_WET_FULL, 0, 1) : 1;
+            physics.hullWet = hullWet;
+            // 空中の減衰は、海底・陸に載っている間だけ（底とこすれる代わり）。ただ飛んでいる間は空気の抵抗くらいしかない
+            const airDamp = (physics.groundLift || 0) > 0.02 ? AIR_DAMP_FRAC : 0;
 
             // ════════════════════════════════════════════════════════════
             //  船首補正（Stage 1）── 波切りリフト・船首抵抗・スラミング
@@ -263,8 +361,27 @@ function animate() {
             //   直接キャップする。これにより船のサイズ・速度域によらず一貫して
             //   「大波でもある程度は減速するが、指示速度の大部分は維持できる」
             //   という挙動になる。
-            const maxBowDragLossFrac = 0.25; // 波の抵抗だけで指示速度の最大25%までしか奪わない（0.4→0.25、まだ強すぎるとのフィードバックのため再調整）
+            // 上限は一律25%ではなく、海況（有義波高÷船長）で決める
+            // （21-bow-stern-effects.js の bowDragLossCap）。中程度の海ではほぼ
+            // 減速せず、時化で2割前後。長い船ほど同じ波でも減速しにくい。
+            const _hsNow = (typeof estimateSignificantWaveHeight === 'function')
+                ? estimateSignificantWaveHeight(physics.cgWorldX, physics.cgWorldZ, t) : 0;
+            window._seaHs = _hsNow;
+            const maxBowDragLossFrac = (typeof bowDragLossCap === 'function')
+                ? bowDragLossCap(_hsNow, 12.0 * physics.scale) : 0.25;
             const thrustAuthority = 0.3 / Math.max(0.05, physics.mass);
+            // スラミングによる減速（船首・船尾共通、SLAM_SPEED_LOSS_INTERVAL 秒に1回まで）。
+            // 1回の減速量は、強いスラミングが続いてもつり合いの速度低下が
+            // SLAM_SPEED_LOSS_EQ 程度に収まるよう、推進の立ち上がりの速さから決める。
+            const applySlamSpeedLoss = (slamRatio) => {
+                const lastT = (typeof window._lastSlamSpeedLossT === 'number') ? window._lastSlamSpeedLossT : -1e9;
+                if (t - lastT < SLAM_SPEED_LOSS_INTERVAL) return;
+                window._lastSlamSpeedLossT = t;
+                // 衝撃の強さ（判定しきい値の何倍か）で 0.3〜1 に
+                const severity = THREE.MathUtils.clamp((slamRatio - SLAM_RATIO_THRESHOLD) / SLAM_RATIO_THRESHOLD, 0.3, 1.0);
+                const lossFrac = Math.min(0.05, SLAM_SPEED_LOSS_EQ * SLAM_SPEED_LOSS_INTERVAL * thrustAuthority * severity);
+                physics.speed *= (1 - lossFrac);
+            };
             const MAX_BOW_DRAG_ACCEL = Math.abs(physics.targetSpeed) * maxBowDragLossFrac * thrustAuthority;
             const bowDragAcc = _bowF ? Math.min(_bowF.dragForce / massKg, MAX_BOW_DRAG_ACCEL) : 0;
             window._bowExcessVol = _bowF ? _bowF.bowExcess : 0; // Stage4のグリーンウォーター判定用に公開
@@ -272,17 +389,10 @@ function animate() {
             window._bowSlamRatioLive = _bowF ? (_bowF.slamRatio || 0) : 0; // 連続値(イベント発火の有無に関わらず毎フレーム更新)
 
             if (_bowF && _bowF.slammed) {
-                // スラミング発生: 瞬間的な減速（水柱・衝撃音等の演出はStage 4以降で追加）
-                // 【修正】以前はSLAM_SPEED_DAMP(0.985)を船の規模によらず一律で掛けていたため、
-                // 大型船でも小型艇と全く同じ割合(1.5%)だけ速度がガクッと落ちてしまっていた。
-                // 大型船ほど運動量(慣性)が大きく、波を1発浴びただけで急減速はしないはず
-                // （力積Δp=一定なら、Δv=Δp/massで質量が大きいほど速度変化は小さい）。
-                // 上のmassFactor（ヒーブ応答減衰と共用、sqrt(MASS_REF/mass)で大型船ほど
-                // 小さくなる係数）を「速度損失分」にだけ掛けることで、基準船型
-                // (MASS_REF=1.5≒1500トン級)では従来通りの減速感を保ちつつ、大型船ほど
-                // スラミング1回あたりの速度低下がなだらかになるようにする。
-                const slamLossFrac = (1 - SLAM_SPEED_DAMP) * massFactor;
-                physics.speed *= (1 - slamLossFrac);
+                // スラミング発生: 瞬間的な減速。大きさと頻度の決め方は
+                // 21-bow-stern-effects.js の SLAM_SPEED_LOSS_* の説明を参照
+                // （判定自体は演出用に細かく出るが、減速は数秒に1回まで）。
+                applySlamSpeedLoss(_bowF.slamRatio);
                 window._bowSlamEvent = { t, impactRate: _bowF.impactRate, slamRatio: _bowF.slamRatio };
                 // デバッグ用: ポーポイズ(連続スラミング)が起きていないか件数で確認できるようにする
                 window._bowSlamCount = (window._bowSlamCount || 0) + 1;
@@ -309,42 +419,24 @@ function animate() {
                 physics.speed -= thrustLossAcc * subDt;
 
                 if (_sternF.slammed) {
-                    // Bow Slammingと同じ考え方（massFactorで大型船ほど減衰を弱める）を流用
-                    const sternSlamLossFrac = (1 - SLAM_SPEED_DAMP) * massFactor;
-                    physics.speed *= (1 - sternSlamLossFrac);
+                    applySlamSpeedLoss(_sternF.slamRatio);   // 船首と共通の間隔制限
                     window._sternSlamEvent = { t, impactRate: _sternF.impactRate, slamRatio: _sternF.slamRatio };
                 }
                 // レーシング強度(0=通常, 1=完全空転)。Stage6のRPM上昇・振動演出用に公開。
                 window._propRacingIntensity = _sternF.racingIntensity;
             }
 
-            // ── デバッグHUD（Stage4調整用）: bowExcess/greenWaterRatio/slamRatioを画面表示 ──
-            // 「感覚的に弱い/強い」だけだと係数調整が勘頼りになるため、実測値を
-            // 画面の隅に出しておく。不要になったら _updateBowSternDebugHud ごと
-            // 削除するか、下の if を false にすれば非表示にできる。
-            if (typeof _updateBowSternDebugHud === 'function') {
-                const _slamRatioNow = window._bowSlamRatioLive || 0;
-                const _slamRatioPeak3s = (typeof _trackBowSlamRatioPeak === 'function')
-                    ? _trackBowSlamRatioPeak(_slamRatioNow, t) : _slamRatioNow;
-                _updateBowSternDebugHud({
-                    volBow: (_bowF && _bowF.volBow) || 0,
-                    bowVolBaseline: (_bowF && _bowF.volBowDesign) || 0,
-                    bowExcessVol: window._bowExcessVol || 0,
-                    rawBowExcessVol: (_bowF && _bowF.rawBowExcess) || 0,
-                    bowExcessBaseline: window._bowExcessBaselineVol || 0,
-                    bowSlamRatio: _slamRatioNow,
-                    bowSlamRatioPeak3s: _slamRatioPeak3s,
-                    speed: physics.speed,
-                    targetSpeed: physics.targetSpeed,
-                    slamCount: window._bowSlamCount || 0,
-                });
-            }
-
             // ════════════════════════════════════════════════════════════
             //  船中央（Stage 3）── ホギング/サギングの視覚的な船体曲げ
             //  剛体物理には影響させず、hogSagUniforms経由でシェーダーにのみ反映する。
             // ════════════════════════════════════════════════════════════
-            if (HOGSAG_ENABLED && typeof computeHogSagAmount === 'function') {
+            // v165-fix: HOGSAG_ENABLED は 21-bow-stern-effects.js のトップレベル
+            // const で、index.html上ではこのファイル(17)より後に読み込まれる。
+            // 17は末尾でanimate()を即開始するため、最初の数フレームはこの参照が
+            // ReferenceErrorになり、animate()の残り（レンダリング呼び出しを含む）が
+            // まるごと飛んでいた。08-model-loading-and-lighting.js:1732 の同じ参照は
+            // 既に typeof ガードを付けてあるので、ここも同じ形に揃える。
+            if (typeof HOGSAG_ENABLED !== 'undefined' && HOGSAG_ENABLED && typeof computeHogSagAmount === 'function') {
                 const hogSagWorld = computeHogSagAmount(physics.cgWorldX, physics.cgWorldZ, rotY, physScale, len, t, subDt);
                 if (typeof hogSagUniforms !== 'undefined' && hogSagUniforms) {
                     hogSagUniforms.amount.value = hogSagWorld / physScale; // world→船体ローカル単位
@@ -366,14 +458,13 @@ function animate() {
             const K_heaveReal = RHO_WATER * G_REAL * AwpReal * buoyMult;
             const zetaHeave   = 0.35; // 実船のヒーブ減衰比の目安(0.2〜0.4)
             const C_heave     = 2.0 * zetaHeave * Math.sqrt(Math.max(1, K_heaveReal * massKg));
-            // 完全空中(submergedFrac=0)のときも最低限の減衰(空気抵抗相当)は残す。
-            // ゼロにすると「波を跳ね飛んでバウンドし続ける」現象が収束しなくなる。
-            const AIR_DAMP_FRAC = 0.15;
-            const C_heaveEff = C_heave * Math.max(AIR_DAMP_FRAC, submergedFrac);
+            // 水に浸かっている分だけ効かせる（空中では、底に載っているときだけ少し残す：airDamp）
+            const C_heaveEff = C_heave * Math.max(airDamp, submergedFrac);
 
             // ── 推進器の鉛直成分：船首尾軸（ピッチ込み）に沿って推力が働くため、
             //   船がピッチしているときは推力の一部が鉛直方向にも加わる。
-            const thrustVertAcc = thrustAccMag * -Math.sin(physics.pitch);
+            //（以前は推力から抵抗を引いた残り（加速している分）だけを傾けていたので、一定の速さで走っている間は 0 だった）
+            const thrustVertAcc = thrustGrossAcc * -Math.sin(physics.pitch);
 
             // ── 質量に応じた応答減衰係数 ──────────────────────────────────
             // 以下のWAVE_FOLLOW_GAIN・maxHeaveAcc・vyMaxはこれまで船の質量と無関係な
@@ -396,17 +487,22 @@ function animate() {
             // 出せるが、大型船ほど慣性で抑えられ、現実の大型客船の上下動速度の目安
             // (おおむね1m/s前後)に近づくようにする。
             const vyMaxBase = THREE.MathUtils.clamp(Math.sqrt(physScale) * 5.0 * massFactor, 0.4, 9.0);
-            const vyMax = Math.max(vyMaxBase, Math.abs(waveSurfaceVel) * 1.3 * Math.max(massFactor, 0.3));
+            // （これらの上限は水が船を押す力の安全弁なので、水から離れるほど外す：空中では重力どおりに落ちる。
+            //   以前は空中でも効いていて、大きな船は重力の半分ほどの加速度・波の上下の速さで決まる速さでしか落ちなかった）
+            const vyMax = THREE.MathUtils.lerp(VY_FREE_MAX,
+                Math.max(vyMaxBase, Math.abs(waveSurfaceVel) * 1.3 * Math.max(massFactor, 0.3)), hullWet);
+            const accDownMax = THREE.MathUtils.lerp(Math.max(maxHeaveAcc, G_REAL), maxHeaveAcc, hullWet);
 
             const accY = THREE.MathUtils.clamp(
                 (F_netHeave - physics.vy * C_heaveEff) / massKg
                     + thrustVertAcc + waveFollowAcc,
-                -maxHeaveAcc, maxHeaveAcc
+                -accDownMax, maxHeaveAcc
             );
             physics.vy += accY * subDt;
             physics.vy = THREE.MathUtils.clamp(physics.vy, -vyMax, vyMax);
             physics.y += physics.vy * subDt;
-            physics.y = THREE.MathUtils.clamp(physics.y, -80, 80);
+            // （上下の限界は設けない：沈むときは海底まで。数の上の安全のため、いちばん深い海より深くはしない）
+            physics.y = THREE.MathUtils.clamp(physics.y, -11000, 11000);
 
             // ── ピッチ：本物の浮力モーメント M = ρ・g・Σ(ΔV・腕の長さ) ───────────
             //   重力は重心位置に作用するため、自重そのものはピッチモーメントに
@@ -422,7 +518,11 @@ function animate() {
             // （実際に数値シミュレーションで確認: pitch+0.05でmomentVolAboutCGも+に
             //   なり、そのままだとpitchをさらに増やす方向に力がかかってしまう）。
             // 復元モーメントになるよう符号を反転する。
-            const torqueBuoyPitch = -RHO_WATER * G_REAL * momentVolAboutCG * buoyMult; // N・m
+            // 浸水した水の重さのモーメント（船首寄りの水は船首を下げる：63-flooding.js）も
+            // （沈みきって海底で横たわっていく間は、縦のモーメントで起こし直さない：44-world-terrain.js の flood.settle）
+            // （空中では、中の水も船といっしょに落ちるので傾けない）
+            const torqueBuoyPitch = (typeof flood !== 'undefined' && flood.settle) ? 0 : -RHO_WATER * G_REAL * momentVolAboutCG * buoyMult
+                + ((typeof flood !== 'undefined' && flood.torqueP) || 0) * hullWet; // N・m
 
             const k_gyro_pitch = len * 0.25; // 慣性半径（質量分布の代理指標）
             const h_pend = (physics.waterlineOffsetY - physics.cgOffset.y) * physScale;
@@ -433,9 +533,8 @@ function animate() {
             const K_pitchReal = RHO_WATER * G_REAL * IwpLong * buoyMult;
             const zetaPitch   = 0.5; // 妥当な近似的減衰比
             const C_pitch     = 2.0 * zetaPitch * Math.sqrt(Math.max(1, K_pitchReal * IPitch_real));
-            // ピッチも同様に、完全空中時は最低限の減衰のみ残す
-            // （角運動量がいつまでも保存されて跳ね続けるのを防ぐ）。
-            const C_pitchEff = C_pitch * Math.max(AIR_DAMP_FRAC, submergedFrac);
+            // ピッチも同様に、水に浸かっている分だけ（空中では回る勢いをそのまま保つ）
+            const C_pitchEff = C_pitch * Math.max(airDamp, submergedFrac);
 
             // v105: ケルビン波の波長は、船が縦揺れ(ピッチ)する周期に由来するという
             // 着想に基づき、ここで求めたピッチの自然角周波数を引き波の波長計算
@@ -454,7 +553,8 @@ function animate() {
             physics.vPitch += THREE.MathUtils.clamp(accPitch, -maxAcc, maxAcc) * subDt;
             physics.vPitch  = THREE.MathUtils.clamp(physics.vPitch, -maxAngVel, maxAngVel);
             physics.pitch  += physics.vPitch * subDt;
-            physics.pitch   = THREE.MathUtils.clamp(physics.pitch, -0.78, 0.78);
+            // （縦の傾きは、船首・船尾から沈むときに真っ直ぐ立つところ（90°）まで。それより先へは回らない）
+            if (Math.abs(physics.pitch) > 1.55) { physics.pitch = Math.sign(physics.pitch) * 1.55; if (physics.vPitch * physics.pitch > 0) physics.vPitch = 0; }
 
             // ════════════════════════════════════════════════════════════
             //  ロール（横揺れ）── 今回は対象外。従来の振り子モデルを維持。
@@ -476,15 +576,29 @@ function animate() {
 
             const turnRateRad  = physics.turnRate * Math.PI / 180;
             const turnRollBias = THREE.MathUtils.clamp(physics.speed * turnRateRad * 0.0018, -0.35, 0.35);
-            const targetRoll  = -waveRoll + turnRollBias;
+            // 浸水で片舷に水がかたよると、その舷へ傾いたままになる（63-flooding.js）
+            // （海底に乗って船底が支えられている間は、傾ける水があっても、舷の丸みが底に着く所までしか傾かない）
+            let floodRoll = (typeof flood !== 'undefined' && flood.rollBias) || 0;
+            if (floodRoll && (physics.groundLift || 0) > 0.02) {
+                const hb = Math.max(2, (flood.B || 20) / 2), lim = Math.atan((physics.groundLift + 0.5) / hb);
+                floodRoll = THREE.MathUtils.clamp(floodRoll, -lim, lim);
+            }
+            const targetRoll  = -waveRoll + turnRollBias + floodRoll;
 
-            const accRoll  = ((targetRoll  - physics.roll)  * KRoll  - physics.vRoll  * CRoll)  / IRoll;
+            // 横揺れの復原（波の傾きへ合わせる・旋回で傾く・浸水で傾く）はどれも水が押す力なので、水に触れている分だけ
+            const accRoll  = ((targetRoll  - physics.roll)  * KRoll * hullWet  - physics.vRoll  * CRoll * Math.max(airDamp, hullWet))  / IRoll;
             physics.vRoll  += THREE.MathUtils.clamp(accRoll, -maxAcc, maxAcc) * subDt;
             physics.vRoll   = THREE.MathUtils.clamp(physics.vRoll, -maxAngVel, maxAngVel);
             physics.roll   += physics.vRoll * subDt;
-            physics.roll    = THREE.MathUtils.clamp(physics.roll, -0.78, 0.78);
+            // （横の傾きの限界も設けない：転覆するときは、ひっくり返るところまで）
+            if (Math.abs(physics.roll) > Math.PI) physics.roll -= Math.sign(physics.roll) * 2 * Math.PI;
+            // 海底に入った点を押し戻す（支えきれない重さの割合で、底との摩擦も）
+            if (_gcOn) groundContactStep(rotY, subDt, F_weight > 0 ? (F_weight - F_buoyancyHeave) / F_weight : 0);
         }
     }
+    if (typeof groundContactFinish === 'function') groundContactFinish(isDesignMode ? 0 : physicsDt);
+    // 潜水艦：潜航・浮上の上下を計算し、深さの分だけ下げる（深いほど波の上下も届かない）
+    if (typeof subPostStep === 'function') subPostStep(t, physicsDt, isDesignMode);
 
     sanitizePhysics();
     
@@ -549,27 +663,23 @@ function animate() {
     // v121: さらに長持ちさせたいとの要望で0.24s→0.4sに拡大。
     // 32枠のカバー時間は約7.7s→約12.8sに伸びる（dt>15.0の上限にはまだ余裕がある）。
     if (t - window.lastHistoryTime > 0.4) {
-        shipHistory.push({ x: physics.cgWorldX, z: physics.cgWorldZ, t, speed: physics.speed, headingRad: rotY, turnRate: physics.turnRate });
+        // 潜航中は水面に引き波を立てない
+        const _wkSpd = (typeof subSurfaceFxOff === 'function' && subSurfaceFxOff()) ? 0 : physics.speed;
+        shipHistory.push({ x: physics.cgWorldX, z: physics.cgWorldZ, t, speed: _wkSpd, headingRad: rotY, turnRate: physics.turnRate });
         window.lastHistoryTime = t;
         if (shipHistory.length > perf.historyMax) shipHistory.shift();
     }
 
-    updateWaterReflection();
-    if (typeof updateSWE === 'function') updateSWE(dt, t); // SWE流体シミュ
-    updateWater(t);
-    updateSky(t);
+    // 船をこのフレームの位置・姿勢に置く（水面の穴＝喫水線の輪郭（updateWater の updateHullWaterlinePolygon）・しぶきなどは
+    // この置いた船の行列から求める。以前は置く前の、前のフレームの位置で求めていたので、早送りで船の 1 フレームの動きが
+    // 大きいほど、水面の穴が船体に追いつかずに後ろへずれて見えた）
     sanitizePhysics();
-
-    animateSmoke(t, dt);
-    animatePropellers(t, dt);
-    animateBubbles(t, dt);
-    animateWakeParticles(t, dt);
-    if (typeof emitHullWakeParticles === 'function') emitHullWakeParticles(t, dt);
-    updateNavLightsVisibility();
-    updateDeckLightPool();
-    updateFunnelUplights();
-
-    const finalEuler = new THREE.Euler(physics.pitch, rotY, physics.roll, 'YXZ');
+    // 座礁して乗り上げているときの傾き（44-world-terrain.js の _trGroundAttitude）を描く姿勢に足す
+    const gAtt = (window.world && world.mode === 'world') ? 1 : 0;
+    // 潜水艦（54-submarine.js）：潜っているほど波の揺れが小さく、潜航・浮上で艦首が上下する
+    const _sa = (typeof subAttitude === 'function') ? subAttitude() : null;
+    const _pV = _sa ? physics.pitch * _sa.k + _sa.pitch : physics.pitch, _rV = _sa ? physics.roll * _sa.k : physics.roll;
+    const finalEuler = new THREE.Euler(_pV + gAtt * (physics.groundPitch || 0), rotY, _rV + gAtt * (physics.groundRoll || 0), 'YXZ');
     shipGroup.quaternion.setFromEuler(finalEuler);
 
     // モデルを配置する際の「ワールド座標に固定する基準点」はCGではなく喫水線基準点(waterlineOffsetY)。
@@ -578,23 +688,110 @@ function animate() {
     const toCenter = pinOffsetScaled.clone().negate().applyEuler(finalEuler);
 
     shipGroup.position.set(physics.cgWorldX + toCenter.x, physics.y + toCenter.y, physics.cgWorldZ + toCenter.z);
+    if (typeof skyOccFollow === 'function') skyOccFollow();   // 空の遮られ方の地図を、今の船の位置・向きへ（61-ship-ao.js）
 
     // 見張り台視点カメラ: 船の位置・回転(横揺れ/縦揺れ込み)が確定した直後に計算する。
     if (!isDesignMode && cameraMode === 'viewpoint' && typeof updateViewpointCamera === 'function') {
+        if (typeof updateSightAim === 'function') updateSightAim();      // 捉えた目標を追いかける（66-sights.js）
         updateViewpointCamera();
     }
 
+    updateWaterReflection();
+    // 船の後ろに残る泡の帯（68-wake-foam-map.js。物理の時間で薄れる）
+    if (typeof updateWakeFoamMap === 'function') updateWakeFoamMap(isDesignMode ? 0 : physicsDt);
+    // SWE流体シミュ（海面を消しているときは結果を使わないので止める）
+    if (typeof updateSWE === 'function' && !(waterMesh && !waterMesh.visible)) updateSWE(dt, t);
+    updateWater(t);
+    updateSky(t);
+
+    if (typeof updateShipSolid === 'function') updateShipSolid(t);   // 船の形の中（60-ship-solid.js）：煙などが船を突き抜けないように
+    if (typeof updateShipAO === 'function') updateShipAO();          // 船の空の見え方（61-ship-ao.js）：かぶさった所の環境光を暗く
+    animateSmoke(t, dt);
+    animatePropellers(t, dt);
+    animateBubbles(t, dt);
+    animateWakeParticles(t, dt);
+    if (typeof emitHullWakeParticles === 'function' && !(typeof subSurfaceFxOff === 'function' && subSurfaceFxOff())) emitHullWakeParticles(t, dt);
+    if (typeof emitTrafficWakeParticles === 'function') emitTrafficWakeParticles(t, dt);   // 他の船の喫水線の泡・しぶき（18-hull-wake-physics.js）
+    updateNavLightsVisibility();
+    updateDeckLightPool();
+    updateFunnelUplights();
+
     // LODグリッドの中心を船位置に追従（1unit刻みでスナップ）
-    waterMesh.position.x = Math.round(physics.cgWorldX);
-    waterMesh.position.z = Math.round(physics.cgWorldZ);
+    //（他の船をカメラで追っている間は、その船のまわりに：59-traffic.js の window._waterCenter）
+    const _wc = window._waterCenter;
+    waterMesh.position.x = Math.round(_wc ? _wc.x : physics.cgWorldX);
+    waterMesh.position.z = Math.round(_wc ? _wc.z : physics.cgWorldZ);
 
-    updateUI();
+    // 右上の数値は 1 秒に 10 回で十分（毎フレームだと、揺れで横傾斜・縦傾斜の数字が毎回変わって書き換えが続く）
+    if (!(_frameNow - (updateUI._t || 0) < 100)) { updateUI._t = _frameNow; updateUI(); }
 
-    if (bloomEnabled && bloomComposer) {
+    // 水中表現。updateDayNightCycle()が決めた「水上での正しい霧・背景・光量」を
+    // 入力として、カメラが水没していればその上から水中ぶんを掛ける。
+    // 描画の直前に置くことで、この1フレームぶんの上書きだけで完結する
+    // （状態の退避・復元が不要になり、時刻変化との競合も起きない）。
+    // 雨・雷・空の曇り/霞（29-weather-fx.js）。雷の閃光は描画の間だけ光を上書きする。
+    // 船内・屋根の下か（34-shelter.js）。雨と霧の見た目の前に決める。
+    if (typeof updateShelter === 'function') updateShelter(t);
+    if (typeof updateWeatherFx === 'function') updateWeatherFx(t);
+    if (typeof applyWeatherFxRenderOverrides === 'function') applyWeatherFxRenderOverrides();
+    if (typeof updateUnderwater === 'function') updateUnderwater(t);
+
+    // エリアライト・発光パネル（25-area-lights.js）。船の位置・姿勢が確定した
+    // この位置で呼ぶ。影マップを描き直さないフレームは影の変換行列だけを
+    // 更新するので、ここより前で呼ぶと影が1フレーム分船に置いていかれる。
+    // 船の照明の焼き込み（40-light-bake.js）：焼き込みを少しずつ進め、昼夜などの倍率を渡す
+    if (typeof updateAutopilot === 'function') updateAutopilot(t, physicsDt);  // 自動航行（49-autopilot.js）
+    if (typeof updateHarborAuto === 'function') updateHarborAuto(t, physicsDt);  // タグでの自動離着岸（50-harbor-auto.js）
+    if (typeof updateManeuver === 'function') updateManeuver(t, physicsDt);    // サイドスラスター・アジポッド（58-maneuvering.js）
+    if (typeof updateTugs === 'function') updateTugs(t, physicsDt);          // タグボート（47-tugboats.js。物理の早送りに合わせる）
+    if (typeof updateTraffic === 'function') updateTraffic(t, physicsDt);    // 港の間を行き来する他の船（59-traffic.js）
+    if (typeof updateMinimap === 'function') updateMinimap(t);               // 小さな地図（48-minimap.js）
+    if (typeof updateWorldTerrain === 'function') updateWorldTerrain(t, dt);
+    if (typeof updateLandmarks === 'function') updateLandmarks(t);                // 名所の建物・像（53-landmarks.js）
+    if (typeof updateLighthouses === 'function') updateLighthouses(t);            // 実在の灯台の灯り（57-lighthouses.js）
+    if (typeof updatePuffs === 'function') updatePuffs(t, dt);                   // タグの排煙・汽笛の蒸気・しぶき（52-puffs.js）
+    if (typeof updateSubmarine === 'function') updateSubmarine(t, dt);           // 潜水艦の魚雷・ソナー・潜望鏡（54-submarine.js）
+    if (typeof updateSights === 'function') updateSights(t, dt);                 // 測距儀・照準・舵輪の横のボタン（66-sights.js）
+    if (typeof updateBinoculars === 'function') updateBinoculars(dt);           // 見張り台の双眼鏡（69-binoculars.js）
+    if (typeof updateLightBake === 'function') updateLightBake(t);
+    if (typeof updateAreaLights === 'function') updateAreaLights(t);
+    if (typeof updateGlowHalos === 'function') updateGlowHalos();   // 遠景用の光のにじみ（26）
+    // 音（35-audio-engine.js / 36-horns.js）：機関・環境音・汽笛の位置と音量
+    if (typeof updateAudio === 'function') updateAudio(t);
+    // 画面のテレグラフ・舵輪（37-bridge-controls.js）
+    if (typeof updateBridge === 'function') updateBridge(t);
+    // 目印を画面上で一定の大きさに・音の位置の目印（10 / 36）
+    if (typeof updateSoundMarkers === 'function') updateSoundMarkers();
+    if (typeof updateMooring === 'function') updateMooring();          // 係船設備（46-mooring.js）
+    if (typeof updateWatertight === 'function') updateWatertight();    // 水密隔壁の表示（62-watertight.js）
+    if (typeof updateFlooding === 'function') updateFlooding(t, isDesignMode ? 0 : physicsDt);   // 浸水（63-flooding.js）
+    if (typeof updateDamage === 'function') updateDamage(t, isDesignMode ? 0 : physicsDt);       // 穴の見た目・泡（64-damage.js）
+    if (typeof updateShipHits === 'function') updateShipHits(t, isDesignMode ? 0 : physicsDt);   // 他の船の浸水・沈没（65-ship-hits.js）
+    if (typeof updateMarkerScales === 'function') updateMarkerScales();
+    // 自動露出（30-auto-exposure.js）：目の慣れのように露出を少しずつ合わせる
+    if (typeof applyAutoExposure === 'function') applyAutoExposure(t);
+    // 水面の霧（04 の水面シェーダーは自前なので scene.fog を手で渡す）。
+    // 水中表現が霧を上書きした後のここで渡すと、水中から見上げた水面も霞む。
+    if (window._waterUniforms && window._waterUniforms.waterFogColor && scene.fog) {
+        window._waterUniforms.waterFogColor.value.copy(scene.fog.color);
+        window._waterUniforms.waterFogDensity.value = scene.fog.density;
+    }
+    // 煙・しぶき・スクリューの泡にも同じ霧を掛ける（03-particle-systems.js）
+    if (typeof particleFogUniforms !== 'undefined' && scene.fog) {
+        particleFogUniforms.uFogColor.value.copy(scene.fog.color);
+        particleFogUniforms.uFogDensity.value = scene.fog.density || 0;
+    }
+
+    const _useBloom = bloomEnabled && bloomComposer && (typeof updateBloomForWeather !== 'function' || updateBloomForWeather());
+    if (_useBloom) {
         renderWithBloom();
     } else {
+        renderer.shadowMap.needsUpdate = true;   // 影は本描画で1回だけ（04参照）
         renderer.render(scene, camera);
     }
+    // 水中表現が描画のために書き換えた霧・光を、水上での値へ戻す（23-underwater.js）
+    if (typeof restoreUnderwaterOverrides === 'function') restoreUnderwaterOverrides();
+    if (typeof restoreWeatherFxRenderOverrides === 'function') restoreWeatherFxRenderOverrides();
 
     // v137: 描画完了直後にスクリーンショット待ちがあればキャプチャする
     // （preserveDrawingBuffer未設定のためrAF後では手遅れになり得るので、
@@ -606,6 +803,8 @@ function animate() {
         window._pendingScreenshotCallback = null;
         cb(renderer.domElement);
     }
+    // 描き終えた画面の明るさをときどき測る（自動露出、30-auto-exposure.js）
+    if (typeof sampleAutoExposure === 'function') sampleAutoExposure(t);
 }
 
 // 水面反射：カメラをy=0でミラーして低解像度レンダリングし、反射テクスチャを更新する
@@ -626,8 +825,66 @@ const _reflBiasMatrix = new THREE.Matrix4().set(
     0.0, 0.0, 0.0, 1.0
 );
 const _reflTextureMatrix = new THREE.Matrix4();
+// 反射の絵に描かない小さな物。反射の描き直しは場面全体をもう一度描くので、オリンピックでは
+// 1 回に 650 回ほどの描画になっていた（海面を消すと凄く軽くなる原因の一つ）。そのうち 8割以上は
+// 手すり・窓枠・ボートの金具などの小さな部品で、反射の絵（長辺 512 画素、しかも波で揺らす）の
+// 上では 1〜2 画素にしかならない。これらと、丸ごと水面の下にある物は、反射を描く間だけ隠す。
+// 光る物（電球・窓の灯りなど）は小さくても夜の海に点々と映るので、画素に乗らないほど小さい時だけ隠す。
+const _reflCull = { list: [], glow: [], count: 0, hidden: [] };
+const _reflSph = new THREE.Sphere();
+const REFL_MIN_PX      = 2.0;   // 反射の絵の上で、この半径[画素]より小さく見える物は描かない
+const REFL_MIN_PX_GLOW = 0.6;   // 光る物はこれより小さい時だけ
+function _reflIsGlow(m) {
+    const one = (q) => !!q && (!!q.emissiveMap || (!!q.emissive && q.emissive.getHex() !== 0));
+    return Array.isArray(m) ? m.some(one) : one(m);
+}
+function _reflCullTargets() {
+    // 候補の一覧は 30 回に 1 回だけ作り直す（毎回シーン全体をたどると重い）
+    if ((_reflCull.count++ % 30) === 0) {
+        const L = [], G = [];
+        scene.traverse(o => {
+            if (!o.isMesh || o === waterMesh || o.isInstancedMesh || o.isSkinnedMesh) return;
+            if (o.children.length || o.frustumCulled === false || !o.geometry) return;
+            const m = o.material;
+            if (!m || (Array.isArray(m) ? m.some(q => q && q.isShaderMaterial) : m.isShaderMaterial)) return;
+            L.push(o);
+            G.push(_reflIsGlow(m));
+        });
+        _reflCull.list = L;
+        _reflCull.glow = G;
+    }
+    return _reflCull.list;
+}
+function _reflHideSmall(cam, rtH, clipY) {
+    const hidden = _reflCull.hidden;
+    hidden.length = 0;
+    const pxPerRad = (rtH * 0.5) / Math.tan(cam.fov * Math.PI / 360);
+    const cp = cam.position;
+    const list = _reflCullTargets(), glow = _reflCull.glow;
+    for (let i = 0; i < list.length; i++) {
+        const o = list[i];
+        if (!o.visible) continue;
+        const g = o.geometry;
+        if (!g.boundingSphere) g.computeBoundingSphere();
+        if (!g.boundingSphere) continue;
+        _reflSph.copy(g.boundingSphere).applyMatrix4(o.matrixWorld);
+        const d = Math.max(1e-3, _reflSph.center.distanceTo(cp));
+        const minPx = glow[i] ? REFL_MIN_PX_GLOW : REFL_MIN_PX;
+        if (_reflSph.radius * pxPerRad < minPx * d || _reflSph.center.y + _reflSph.radius < clipY) {
+            o.visible = false;
+            hidden.push(o);
+        }
+    }
+}
+function _reflShowSmall() {
+    const hidden = _reflCull.hidden;
+    for (let i = 0; i < hidden.length; i++) hidden[i].visible = true;
+    hidden.length = 0;
+}
 function updateWaterReflection() {
     if (!waterReflectionRT || !waterReflectionCamera || !waterMesh) return;
+    // 海面を非表示にしているときは反射も要らない（以前は船ごと描き直し続けていた）
+    if (!waterMesh.visible) return;
 
     // 海面リアリティー設定で反射そのものを無効化している場合はスキップ。
     // ただし reflectionStrength を 0 にしてシェーダーが古いRTを描画しないようにする。
@@ -703,8 +960,22 @@ function updateWaterReflection() {
     // 水面メッシュを一時的に非表示にして反射には映らないようにする
     const wasVisible = waterMesh.visible;
     waterMesh.visible = false;
+    // 遠くの水面（44-world-terrain.js）も。この反射の絵を読んで色を決めているので、映すと自分の色を読み返してしまう
+    const farWaterWas = (typeof _trFarWater !== 'undefined' && _trFarWater) ? _trFarWater.visible : null;
+    if (farWaterWas !== null) _trFarWater.visible = false;
+    // 霧の灯りのにじみは、メインカメラから見た奥行きで隠れるかを調べているので、
+    // 反射カメラの絵には描かない（反射では見当違いの所で隠れてしまうため）
+    const haloWasVisible = (typeof glowHaloPoints !== 'undefined' && glowHaloPoints) ? glowHaloPoints.visible : null;
+    if (haloWasVisible !== null) glowHaloPoints.visible = false;
+    // 引き波の泡・スクリューの泡は水面に浮いているので、反射の絵には描かない
+    // （引き波が伸びると数千個になり、反射を撮るたびにもう一度描くぶん重くなっていた）
+    const wakePtsWas = (typeof wakeParticlePoints !== 'undefined' && wakeParticlePoints) ? wakeParticlePoints.visible : null;
+    if (wakePtsWas !== null) wakeParticlePoints.visible = false;
+    const bubPtsWas = (typeof bubblePoints !== 'undefined' && bubblePoints) ? bubblePoints.visible : null;
+    if (bubPtsWas !== null) bubblePoints.visible = false;
 
     try {
+        _reflHideSmall(waterReflectionCamera, waterReflectionRT.height, -_reflClipPlane.constant);
         // 反射RTにレンダリング（bloom無しで直接render）
         // bloomComposer.render() が内部で autoClear を false にする場合があるため
         // ここで明示的に true に保証し、RTが毎回確実にクリアされるようにする。
@@ -717,6 +988,11 @@ function updateWaterReflection() {
     } finally {
         // 例外が発生してもクリップ平面・waterMesh の状態を必ず元に戻す
         waterMesh.visible = wasVisible;
+        if (farWaterWas !== null) _trFarWater.visible = farWaterWas;
+        if (haloWasVisible !== null) glowHaloPoints.visible = haloWasVisible;
+        if (wakePtsWas !== null) wakeParticlePoints.visible = wakePtsWas;
+        if (bubPtsWas !== null) bubblePoints.visible = bubPtsWas;
+        _reflShowSmall();
         renderer.clippingPlanes = [];
         renderer.localClippingEnabled = false;
     }
@@ -742,6 +1018,16 @@ function updateSunShadowFollow() {
     sunLight.target.position.copy(shipGroup.position);
     sunLight.target.updateMatrixWorld();
     sunLight.position.copy(shipGroup.position).addScaledVector(dirToSun, SUN_SHADOW_LIGHT_DISTANCE);
+    // 影の範囲：船の大きさに合わせて（小さい船ほど影の地図の升目が細かく、影がくっきり・正確に）。
+    // 船の半分の長さ＋40m（低い太陽で長く伸びる影・近くのタグ）を、60〜220m に
+    {
+        const hp = window.hullProfile, HL = ((hp && hp.ready) ? hp.halfLen : 6) * (physics.scale || 1);
+        const half = Math.max(60, Math.min(220, HL * 1.15 + 40)), c = sunLight.shadow.camera;
+        if (Math.abs(c.right - half) > half * 0.04) {
+            c.left = -half; c.right = half; c.top = half; c.bottom = -half;
+            c.updateProjectionMatrix();
+        }
+    }
 
     // 水面シェーダーへシャドウマップ本体と変換行列を渡す。
     // sunLight.shadow.mapはThree.jsが初回描画時に遅延生成するため、
@@ -749,13 +1035,36 @@ function updateSunShadowFollow() {
     if (waterMesh && waterMesh.material.uniforms && waterMesh.material.uniforms.sunShadowMap) {
         const u = waterMesh.material.uniforms;
         const hasMap = !!(perf.shadowsEnabled && sunLight.shadow && sunLight.shadow.map);
-        u.sunShadowActive.value = hasMap;
+        // 夜（太陽の光がほぼ無い）は影を読んでも見た目が変わらないので読まない
+        // （海面の全画素で影マップを9回ずつ読むのを省く）
+        u.sunShadowActive.value = hasMap && sunLight.intensity > 0.02;
         if (hasMap) {
             u.sunShadowMap.value = sunLight.shadow.map.texture;
             u.sunShadowMatrix.value = sunLight.shadow.matrix;
             u.sunShadowMapSize.value = perf.shadowMapSize;
         }
     }
+}
+
+// v166: 設計喫水での輪郭前後端を引くための共有スクラッチ（毎フレーム使う）
+const _mainLoopWlEnds = { k0:0, k1:0, f:0, sternAlong:0, bowAlong:0 };
+
+// 白波の割合 → 水面シェーダーの「白波の出やすさ」（4層の波の高さの重ね合わせ）のしきい値。
+// 表は 02 の法線マップから実際に数えた分布（割合, その割合だけが越える値）
+const WATER_WHITECAP_T = [[0.0005, 4.25], [0.001, 3.97], [0.002, 3.66], [0.005, 3.19], [0.01, 2.82], [0.02, 2.41],
+    [0.05, 1.82], [0.1, 1.32], [0.2, 0.76], [0.3, 0.40], [0.45, 0.0], [0.6, -0.36]];
+function waterWhitecapThreshold(cov) {
+    const T = WATER_WHITECAP_T;
+    if (!(cov > 1e-5)) return 99;
+    const lc = Math.log(cov);
+    if (cov <= T[0][0]) return T[0][1] + (Math.log(T[0][0]) - lc) * (T[0][1] - T[1][1]) / Math.log(T[1][0] / T[0][0]);
+    for (let i = 1; i < T.length; i++) {
+        if (cov <= T[i][0]) {
+            const a = Math.log(T[i - 1][0]), b = Math.log(T[i][0]);
+            return T[i - 1][1] + (T[i][1] - T[i - 1][1]) * (lc - a) / (b - a);
+        }
+    }
+    return T[T.length - 1][1];
 }
 
 function updateWater(t) {
@@ -768,18 +1077,98 @@ function updateWater(t) {
     // (旧実装: 頂点数×航跡履歴数のCPUループ → 新実装: uniform数十個の更新のみ)
     uni.time.value           = t;
     uni.waveRoughnessU.value = physics.waveRoughness;
+    // 浅瀬・岩礁の白い泡（04 の水のシェーダー）：波が立つほど強く。凪では出さない
+    if (uni.shoalFoamK) uni.shoalFoamK.value = THREE.MathUtils.smoothstep(physics.waveRoughness || 0, 0.25, 1.2) * 0.8;
     uni.waveWidthU.value     = Math.max(0.05, physics.waveWidth);
     uni.swellStrengthU.value = (typeof physics.swellStrength === 'number') ? physics.swellStrength : 1.0;
     uni.chopStrengthU.value  = (typeof physics.chopStrength  === 'number') ? physics.chopStrength  : 1.0;
     uni.windDirU.value       = (typeof physics.windDir   === 'number') ? physics.windDir   : 45;
     uni.windSpeedU.value     = (typeof physics.windSpeed === 'number') ? physics.windSpeed : 5;
+    // 外洋波の位相（02-utils-and-wave-physics.js の oceanWaveState）をそのまま渡す
+    if (typeof oceanWaveState !== 'undefined' && oceanWaveState.t !== null && uni.waveK01U) {
+        const S = oceanWaveState;
+        uni.waveK01U.value.set(S.K[0], S.K[1], S.K[2], S.K[3]);
+        uni.waveK23U.value.set(S.K[4], S.K[5], S.K[6], S.K[7]);
+        uni.wavePhaseU.value.set(S.phi[0], S.phi[1], S.phi[2], S.phi[3]);
+        uni.waveOriginU.value.set(S.ax, S.az);
+    }
+    // 水面の細かい波紋テクスチャが風で流れた量を積み上げる。
+    // （「風向×time×速さ」を毎回計算すると、風が変わった瞬間に経過時間ぶん
+    //   模様が飛ぶので、速さ×dt を足していく）
+    if (uni.detailOff1U) {
+        const dtW = (updateWater._lastT == null) ? 0 : Math.min(0.1, Math.max(0, t - updateWater._lastT));
+        updateWater._lastT = t;
+        const wr = ((typeof physics.windDir === 'number') ? physics.windDir : 45) * Math.PI / 180;
+        const wx = Math.sin(wr), wz = Math.cos(wr);
+        const wn = THREE.MathUtils.clamp(((typeof physics.windSpeed === 'number') ? physics.windSpeed : 5) / 20, 0, 1.5);
+        const rot = (a) => [wx * Math.cos(a) - wz * Math.sin(a), wx * Math.sin(a) + wz * Math.cos(a)];
+        const v2 = rot(2.29), v3 = rot(0.82);   // 約131°・約47°回した向き
+        const add = (u, vx, vz, spd) => {
+            // テクスチャは繰り返しなので、整数ぶんは捨てて精度を保つ
+            u.value.x = (u.value.x + vx * spd * dtW) % 1;
+            u.value.y = (u.value.y + vz * spd * dtW) % 1;
+        };
+        // 速さは m/s を、04 の水面シェーダーでマップ1枚を貼る大きさ（①60m ②110m ③340m ④16m）で割ったもの
+        add(uni.detailOff1U,  wx,     wz,    (1.2 + wn * 1.2) / 60);
+        add(uni.detailOff2U, -v2[0], -v2[1], (1.6 + wn * 1.6) / 110);
+        add(uni.detailOff3U,  v3[0],  v3[1], (1.7 + wn * 1.4) / 340);
+        // ④は①のマップを37°回して貼っているので、流す向きも同じだけ回す
+        if (uni.detailOff4U) add(uni.detailOff4U, 0.8 * wx - 0.6 * wz, 0.6 * wx + 0.8 * wz, (0.7 + wn * 0.5) / 16);
+
+        const U = Math.max(0, (typeof physics.windSpeed === 'number') ? physics.windSpeed : 5);
+        // 白波：海面のうち白く砕けている割合（Monahan & O'Muircheartaigh 1980 の W = 3.84e-6·U^3.41 に、
+        // 砕けた後しばらく残る泡の分を少し足して1.3倍）と、それに合うしきい値。風力7（約14m/s）からは風下へ流れる泡の筋も
+        if (uni.whitecapU) {
+            const cov = Math.min(0.45, 3.84e-6 * Math.pow(U, 3.41) * 1.3);
+            const sk = THREE.MathUtils.smoothstep(U, 13, 24) * 0.4;
+            uni.whitecapU.value.set(waterWhitecapThreshold(cov), cov, sk, 0);
+        }
+        // 泡の筋の座標。風向をそのまま回すと、原点から遠い所では向きが少し変わっただけで模様が大きく流れるので、
+        // カメラの近くを基準点にして「基準点での模様の位置」を前の向きのまま積み上げ、向きはその点を中心に回す
+        if (uni.streakRotU && typeof camera !== 'undefined' && camera) {
+            const S = updateWater._streak || (updateWater._streak = { ax: camera.position.x, az: camera.position.z, bx: 0, by: 0, rx: wx, rz: wz });
+            const dx = camera.position.x - S.ax, dz = camera.position.z - S.az;
+            S.bx = (S.bx + (dx * S.rz - dz * S.rx) / 14) % 1;
+            S.by = (S.by + (dx * S.rx + dz * S.rz) / 150 + U * 0.03 * dtW / 150) % 1;   // 泡は風速の3%ほどで風下へ流れる
+            S.ax = camera.position.x; S.az = camera.position.z; S.rx = wx; S.rz = wz;
+            uni.streakRotU.value.set(wx, wz);
+            uni.streakAnchorU.value.set(S.ax, S.az);
+            uni.streakBaseU.value.set(S.bx, S.by);
+        }
+    }
     uni.physScaleU.value     = Math.max(0.25, physics.scale || 1);
     {
         const hp = (typeof window !== 'undefined' && window.hullProfile) ? window.hullProfile : null;
         const ps = physics.scale || 1;
         uni.hullHalfLenU.value = (hp && hp.ready ? hp.halfLen : 6.0) * ps;
         const dst = uni.hullWidthsU.value;
-        if (hp && hp.ready && hp.slices && hp.slices.length > 0) {
+        // v166: 船体マスクの幅テーブルも、実測形状(hp.shape)の設計喫水断面から
+        // 作る。従来は24等分スライスの半幅＋頂点密度から推定した先端位置を
+        // 渡していたため、GPU側のマスクだけが実際の喫水線輪郭（CPU側の泡帯）と
+        // 食い違い、船首尾で引き波の泡が船体からはみ出す/内側に食い込む原因に
+        // なっていた。ここを同じ出所に揃えると両者が必ず一致する。
+        if (hp && hp.ready && hp.shape && hp.shape.ready && typeof hullShapeHalfWidthAtAlong === 'function') {
+            const sh = hp.shape;
+            const halfLen = Math.max(hp.halfLen, 1e-6);
+            // 設計喫水はレベル格子の途中に来るので、レベル配列の生値ではなく
+            // 補間済みの前後端を使う。生値だと格子とのわずかなズレで、両端の
+            // サンプルが輪郭の外（幅0）に落ちることがある。
+            const de = hullShapeEndsAtY(sh, sh.designWaterlineY, _mainLoopWlEnds);
+            const sternA = de.sternAlong, bowA = de.bowAlong;
+            const n = dst.length;
+            for (let i = 0; i < n; i++) {
+                const a = sternA + (bowA - sternA) * (i / (n - 1));
+                dst[i] = hullShapeHalfWidthAtAlong(sh, sh.designWaterlineY, a) * ps;
+            }
+            uni.hullSliceCountU.value = n;
+            uni.hullSliceAlongMinU.value = sternA / halfLen;
+            uni.hullSliceAlongMaxU.value = bowA / halfLen;
+            // 実測輪郭の前後端がそのまま先端。幅は端のstation値（先細りの結果）。
+            uni.bowTipAlongNormU.value   = bowA / halfLen;
+            uni.bowTipWidthU.value       = dst[n - 1];
+            uni.sternTipAlongNormU.value = sternA / halfLen;
+            uni.sternTipWidthU.value     = dst[0];
+        } else if (hp && hp.ready && hp.slices && hp.slices.length > 0) {
             const n = Math.min(hp.slices.length, dst.length);
             for (let i = 0; i < n; i++) dst[i] = hp.slices[i].halfWidth * ps;
             uni.hullSliceCountU.value = n;
@@ -824,8 +1213,15 @@ function updateWater(t) {
     const MAX_WAKE = window._MAX_WAKE || 32;
     const wArr = uni.wakeXZTH.value;
     const wSpd = uni.wakeSpeed.value;
-    const wCount = Math.min(shipHistory.length, MAX_WAKE);
-    const startIdx = shipHistory.length - wCount;
+    // 波を立てない履歴（止まっている・15 秒より古い）は渡さない（GPU の頂点ごとの繰り返しを減らす）
+    const _wkLive = [];
+    for (let i = shipHistory.length - 1; i >= 0 && _wkLive.length < MAX_WAKE; i--) {
+        const p = shipHistory[i], age = t - p.t;
+        if (age > 15) break;
+        if (Math.abs(p.speed) >= 0.5 && age > 0) _wkLive.push(p);
+    }
+    _wkLive.reverse();
+    const wCount = _wkLive.length;
     // 各履歴点は記録時点の「重心」ワールド座標(p.x/p.z)。GPU側シェーダーは
     // これを船体ローカル原点として扱いbow/stern位置を計算するため、
     // cgOffset.x/zが(0,0)でないと解析的な引き波(SWE無効時のフォールバック)
@@ -843,8 +1239,12 @@ function updateWater(t) {
     // 座標系側にryが織り込まれていたため、素通しでも結果的に辻褄が合って
     // いたが、v119でスキャン座標系からryを除去したことで、ここも明示的な
     // 補正が必要になった）。
+    // 引き波が届く範囲（すべての波源の、波源から maxDist＋船の半長の円を囲む四角）。
+    // 頂点シェーダーはこの外の頂点では引き波を計算しない（大半の頂点は引き波から遠い）
+    const _wkReach = Math.sqrt(8000) * (uni.physScaleU.value / 12) + (uni.hullHalfLenU.value || 0) + 5;
+    let _bx0 = Infinity, _bz0 = Infinity, _bx1 = -Infinity, _bz1 = -Infinity;
     for (let i = 0; i < wCount; i++) {
-        const p = shipHistory[startIdx + i];
+        const p = _wkLive[i];
         let px = p.x, pz = p.z;
         if (typeof _hullOriginWorld === 'function') {
             const _o = _hullOriginWorld(p.x, p.z, p.headingRad, _wakePhysScale);
@@ -853,7 +1253,10 @@ function updateWater(t) {
         const _wRad = (typeof _wakeAxisRad === 'function') ? _wakeAxisRad(p.headingRad) : p.headingRad;
         wArr[i].set(px, pz, p.t, _wRad);
         wSpd[i] = p.speed;
+        _bx0 = Math.min(_bx0, px - _wkReach); _bx1 = Math.max(_bx1, px + _wkReach);
+        _bz0 = Math.min(_bz0, pz - _wkReach); _bz1 = Math.max(_bz1, pz + _wkReach);
     }
+    if (uni.wakeBox) { if (wCount) uni.wakeBox.value.set(_bx0, _bz0, _bx1, _bz1); else uni.wakeBox.value.set(0, 0, -1, -1); }
     uni.wakeCount.value = wCount;
 
     // ── 船体に密着した波しぶき帯用のウォーターラインポリゴン更新 ──
@@ -871,28 +1274,93 @@ function updateSky(t) {
     skyMesh.material.uniforms.skyExposure.value = 0.75 * lightSettings.skyMult;
 }
 
+// 表示の文字は、変わったときだけ書き換える（毎フレーム十数か所を書き換えると、そのたびにブラウザが配置を計算し直す）
+function _uiTxt(el, s) { if (el && el._txt !== s) { el._txt = s; el.innerText = s; } }
 function updateUI() {
     const labels = {
         '-3': 'FULL ASTERN (全速後進)', '-2': 'HALF ASTERN (半速後進)', '-1': 'SLOW ASTERN (微速後進)',
         '0': 'STOP (停止)', '1': 'SLOW (微速前進)', '2': 'HALF (半速前進)', '3': 'FULL (全速前進)'
     };
-    $('ui-telegraph').innerText = `Telegraph: ${labels[physics.telegraphState]}`;
-    $('ui-speed').innerText = `Speed    : ${Math.abs(physics.speed).toFixed(1)} kn`;
+    const _sp = physics.telegraphSpecial && window.TG_SPECIAL ? TG_SPECIAL[physics.telegraphSpecial] : null;
+    _uiTxt($('ui-telegraph'), `Telegraph: ${_sp ? `${_sp.en} (${_sp.jp})` : labels[physics.telegraphState]}`);
+    const _eng = $('ui-engine');
+    if (_eng) {
+        const r = physics.propRpm || 0;
+        const pct = Math.round(Math.abs(r) * 100);
+        _uiTxt(_eng, (Math.abs(r) < 0.005)
+            ? `Screw    : STOP${(typeof _engineReverseHold !== 'undefined' && _engineReverseHold > 0) ? ' (逆転操作中)' : ''}`
+            : `Screw    : ${r > 0 ? 'AHEAD' : 'ASTERN'} ${pct}%`);
+    }
+    _uiTxt($('ui-speed'), `Speed    : ${Math.abs(physics.speed).toFixed(1)} kn`);
 
     let rudderStr = '0.0°';
     if (physics.rudderAngle < -2) rudderStr = '< '.repeat(Math.floor(Math.abs(physics.rudderAngle) / 5)) + physics.rudderAngle.toFixed(1) + '°';
     else if (physics.rudderAngle > 2) rudderStr = physics.rudderAngle.toFixed(1) + '°' + ' >'.repeat(Math.floor(Math.abs(physics.rudderAngle) / 5));
-    $('ui-rudder').innerText = `Rudder   : ${rudderStr}`;
+    _uiTxt($('ui-rudder'), `Rudder   : ${rudderStr}`);
 
-    let deg = Math.floor(physics.heading) % 360; if (deg < 0) deg += 360;
-    $('ui-heading').innerText = `Heading  : ${deg}°`;
+    // 羅針盤の方位（右に回ると増える）。physics.heading は上から見て左回りに増えるので逆にする
+    let deg = Math.floor((360 - physics.heading % 360) % 360); if (deg < 0) deg += 360; if (deg >= 360) deg -= 360;
+    // 世界を航海するモード：その場所での真方位（49-autopilot.js）
+    if (window.world && world.mode === 'world' && typeof worldTrueCompass === 'function') deg = Math.floor(worldTrueCompass()) % 360;
+    _uiTxt($('ui-heading'), `Heading  : ${deg}°`);
 
     const gameHours = Math.floor(physics.gameTime / (physics.dayDuration / 24)) % 24;
     const gameMinutes = Math.floor((physics.gameTime % (physics.dayDuration / 24)) / (physics.dayDuration / 24 / 60));
-    $('ui-time').innerText = `Time     : ${gameHours.toString().padStart(2, '0')}:${gameMinutes.toString().padStart(2, '0')}`;
+    _uiTxt($('ui-time'), `Time     : ${gameHours.toString().padStart(2, '0')}:${gameMinutes.toString().padStart(2, '0')}${typeof calISO === 'function' ? '  ' + calISO(calDayNow()) : ''}`);
 
-    $('ui-roll').innerText = `Roll     : ${(physics.roll * 180 / Math.PI).toFixed(1)}°`;
-    $('ui-pitch').innerText = `Pitch    : ${(physics.pitch * 180 / Math.PI).toFixed(1)}°`;
+    _uiTxt($('ui-roll'), `Roll     : ${(physics.roll * 180 / Math.PI).toFixed(1)}°`);
+    _uiTxt($('ui-pitch'), `Pitch    : ${(physics.pitch * 180 / Math.PI).toFixed(1)}°`);
+
+    // 天気・風・位置（右上の TELEMETRY の下の段）
+    const _w = window.weather;
+    const _wx = $('ui-weather');
+    if (_wx) {
+        let lab = '—';
+        if (_w && _w.enabled) {
+            const pr = (typeof weatherPresetByKey === 'function') ? weatherPresetByKey(_w.presetKey) : null;
+            lab = (_w.presetKey === 'custom') ? 'カスタム' : ((pr && pr.label) || _w.presetKey || '—');
+            const extra = [];
+            if ((_w.rain || 0) > 0.05) extra.push('雨');
+            if ((_w.fog || 0) > 0.3) extra.push('霧');
+            if (extra.length) lab += '（' + extra.join('・') + '）';
+        } else lab = '固定（天候オフ）';
+        _uiTxt(_wx, `Weather  : ${lab}`);
+    }
+    const _wd = $('ui-wind');
+    if (_wd) {
+        const dir = (((Math.round(physics.windDir || 0)) % 360) + 360) % 360;
+        const pts = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+        const ms = Math.max(0, physics.windSpeed || 0);
+        _uiTxt(_wd, `Wind     : ${dir}° ${pts[Math.round(dir / 22.5) % 16]}  ${ms.toFixed(1)} m/s (${(ms * 1.9438).toFixed(0)} kn)`);
+    }
+    const _ps = $('ui-pos'), _pp = $('ui-port');
+    if (_ps) {
+        if (window.world && world.mode === 'world' && typeof worldShipLatLon === 'function') {
+            // 世界を航海するモード：緯度・経度と、いちばん近い港
+            const ll = worldShipLatLon();
+            _uiTxt(_ps, `Position : ${worldFmtLatLon(ll.lat, ll.lon)}`);
+            if (_pp) {
+                if (!updateUI._np || performance.now() - updateUI._npT > 2000) { updateUI._np = worldNearestPort(ll.lat, ll.lon); updateUI._npT = performance.now(); }
+                const np = updateUI._np, T = window.terrain;
+                const depth = (T && T.depth != null) ? `  水深 ${Math.max(0, T.depth).toFixed(0)} m` : '';
+                if (_pp.style.display) _pp.style.display = '';
+                // キールの下の余裕が 5m を切ったら黄色で知らせる
+                const ukc = (T && T.depth != null && typeof worldShipDraft === 'function') ? T.depth - worldShipDraft() : 99;
+                const shallow = !(T && T.grounded) && (ukc < 5 || (T && (T._bowWarn || T._sternWarn)));
+                { const c = (T && T.grounded) ? '#ff8a73' : shallow ? '#ffd35a' : '#c9f0ff'; if (_pp._col !== c) { _pp._col = c; _pp.style.color = c; } }
+                // 座礁中：機関をかけ続けると、スクリューの水流で船底の下の砂が流れて抜け出せる（44-world-terrain.js の _gcDigUpdate）
+                const ds = (T && T.grounded && typeof groundDigState === 'function') ? groundDigState() : '';
+                const dig = !(T && T.grounded) ? '' : ds === 'working' ? '（水流で船底の砂を流しています）' : ds === 'blocked' ? '（機関では抜け出せません。タグで引き出してください）' : '（機関をかけ続けると砂が流れて抜け出せます）';
+                _uiTxt(_pp, (T && T.grounded) ? `⚠ 座礁しています${depth}${dig}` : shallow ? `⚠ 浅い！${depth}（キール下 ${Math.max(0, ukc).toFixed(1)} m）` : `Port     : ${np ? np.port.name + ' ' + (np.dist / 1852).toFixed(1) + ' NM' : '—'}${depth}`);
+            }
+        } else {
+            // 海だけのモード：出発点からの位置[m]
+            const x = physics.cgWorldX || 0, z = physics.cgWorldZ || 0;
+            const nm = Math.hypot(x, z) / 1852;
+            _uiTxt(_ps, `Position : X ${x.toFixed(0)}  Z ${z.toFixed(0)} m (${nm.toFixed(2)} NM)`);
+            if (_pp && _pp.style.display !== 'none') _pp.style.display = 'none';
+        }
+    }
 }
 
 init();
