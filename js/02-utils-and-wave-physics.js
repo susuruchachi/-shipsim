@@ -247,6 +247,29 @@ function wakeScaleRatioFor(speedKn) {
     const v = Math.abs(speedKn || 0) * 0.514444, sr = (physics.scale || 1) / 12.0;
     return Math.max(sr, Math.min(0.5, 6.0 * sr, 0.12 * v * v / 9.81));
 }
+// 船首の波の高さ[m]（引き波の船首の波源のすぐそばの振幅：getWakeHeight の amp と同じ式で、距離・時間の減衰なし）
+function bowWaveAmplitude(speedKn) {
+    const kn = Math.abs(speedKn || 0);
+    if (kn < 0.5) return 0;
+    return kn * 0.028 * Math.min(1.4, Math.max(0.45, Math.sqrt(kn / 20.0))) * (physics.bowFullness || 1) * wakeScaleRatioFor(kn);
+}
+// 船が自分で立てている波の、船体に沿った水面の高さ[m]（a：船体の中ほどから前へ[m]、halfLen：半長[m]）。
+// 進む向きの端（船首）に山、そこから後ろへ波長 2πv²/g で山・谷が続く（船の後ろに残る横波と同じ）。
+// 波長が船より長い（小さな船が速く走る）と、船首は山・船尾は谷に入って、船首が持ち上がり船尾が沈む。
+// 船の長さの割に遅い船（フルード数 0.25 まで：大きな船のふだんの速さ）では、山と谷が船体の上で打ち消しあうので
+// 何もしない（今までどおり）。0.4 で全部。波長は船の長さの 2.5 倍までとする（それより速いと、波は船体の下で
+// ほぼ平らになって船首が上がらなくなるが、実際の小さな船は速いほど船首を上げて滑る）。
+// 船体のすぐ脇の波は、広がっていった引き波より高いので、船首の波の高さの 1.5 倍にする
+function selfWaveAlongHull(a, halfLen, speedKn) {
+    const v = Math.abs(speedKn || 0) * 0.514444;
+    const fr = v / Math.sqrt(9.81 * Math.max(0.5, 2 * halfLen));
+    const on = THREE.MathUtils.smoothstep(fr, 0.25, 0.40);
+    if (!(on > 0)) return 0;
+    const H = 1.5 * bowWaveAmplitude(speedKn) * on;
+    const lam = Math.min(2 * Math.PI * v * v / 9.81, 5 * halfLen), k = 2 * Math.PI / Math.max(0.5, lam);
+    const d = speedKn >= 0 ? halfLen - a : a + halfLen;          // 進む向きの端からの距離
+    return H * Math.cos(k * Math.max(0, d));
+}
 const _wakeHRes = { y: 0, foam: 0 };   // 使い回す（呼び出し側は .y をすぐ読むだけ）
 function getWakeHeight(x, z, t) {
     const historyLen = shipHistory.length;

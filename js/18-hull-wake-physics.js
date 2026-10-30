@@ -1822,6 +1822,7 @@ function computeHullBuoyancyPhysics(cgWorldX, cgWorldZ, rotY, pitchAngle, shipY,
     // 各サンプル区間が船体上で占める実世界での長さ[m]（等幅ビンなので一定）
     const deltaZWorld = (2 * len) / BUOY_SEG_COUNT;
 
+    const selfWaveSpd = (typeof selfWaveAlongHull === 'function' && Math.abs(physics.speed || 0) > 0.5) ? physics.speed : 0;
     let volSubmerged = 0;        // m³
     let Awp = 0;                 // m²
     let momentVolAboutCG = 0;    // m⁴（× ρg でN・mのトルクになる）
@@ -1840,7 +1841,8 @@ function computeHullBuoyancyPhysics(cgWorldX, cgWorldZ, rotY, pitchAngle, shipY,
         // 要望に基づき、ここだけ引き波を含めた水面高さを使うようにする。
         // これにより、船首が持ち上げた波が(伝播して)船体を押し上げ／沈める形で
         // ピッチにフィードバックされ、双方向の関係になる。
-        const waveY = getWaveHeight(px, pz, t, false);
+        // 船が自分で立てている波（船首の山・その後ろの谷）も足す：速く走る小さな船は船首が持ち上がる（02-utils-and-wave-physics.js）
+        const waveY = getWaveHeight(px, pz, t, false) + (selfWaveSpd ? selfWaveAlongHull(alongDistW, len, selfWaveSpd) : 0);
 
         const baseKeelY = shipY - waterlineYScaled + (hp.designWaterlineY - sl.draft) * physScale;
         const keelY = baseKeelY - alongDistW * Math.sin(pitchAngle);
@@ -3228,7 +3230,10 @@ function emitTrafficWakeParticles(t, dt) {
         const [dist, S] = cand[k];
         const H = _tfHullOf(S); if (!H) continue;
         const v = S.v || 0, dir = v >= 0 ? 1 : -1, kn = Math.abs(v) / 0.514444;
-        const L = S.L, HL = L / 2;
+        const L = S.L;
+        // 喫水線の前後の端（保存した船はモデルの喫水線の形から：59-traffic.js の _tfWaterlineProfile）
+        const bowA = H.bowA !== undefined ? H.bowA : L / 2, sternEnd = H.sternA !== undefined ? H.sternA : -L / 2;
+        const HL = (bowA - sternEnd) / 2, midA = (bowA + sternEnd) / 2;
         // 粒の大きさの基準（自分の船の sizeScale と同じくらい。船の長さで少しだけ変える）
         const sz = Math.max(0.15, Math.min(0.8, 0.38 * Math.sqrt(L / 150)));
         const hug = sz * 0.10;
@@ -3239,13 +3244,13 @@ function emitTrafficWakeParticles(t, dt) {
         A.wl += kn * 6.0 * f * dt; A.tip += kn * 5.0 * f * dt; A.curl += (kn > 4 ? kn * kn * 0.22 : 0) * f * dt; A.st += kn * 4.0 * f * dt;
         const ex = (a, side, out) => { const w = H.hw(a) + hug + (out || 0); return [H.x + H.fx * a + H.sx * side * w, H.z + H.fz * a + H.sz * side * w]; };
         const vShipX = H.fx * v, vShipZ = H.fz * v;
-        const tipA = HL * 0.97 * dir, sternA = -HL * 0.97 * dir;        // （後進のときは前後を入れ替える）
+        const tipA = midA + HL * 0.97 * dir, sternA = midA - HL * 0.97 * dir;        // （後進のときは前後を入れ替える）
         // 喫水線全体の泡：船体に沿って後ろへ流れる
         let n = Math.floor(A.wl); A.wl -= n;
         for (; n > 0; n--) {
-            const a = (Math.random() * 1.9 - 0.95) * HL, side = Math.random() < 0.5 ? -1 : 1;
+            const a = midA + (Math.random() * 1.9 - 0.95) * HL, side = Math.random() < 0.5 ? -1 : 1;
             const [x, z] = ex(a, side);
-            const back = (0.12 + 0.28 * spdF) * sz * (0.3 + 0.7 * Math.min(1, (a * dir / HL + 1) * 0.5 + 0.3));
+            const back = (0.12 + 0.28 * spdF) * sz * (0.3 + 0.7 * Math.min(1, ((a - midA) * dir / HL + 1) * 0.5 + 0.3));
             const out = (0.02 + 0.04 * spdF) * sz;
             spawn(x, z, Math.pow(Math.random(), 2) * sz * 0.7, 0, -H.fx * back * dir + H.sx * side * out, 0.005 * sz, -H.fz * back * dir + H.sz * side * out, sz);
         }
@@ -3274,7 +3279,7 @@ function emitTrafficWakeParticles(t, dt) {
         // 船尾：スクリューでかき回された白い泡が、船の幅ほどに広がって後ろに残る（引き波の筋）
         n = Math.floor(A.st); A.st -= n;
         for (; n > 0; n--) {
-            const lat = (Math.random() - 0.5) * S.B * 0.9, a = sternA - dir * Math.random() * L * 0.03;
+            const lat = (Math.random() - 0.5) * (H.B || S.B) * 0.9, a = sternA - dir * Math.random() * L * 0.03;
             const x = H.x + H.fx * a + H.sx * lat, z = H.z + H.fz * a + H.sz * lat;
             const spread = (Math.random() - 0.5) * 0.2 * sz;
             spawn(x, z, 0, 0, vShipX * 0.15 + H.sx * spread, 0.008 * sz, vShipZ * 0.15 + H.sz * spread, sz);

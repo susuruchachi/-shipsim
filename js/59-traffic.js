@@ -3352,6 +3352,8 @@ async function _tfLoadProto(v) {
             aft: [n('mastAftX', 0), n('mastAftY', top), n('mastAftZ', box.min.z + len * 0.35)],
             stern: [n('sternX', 0), n('sternY', wl + 0.2 * (top - wl)), n('sternZ', box.min.z)],
         };
+        // 喫水線の形（泡・しぶきを出す所：_tfHullOf）。まとめる前に、モデルの形から
+        const wlProf = _tfWaterlineProfile(inner, wl, (box.min.x + box.max.x) / 2, (box.min.z + box.max.z) / 2);
         // 部品を材質ごとに 1 つの形へまとめる（描く回数が、部品の数から材質の数に減る：本描画・光のにじみ・影・海面の反射のそれぞれで）
         _tfMergeProto(inner);
         // 空の見え方（プロムナードの奥などを暗く）を、自分の船と同じ方法で少しずつ焼き込む（60・61）
@@ -3361,7 +3363,7 @@ async function _tfLoadProto(v) {
         const glowMult = Number.isFinite(+lt.windowGlowMult) && lt.windowGlowMult !== '' && lt.windowGlowMult != null ? Math.max(0, +lt.windowGlowMult) : 1;
         // もともと空の画像を覚えておく（処理落ちのあとに、壊れたと数えない：42-texture-guard.js）
         if (typeof texNoteBlankImages === 'function') texNoteBlankImages(inner, 3000);
-        Object.assign(P, { state: 'ok', glow: [...glow], glowMult, obj: inner, S, wl, cx: (box.min.x + box.max.x) / 2, cz: (box.min.z + box.max.z) / 2, len, wid: box.max.x - box.min.x, keel: box.min.y, funnels, lamps, bytes: _tfProtoBytes(inner) });
+        Object.assign(P, { state: 'ok', glow: [...glow], glowMult, obj: inner, S, wl, wlProf, cx: (box.min.x + box.max.x) / 2, cz: (box.min.z + box.max.z) / 2, len, wid: box.max.x - box.min.x, keel: box.min.y, funnels, lamps, bytes: _tfProtoBytes(inner) });
         traffic.protoBytes = traffic.protoBytes || new Map(); traffic.protoBytes.set(v.key, P.bytes);
     } catch (e) {
         console.warn('保存した船のモデルを読めませんでした：' + v.name, e);
@@ -3834,11 +3836,79 @@ function _tfShapeHW(S, a) {
     if (u >= 1) return 0;
     return S.B / 2 * Math.sqrt(Math.max(0, 1 - Math.pow(u, a > 0 ? 2.5 : 6)));
 }
+// 保存した船の喫水線の形：モデルの喫水線の高さ（wl）で船体を切った線の、前後（z）ごとの半幅（モデルの座標。z は cz から）。
+// 以前は保存した船も、長さと船の種類の幅の割合から作った楕円で泡・しぶきを出していたので、フレアで喫水線より
+// 甲板の方が広い船・船首尾が張り出した船（チュートニックⅡなど）では、泡が船体から離れた所に出ていた
+const TF_WL_BINS = 96;
+function _tfWaterlineProfile(inner, wl, cx, cz) {
+    inner.updateMatrixWorld(true);
+    const inv = new THREE.Matrix4().copy(inner.matrixWorld).invert(), m = new THREE.Matrix4(), bb = new THREE.Box3();
+    const A = new THREE.Vector3(), B = new THREE.Vector3(), C = new THREE.Vector3();
+    const xs = [], zs = [];
+    const cross = (p, q, yp, yq) => {
+        if ((yp > 0) === (yq > 0)) return;
+        const t = yp / (yp - yq);
+        xs.push(Math.abs(p.x + (q.x - p.x) * t - cx)); zs.push(p.z + (q.z - p.z) * t - cz);
+    };
+    inner.traverse(o => {
+        if (!o.isMesh || !o.geometry || !o.geometry.attributes.position) return;
+        m.multiplyMatrices(inv, o.matrixWorld);
+        // 喫水線の高さにかからない部品（上部構造など）は飛ばす
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+        bb.copy(o.geometry.boundingBox).applyMatrix4(m);
+        if (bb.min.y > wl || bb.max.y < wl) return;
+        const pos = o.geometry.attributes.position, idx = o.geometry.index;
+        const n = Math.floor((idx ? idx.count : pos.count) / 3);
+        for (let i = 0; i < n; i++) {
+            A.fromBufferAttribute(pos, idx ? idx.getX(3 * i) : 3 * i).applyMatrix4(m);
+            B.fromBufferAttribute(pos, idx ? idx.getX(3 * i + 1) : 3 * i + 1).applyMatrix4(m);
+            C.fromBufferAttribute(pos, idx ? idx.getX(3 * i + 2) : 3 * i + 2).applyMatrix4(m);
+            const ya = A.y - wl, yb = B.y - wl, yc = C.y - wl;
+            if ((ya > 0 && yb > 0 && yc > 0) || (ya <= 0 && yb <= 0 && yc <= 0)) continue;
+            cross(A, B, ya, yb); cross(B, C, yb, yc); cross(C, A, yc, ya);
+        }
+    });
+    if (zs.length < 8) return null;
+    let a0 = Infinity, a1 = -Infinity;
+    for (const z of zs) { if (z < a0) a0 = z; if (z > a1) a1 = z; }
+    if (!(a1 - a0 > 1e-4)) return null;
+    const N = TF_WL_BINS, hw = new Float32Array(N + 1).fill(-1);
+    for (let i = 0; i < zs.length; i++) { const k = Math.round((zs[i] - a0) / (a1 - a0) * N); if (xs[i] > hw[k]) hw[k] = xs[i]; }
+    // 点の無い区切りは、前後の区切りから
+    let last = -1;
+    for (let k = 0; k <= N; k++) {
+        if (hw[k] < 0) continue;
+        if (last < 0) for (let j = 0; j < k; j++) hw[j] = hw[k];
+        else for (let j = last + 1; j < k; j++) hw[j] = hw[last] + (hw[k] - hw[last]) * (j - last) / (k - last);
+        last = k;
+    }
+    if (last < 0) return null;
+    for (let j = last + 1; j <= N; j++) hw[j] = hw[last];
+    hw[0] = 0; hw[N] = 0;
+    let hwMax = 0; for (const v of hw) hwMax = Math.max(hwMax, v);
+    return { a0, a1, hw, hwMax };
+}
+// 喫水線の形の半幅（世界の m）：a は置いた点から前へ[m]
+function _tfProfHW(P, a) {
+    const W = P.wlProf, f = (a / P.S - W.a0) / (W.a1 - W.a0) * TF_WL_BINS;
+    if (!(f > 0) || f >= TF_WL_BINS) return 0;
+    const i = f | 0, t = f - i;
+    return (W.hw[i] + (W.hw[i + 1] - W.hw[i]) * t) * P.S;
+}
 function _tfHullOf(S) {
     const loc = _tfLocal(S, {});
     if (!Number.isFinite(loc.x)) return null;
     const yaw = _tfYaw(S, loc);
-    return { x: loc.x, z: loc.z, fx: Math.sin(yaw), fz: Math.cos(yaw), sx: Math.cos(yaw), sz: -Math.sin(yaw), HL: S.L / 2, hw: a => _tfShapeHW(S, a), S };
+    const H = { x: loc.x, z: loc.z, fx: Math.sin(yaw), fz: Math.cos(yaw), sx: Math.cos(yaw), sz: -Math.sin(yaw), HL: S.L / 2, hw: a => _tfShapeHW(S, a), S,
+        bowA: S.L / 2, sternA: -S.L / 2, B: S.B };
+    // 保存した船：モデルの喫水線の形（_tfWaterlineProfile）
+    const P = S.saved && typeof _tfProto !== 'undefined' ? _tfProto.get(S.saved.key) : null;
+    if (P && P.state === 'ok' && P.wlProf) {
+        H.bowA = P.wlProf.a1 * P.S; H.sternA = P.wlProf.a0 * P.S;
+        H.HL = Math.max(H.bowA, -H.sternA); H.B = 2 * P.wlProf.hwMax * P.S;
+        H.hw = a => _tfProfHW(P, a);
+    }
+    return H;
 }
 function _tfHullOfPlayer() {
     if (typeof shipGroup === 'undefined' || !shipGroup || typeof _tugShipCtx !== 'function') return null;
