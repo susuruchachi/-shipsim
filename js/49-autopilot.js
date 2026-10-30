@@ -76,8 +76,8 @@ window.worldTrueCompass = worldTrueCompass;
 // 作り込んだ港（川・入江の奥の港）の中の区間は、実際の港と同じようにタグが付き添う
 function _apInDetail(q) { return !!(q && world.kind === 'real' && typeof _rwDetailBoxOf === 'function' && _rwDetailBoxOf(q.lat, q.lon)); }
 function _apTurnRadius() { return 12 * (physics.scale || 1) * (physics.turningRadiusFactor || 5) * 1.4; }
-// 機関を止めてから止まるまでに進む距離[m]（速さ v はノット。機関を止めると速さは 0.3/排水量 の割合で落ちる：17-main-loop.js）
-function apStopDist(v) { return Math.max(0, v || 0) * 0.514444 * Math.max(0.05, physics.mass || 1) / 0.3; }
+// 機関を止めてから止まるまでに進む距離[m]（速さ v はノット。機関を止めると速さは shipThrustRate の割合で落ちる：17-main-loop.js）
+function apStopDist(v) { return Math.max(0, v || 0) * 0.514444 / shipThrustRate(); }
 function _apHeadingForTrue(course) { return _apNorthHeading() - course; }
 
 // ── 港の航路の上の点（港の点から海の方へ a[m]）──
@@ -1656,7 +1656,7 @@ function _apChase(dt) {
     const vT = _apChaseVT(S), KN = 0.514444;
     const vMax = Math.max(0.5, (physics.maxSpeed || 20) * KN * 0.97), v = (physics.speed || 0) * KN;
     const pf = (typeof enginePowerFactor === 'function') ? enginePowerFactor() : 1;
-    const tau = Math.max(20, Math.max(0.05, physics.mass || 1) / (0.3 * pf));     // 機関で速さが変わる時間[秒]（17-main-loop.js）
+    const tau = Math.max(20, 1 / (shipThrustRate() * pf));     // 機関で速さが変わる時間[秒]（17-main-loop.js）
     // 止まっている（ゆっくりの）相手：持ち場を通る相手と同じ向きの線（寄る線）に乗って、後ろからまっすぐ寄る。
     // 寄る線より前にいるときは、外側（回れる広さの 2 倍だけ横）の線を逆向きに下がり、十分後ろへ出たら U ターンして寄る線へ。
     //（点を目指すと、回れる広さより近い点のまわりを回り続けてしまう。線なら、どこからでも乗れる）

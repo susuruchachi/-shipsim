@@ -953,7 +953,7 @@ function _haControl(target, dt, opt) {
     const vmax = Math.max(0.25, opt.vA || 0.5);
     harborAuto.t += dt;
     const pf = (typeof enginePowerFactor === 'function') ? enginePowerFactor() : 1;
-    const kAcc = 0.3 / Math.max(0.1, physics.mass || 1) * pf;                    // 機関の速さの目標へ近づく割合[1/秒]（17-main-loop.js）
+    const kAcc = shipThrustRate() * pf;                                          // 機関の速さの目標へ近づく割合[1/秒]（17-main-loop.js）
     const vSlow = 0.15 * Math.max(1, physics.maxSpeed || 13);                    // 最微速後進の速さの目標[ノット]
     const v = Math.abs(vA) * 0.514, aBrake = Math.max(0.002, (Math.abs(vA) + vSlow) * kAcc * 0.514);
     const dStop = v * v / (2 * aBrake) + v * 7 + 2;                             // 逆転までの遅れ（約 7 秒）の分も

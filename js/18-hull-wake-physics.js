@@ -1583,26 +1583,23 @@ const MASS_TONS_PER_UNIT = 1000;
 
 // 排水量を自動計算し、physics.massおよびUIスライダーへ反映する。
 // 戻り値: 計算できた排水量(トン)。計算不可の場合はnull。
+// 以前は計算した値をスライダーの範囲（50〜50万トン）に切り詰めて使っていたため、全長 10m ほどの船（数トン）は
+// 50 トンにされて沈み、とても大きな船は 50 万トンにされて浮き上がっていた。物理には計算したままの値を使い、
+// スライダーの位置だけ範囲内に収める
 function applyDisplacementToMass() {
     const tons = estimateDisplacementTons();
     if (tons === null || !(tons > 0)) return null;
     const massSlider = $('mass-slider'), massNum = $('mass-num');
-    let massVal = tons / MASS_TONS_PER_UNIT;
-    if (massSlider) {
-        const sliderMax = parseFloat(massSlider.max);
-        const clamped = THREE.MathUtils.clamp(massVal, parseFloat(massSlider.min), sliderMax);
-        if (clamped !== massVal) {
-            console.warn(`[ShipConfig] 排水量${tons.toFixed(0)}トンがmassスライダーの上限` +
-                `(${(sliderMax * MASS_TONS_PER_UNIT).toFixed(0)}トン相当)を超えたため切り詰められました。` +
-                `喫水より浮き上がる場合はmass-sliderのmax属性を引き上げてください。`);
-        }
-        massVal = clamped;
-    }
+    const massVal = tons / MASS_TONS_PER_UNIT;
     physics.mass = massVal;
-    if (massSlider) massSlider.value = massVal;
-    if (massNum) massNum.value = massVal.toFixed(2);
+    if (massSlider) massSlider.value = THREE.MathUtils.clamp(massVal, parseFloat(massSlider.min), parseFloat(massSlider.max));
+    if (massNum) massNum.value = formatShipMass(massVal);
     updateDisplacementReadout(tons);
     return tons;
+}
+// 排水量（千トン）の表示：小さな船でも 0 にならないよう、有効数字 3 桁は残す
+function formatShipMass(v) {
+    return v >= 1 ? v.toFixed(2) : String(+v.toPrecision(3));
 }
 
 // 排水量の読み取り専用表示を更新する（自動計算ボタン・各種スライダー変更時に呼ばれる）。
@@ -2554,7 +2551,9 @@ function emitHullWakeParticles(t, dt) {
 
     const scaleRatio = halfLen / 6.0;
     // 細かく見せるためにサイズを抑制 (0.55 を掛けて小さく)
-    const sizeScale  = THREE.MathUtils.clamp(scaleRatio * 0.38, 0.10, 2.0);
+    // 船の実際の大きさ（全長 269m で今までと同じ）に比例させる。以前はモデルの中の長さ（いつも 12 ほど）だけで決めていて、
+    // 全長 10m の船でも 270m の船と同じ大きさのしぶき・泡が出ていた
+    const sizeScale  = THREE.MathUtils.clamp(scaleRatio * 0.38 * WS / 22.42, 0.006, 2.0);
     const spdFactor  = Math.min(spd / 6.0, 1.0);
 
     // 船体境界に沿わせるための統一オフセット（≒パーティクル半径分、外側へ）。

@@ -238,6 +238,15 @@ function sanitizePhysics() {
     }
 }
 
+// 引き波の大きさの倍率（波の速さ・波長・高さ・届く距離にかける）。全長 144m（scale 12）で 1、船の長さに比例。
+// ただし小さな船も、その速さで立つ波（波長は速さ² に比例して、船の長さには寄らない）よりずっと小さくはならないよう、
+// 速さで決まる下限をつける（以前は全長 10m の船が 10 ノットで 1cm ほどの波しか立たなかった）。
+// 下限は 0.5 まで、かつ船の長さに比例した倍率の 6 倍まで（船よりずっと大きな波の模様にならないように。
+// 全長 72m より大きな船は今までと同じ）。GPU 版（04-scene-and-water-init.js の wakeContribution）と同じ式にすること
+function wakeScaleRatioFor(speedKn) {
+    const v = Math.abs(speedKn || 0) * 0.514444, sr = (physics.scale || 1) / 12.0;
+    return Math.max(sr, Math.min(0.5, 6.0 * sr, 0.12 * v * v / 9.81));
+}
 const _wakeHRes = { y: 0, foam: 0 };   // 使い回す（呼び出し側は .y をすぐ読むだけ）
 function getWakeHeight(x, z, t) {
     const historyLen = shipHistory.length;
@@ -245,9 +254,6 @@ function getWakeHeight(x, z, t) {
     if (historyLen < 2) return _wakeHRes;
 
     let wakeY = 0, wakeFoam = 0;
-    const scaleRatio = physics.scale / 12.0;
-    const maxDist2 = 8000.0 * scaleRatio * scaleRatio;
-    const maxDist = Math.sqrt(maxDist2);
 
     // v105: GPU版(wakeHF, 04-scene-and-water-init.js)と同じロジックに揃えた。
     // 波長のピッチ周期連動は物理計算(浮力)にも効かせるため、このCPU版でも
@@ -276,6 +282,10 @@ function getWakeHeight(x, z, t) {
         if (dt <= 0) continue;
         const absSpeed = Math.abs(p.speed);
         if (absSpeed < 0.5) continue;
+        // 波の大きさの倍率は、その波を出したときの速さで（wakeScaleRatioFor）
+        const scaleRatio = wakeScaleRatioFor(absSpeed);
+        const maxDist2 = 8000.0 * scaleRatio * scaleRatio;
+        const maxDist = Math.sqrt(maxDist2);
 
         // Quick bounding-box reject before computing per-source trig
         const dxp = x - p.x, dzp = z - p.z;

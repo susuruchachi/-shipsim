@@ -5,6 +5,11 @@ const HULL_WET_FULL = 0.25;
 const AIR_DAMP_FRAC = 0.15;
 // 空中で落ちる速さの上限[m/s]（数の上の安全のためだけ）
 const VY_FREE_MAX = 60;
+// 機関の推力（と水の抵抗）で、速さが目標へ近づく割合[1/秒]：0.3 / 排水量[千トン]（重い船ほどゆっくり）。
+// 小さな船ほど速くなるが、全長 10m ほど（数トン）では 100 分の 1 秒で目標の速さになり、計算の刻みより速くて
+// 速さが暴れるので、近づく時間は THRUST_TAU_MIN 秒より短くしない（49-autopilot.js・50-harbor-auto.js も同じ）
+const THRUST_TAU_MIN = 2.5;
+function shipThrustRate() { return Math.min(0.3 / Math.max(1e-4, physics.mass || 1), 1 / THRUST_TAU_MIN); }
 function animate() {
     requestAnimationFrame(animate);
     // 描画頻度の上限（33-performance.js）。120Hz 表示の端末などで、必要以上に
@@ -183,7 +188,7 @@ function animate() {
         // 推進器の加速度（船首尾軸に沿った推力）。この後の heave 計算で、
         // 船体ピッチ角だけ傾けて鉛直成分も加えるために保持しておく。
         // 機関の馬力（56-engines.js）が見積もりより大きければ加速も速い
-        const _kThrust = (0.3 / physics.mass) * ((typeof enginePowerFactor === 'function') ? enginePowerFactor() : 1);
+        const _kThrust = shipThrustRate() * ((typeof enginePowerFactor === 'function') ? enginePowerFactor() : 1);
         // 船体が水から出ている間は、推力も水の抵抗も無い（飛んでいる間は前後の速さを保つ。physics.hullWet：前の刻みの、水に触れている度合い）
         const _wetPrev = isDesignMode ? 1 : (Number.isFinite(physics.hullWet) ? physics.hullWet : 1);
         const thrustAccMag = (propTargetSpeed - physics.speed) * _kThrust * _wetPrev;
@@ -369,7 +374,7 @@ function animate() {
             window._seaHs = _hsNow;
             const maxBowDragLossFrac = (typeof bowDragLossCap === 'function')
                 ? bowDragLossCap(_hsNow, 12.0 * physics.scale) : 0.25;
-            const thrustAuthority = 0.3 / Math.max(0.05, physics.mass);
+            const thrustAuthority = shipThrustRate();
             // スラミングによる減速（船首・船尾共通、SLAM_SPEED_LOSS_INTERVAL 秒に1回まで）。
             // 1回の減速量は、強いスラミングが続いてもつり合いの速度低下が
             // SLAM_SPEED_LOSS_EQ 程度に収まるよう、推進の立ち上がりの速さから決める。

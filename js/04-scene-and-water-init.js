@@ -932,7 +932,7 @@ function createWater() {
         waterUniforms.hullBoundCenter.value.set(cx, cz);
         waterUniforms.hullBoundRadius.value = hp.halfLen * physScale * 1.6 + 5.0;
         // 泡帯の幅は船体サイズ追従（係数0.037は全長60m級で従来の固定値1.1mになる値）
-        waterUniforms.hullFoamWidth.value = Math.min(2.4, Math.max(0.4, hp.halfLen * physScale * 0.037));
+        waterUniforms.hullFoamWidth.value = Math.min(2.4, Math.max(0.08, hp.halfLen * physScale * 0.037));   // （小さな船は細く：以前は 0.4m より細くしなかった）
         // 船の中の水面を消すときの、縁からの余裕（輪郭の点の間の弦は船体の内側を通るので小さくてよい）
         waterUniforms.hullHoleMargin.value = 0.12;
 
@@ -1219,7 +1219,10 @@ function createWater() {
                 float wakeY = 0.0;
                 float wakeFoam = 0.0;
                 float physScale = physScaleU;
-                float scaleRatio = physScale / 12.0;
+                // 引き波の大きさの倍率：船の長さに比例。ただし速さで決まる下限（0.5 まで・船の長さの倍率の 6 倍まで）をつける
+                // （CPU 版 02-utils-and-wave-physics.js の wakeScaleRatioFor と同じ式にすること）
+                float wv = abs(speed) * 0.514444, wsr = physScale / 12.0;
+                float scaleRatio = max(wsr, min(min(0.5, 6.0 * wsr), 0.12 * wv * wv / 9.81));
                 // v106: 波源(船首・船尾)の位置を、固定オフセット(6.0*physScale)ではなく
                 // 実際の船体スキャンから得た半長(hullHalfLenU)に合わせる。
                 // 従来の固定値は喫水線が実際に閉じる先端よりだいぶ手前になっている

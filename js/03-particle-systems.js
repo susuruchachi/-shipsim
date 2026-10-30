@@ -496,12 +496,14 @@ function createWakeParticleSystem() {
                     // しまっており、baseSizeが未初期化のままclampされ、速度・経過時間に
                     // 関係なく常に最小値(4.0)付近に固定されていた。これが「近くで見ると
                     // しぶきが小さい」の直接の原因だったため、計算式を復元する。
-                    baseSize = (5.0 + velLen * 22.0) * (1.0 - 0.4 * age) * max(0.4, sizeScale);
-                    baseSize = clamp(baseSize, 4.0, 60.0);
+                    // （小さな船では小さく：以前は 0.4（全長 100m ほど）より小さくしていなかった）
+                    float szs = max(0.02, sizeScale);
+                    baseSize = (5.0 + velLen * 22.0) * (1.0 - 0.4 * age) * szs;
+                    baseSize = clamp(baseSize, 4.0 * min(1.0, szs), 60.0 * max(1.0, szs));
                 } else if (ptype > 0.5) {
-                    baseSize = (3.0 + 6.0 * (1.0 - age)) * max(0.4, sizeScale);  // spray: 小さめ
+                    baseSize = (3.0 + 6.0 * (1.0 - age)) * max(0.02, sizeScale);  // spray: 小さめ
                 } else {
-                    baseSize = (6.0 + 15.0 * age) * max(0.4, sizeScale);         // foam: やや小さめ
+                    baseSize = (6.0 + 15.0 * age) * max(0.02, sizeScale);         // foam: やや小さめ
                 }
                 // 【v74での対策が裏目に出た点の修正】
                 // 前回、「船首に近いカメラだと-mvPos.zが小さくなり要求サイズが
@@ -613,7 +615,8 @@ function animateWakeParticles(t, dt) {
     const velAttr = wakeParticleGeo.attributes.velocity;
 
     const spd = Math.abs(physics.speed);
-    const sizeScale = THREE.MathUtils.clamp(physics.scale / 22.0, 0.3, 5.0);
+    // 粒の大きさは船の大きさに比例（全長 264m で 1）。以前は 0.3（全長 80m ほど）より小さくせず、小さな船ではしぶき・泡が大きすぎた
+    const sizeScale = THREE.MathUtils.clamp(physics.scale / 22.0, 0.02, 5.0);
     wakeParticleMat.uniforms.sizeScale.value = sizeScale;
     wakeParticleMat.uniforms.uResK.value = particleResK();
     // 波切りストリーク(ptype=2)の画面空間回転をカメラの現在のアスペクト比に追従させる
@@ -636,7 +639,8 @@ function animateWakeParticles(t, dt) {
     // 使う簡易フィルタ（正確な判定はgetWaveHeight/getWakeHeight内部の
     // shipHistory各点基準のものだが、船の現在位置基準の方が広め＝安全側になる
     // ため事前フィルタとして十分）。
-    const wakeScaleRatio = (physics.scale || 1) / 12.0;
+    // （小さな船の引き波は速さで決まる大きさより小さくならない：02-utils-and-wave-physics.js の wakeScaleRatioFor。いちばん速いときで見積もる）
+    const wakeScaleRatio = (typeof wakeScaleRatioFor === 'function') ? wakeScaleRatioFor(Math.max(Math.abs(physics.speed || 0), physics.maxSpeed || 0)) : (physics.scale || 1) / 12.0;
     const wakeReachDist = Math.sqrt(8000.0 * wakeScaleRatio * wakeScaleRatio) + 6.0 * (physics.scale || 1);
     const wakeReachDist2 = wakeReachDist * wakeReachDist;
     const shipCX = physics.cgWorldX || 0, shipCZ = physics.cgWorldZ || 0;
@@ -949,7 +953,7 @@ function animateBubbles(t, dt) {
     const cap = Math.min(MAX_BUBBLES, BUBBLE_CAP[perf.quality] || 1100);
     if (bubbleIdx >= cap) bubbleIdx = 0;
 
-    const sizeScale = THREE.MathUtils.clamp(physics.scale / 22.0, 0.3, 6.0);
+    const sizeScale = THREE.MathUtils.clamp(physics.scale / 22.0, 0.02, 6.0);   // 船の大きさに比例（しぶきと同じ）
     bubbleMat.uniforms.sizeScale.value = sizeScale;
     if (renderer) bubbleMat.uniforms.uViewH.value = renderer.domElement.height || 800;
 

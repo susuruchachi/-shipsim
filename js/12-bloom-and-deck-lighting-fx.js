@@ -744,7 +744,7 @@ function animateSmoke(t, dt) {
     if (wakeParticleMat) wakeParticleMat.uniforms.lightFactor.value = window._fxLight;
     if (bubbleMat) bubbleMat.uniforms.lightFactor.value = THREE.MathUtils.clamp(Math.min(lf * 0.85, fl), 0.04, 1.0);
     // Scale puff size relative to ship size so small ships don't get oversized "moko" blobs
-    globalSmokeMat.uniforms.sizeScale.value = THREE.MathUtils.clamp(physics.scale / 22.0, 0.18, 1.6);
+    globalSmokeMat.uniforms.sizeScale.value = THREE.MathUtils.clamp(physics.scale / 22.0, 0.03, 1.6);   // （小さな船の煙も小さく：以前は 0.18 まで）
     if (globalSmokeMat.uniforms.uResK && typeof particleResK === 'function') globalSmokeMat.uniforms.uResK.value = particleResK();   // 画質で大きさが変わらないように（03）
 
     const solidOn = typeof shipSolidPushOut === 'function' && window.shipSolid && shipSolid.G;

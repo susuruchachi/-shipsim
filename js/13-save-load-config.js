@@ -52,7 +52,7 @@ function collectShipConfig() {
             buoyancyAuto: physics.restoreAuto === true,  // 自動にした復元力ベース（開くたびに計算し直す）
             draftOffset: getVal('draft-num'),
             waterlineOffsetY: getVal('waterlineY-num'),
-            mass: getVal('mass-num'),
+            mass: Number.isFinite(physics.mass) ? physics.mass : getVal('mass-num'),
             waveRoughness: getVal('roughness-num'),
             waveWidth: getVal('wavewidth-num'),
             swellStrength: getVal('swell-num'),
