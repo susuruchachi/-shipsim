@@ -177,7 +177,19 @@ function _apWorker() {
             }
             return best;
         }
+        // ── 港の施設（岸壁・防波堤・桟橋・桟橋に着いている船：44-world-terrain.js の _portLayout）──
+        //（地形には無いので、航路がその上を通って、桟橋に突っ込んでいた：シェルブールなど）
+        function obstacle(lat, lon) {
+            for (const P of OBS) {
+                const dE = (((lon - P.lon) + 540) % 360 - 180) * RAD * WORLD_R * Math.cos(P.lat * RAD), dN = (lat - P.lat) * RAD * WORLD_R;
+                if (Math.abs(dE) > 4000 || Math.abs(dN) > 4000) continue;
+                const a = dE * P.sx + dN * P.sz, b = dN * P.sx - dE * P.sz;
+                for (const c of P.rects) if (a >= c[0] && a <= c[1] && b >= c[2] && b <= c[3]) return true;
+            }
+            return false;
+        }
         function depthAt(lat, lon, u, rM) {
+            if (OBS.length && obstacle(lat, lon)) return -1;
             const d = rM ? -heightConservative(u[0], u[1], u[2], rM) : -worldHeightAt(u[0], u[1], u[2], 16);
             return CH.length ? Math.max(d, dredged(lat, lon)) : d;
         }
@@ -381,11 +393,11 @@ function _apWorker() {
             const cell = Math.max(${AP_FINE_CELL}, R / 125) / WORLD_R / RAD;
             return makeGrid(c.lat - dLat, c.lat + dLat, c.lon - dLon, c.lon + dLon, cell, true, draft);
         }
-        let NEED = 10, BAND = 100, CH = [];
+        let NEED = 10, BAND = 100, CH = [], OBS = [];
         onmessage = (ev) => {
             if (_rwHook(ev)) return;
             const q = ev.data;
-            NEED = q.need || (q.draft + 5); BAND = q.band || 100; CH = q.ports || [];
+            NEED = q.need || (q.draft + 5); BAND = q.band || 100; CH = q.ports || []; OBS = q.obs || [];
             // タグの補助がある航路（狭い所も通る）：どの区間がふつうの余裕では狭いかも返す
             const narrowOf = (pts) => {
                 if (!q.tug) return null;
@@ -496,16 +508,19 @@ function worldPlanRoute(from, to, opt) {
         const need = draft + 2 + Math.max(0.5, hs * 0.4);
         const hwM = opt.hw ? opt.hw : (typeof worldHullAt === 'function' && window.hullProfile && hullProfile.ready) ? (() => { let m = 0; for (let k = -10; k <= 10; k++) { const z = k / 10 * hullProfile.halfLen; m = Math.max(m, worldHullAt(z).hw, (typeof worldHullExtentAt === 'function' ? worldHullExtentAt(z) : 0) * (physics.scale || 1)); } return m; })() : 15;
         // 出発点・目的地のそばの港の、掘ってある航路・泊地
-        const ports = [];
+        const ports = [], obs = [];
         for (const P of worldBuildPorts()) {
             if (worldDistance(P.lat, P.lon, from.lat, from.lon) > 25000 && worldDistance(P.lat, P.lon, to.lat, to.lon) > 25000) continue;
             const T = PORT_TYPES[P.type], br = P.seaBearing * _apRad;
             ports.push({ lat: P.lat, lon: P.lon, sx: Math.sin(br), sz: Math.cos(br), basin: T.basin, quay: T.quay, depth: T.depth, chLen: worldPortChannelLen(P) });
+            // 港の施設の当たり（桟橋・防波堤・桟橋の船）も、浅い所と同じによける
+            const rects = (typeof worldPortColliders === 'function') ? worldPortColliders(P) : null;
+            if (rects && rects.length) obs.push({ lat: P.lat, lon: P.lon, sx: Math.sin(br), sz: Math.cos(br), rects });
         }
         const m = apMargins(opt.draft);
-        if (opt.wide) w.postMessage({ id, from, to, draft, need: m.need + 1.5, band: hwM + m.band + 50, ports });
-        else if (opt.tug) w.postMessage({ id, from, to, draft, need: m.needTug, band: hwM + m.bandTug, needN: m.need, bandN: hwM + m.band, tug: true, ports });
-        else w.postMessage({ id, from, to, draft, need: m.need, band: hwM + m.band, ports });
+        if (opt.wide) w.postMessage({ id, from, to, draft, need: m.need + 1.5, band: hwM + m.band + 50, ports, obs });
+        else if (opt.tug) w.postMessage({ id, from, to, draft, need: m.needTug, band: hwM + m.bandTug, needN: m.need, bandN: hwM + m.band, tug: true, ports, obs });
+        else w.postMessage({ id, from, to, draft, need: m.need, band: hwM + m.band, ports, obs });
     });
 }
 window.worldPlanRoute = worldPlanRoute;
@@ -541,6 +556,11 @@ function apDepthAt(lat, lon) {
         const T = PORT_TYPES[P.type], br = P.seaBearing * _apRad, sx = Math.sin(br), sz = Math.cos(br);
         const dE = _apDLon(P.lon, lon) * _apRad * WORLD_R * Math.cos(P.lat * _apRad), dN = (lat - P.lat) * _apRad * WORLD_R;
         const a = dE * sx + dN * sz, b = dE * sz - dN * sx;
+        // 港の施設（岸壁・防波堤・桟橋・桟橋の船）の上は通れない（44-world-terrain.js の worldPortColliders）
+        if (Math.abs(dE) < 4000 && Math.abs(dN) < 4000 && typeof worldPortColliders === 'function') {
+            const rc = worldPortColliders(P);
+            for (const c of rc) if (a >= c[0] && a <= c[1] && -b >= c[2] && -b <= c[3]) return -1;
+        }
         // 作り込んだ港（本物の岸壁・桟橋）：岸壁の前の、もともと水の所だけ掘ってある（44-world-terrain.js の _portAdjust と同じ。桟橋・岸は陸のまま）
         if (P.real && typeof _rwDetailBoxOf === 'function' && _RW && _rwDetailBoxOf(P.lat, P.lon)) {
             if (Math.abs(a) > 600 || Math.abs(b) > 1200) continue;
@@ -779,7 +799,11 @@ async function autopilotStart(port) {
         }
     }
     // （座礁から抜けたあと：まず水路の真ん中の深い所を通る広い帯で探し、無ければふつうに）
-    for (const mode of (autopilot._newRoute ? [] : autopilot.agWide ? ['wide', 'normal', 'tug'] : ['normal', 'tug'])) {
+    // （cut：出る港の航路を、行き先から遠ざかり始める所で切り上げ、行き先の港の航路には途中から合流する。
+    //  探せなければ、航路の端から端まで（cut なし）で探し直す）
+    const modeList = (autopilot._newRoute ? [] : autopilot.agWide ? ['wide', 'normal', 'tug'] : ['normal', 'tug']).flatMap(m => [[m, true], [m, false]]);
+    let cutUsed = false;
+    for (const [mode, cut] of modeList) {
         const need = mode === 'tug' ? M.needTug : mode === 'wide' ? M.need + 1.5 : M.need;
         const route = [];
         // 今いる港の航路の上なら、まず航路を沖へ出る（航路がふつうには浅くても、タグがあれば通る）
@@ -800,10 +824,58 @@ async function autopilotStart(port) {
                 if (d < 400 || d < bd) { if (d < 400 || onFw < 0 || d < bd) onFw = k; bd = Math.min(bd, d); }
             }
         }
+        // 出る港の航路は、港を出て（港から 3km・作り込んだ港の外）から、行き先から遠ざかり始める所まで
+        //（湾の中の港どうし（東京港 → 横浜港など）でも、航路の端（浦賀水道の外）まで出てから、行き先の航路の端へ戻っていた）
+        // 航路に沿って進む道のり ＋ そこから行き先までのまっすぐの距離 が最も短い所で離れる（区間の途中でも）
+        let kOutEnd = fwOut ? fwOut.pts.length - 1 : -1, outLeave = null;
+        if (onFw >= 0 && cut) {
+            const F = fwOut.pts, k0 = Math.max(1, onFw + 1);
+            // （港のすぐ外（800m）から離れてよい：港の航路が行き先と反対へ出ていく所（門司港の航路は関門海峡を西へ抜ける。
+            //  東の広島へ行くなら、港を出たらすぐ東へ）。離れた所から先は地形を見て引くので、通れなければ航路をたどる探し方に戻る）
+            const outOfHarbor = (q) => worldDistance(q.lat, q.lon, np.port.lat, np.port.lon) >= 800 && !_apInDetail(q);
+            // 行き先までの見込み：行き先の港の航路があれば、その航路の点（港から 3km より沖）までのまっすぐの距離 ＋ そこから泊地までの航路の道のり
+            const dRefs = [];
+            if (port.real && port.fairway && port.fairway.pts.length >= 3) {
+                const G = port.fairway.pts;
+                let al = 0;
+                for (let k = 1; k < G.length; k++) {
+                    if (k > 1) al += worldDistance(G[k - 1].lat, G[k - 1].lon, G[k].lat, G[k].lon);
+                    if (al >= 3000 || k === G.length - 1) dRefs.push({ q: G[k], inward: al });
+                }
+            }
+            const toDest = (q) => dRefs.length ? Math.min(...dRefs.map(r => worldDistance(q.lat, q.lon, r.q.lat, r.q.lon) + r.inward)) : worldDistance(q.lat, q.lon, port.lat, port.lon);
+            const cost = (q, along) => along + toDest(q);
+            let along = 0, best = { c: cost(F[F.length - 1], Infinity), k: F.length - 1, P: null };
+            {   // 端まで行く場合
+                let L = worldDistance(here.lat, here.lon, F[k0].lat, F[k0].lon); for (let k = k0; k < F.length - 1; k++) L += worldDistance(F[k].lat, F[k].lon, F[k + 1].lat, F[k + 1].lon);
+                best.c = cost(F[F.length - 1], L);
+            }
+            // （今いる区間（船から次の点まで）の途中も）
+            for (let k = Math.max(0, k0 - 1); k < F.length - 1; k++) {
+                const A = k < k0 ? here : F[k], B = F[k + 1], segL = worldDistance(A.lat, A.lon, B.lat, B.lon);
+                if (k >= k0 && outOfHarbor(A) && cost(A, along) < best.c - 300) best = { c: cost(A, along), k, P: null };
+                const mLat = WORLD_R * _apRad, mLon = mLat * Math.cos(A.lat * _apRad);
+                const bx = _apDLon(A.lon, B.lon) * mLon, by = (B.lat - A.lat) * mLat;
+                for (const T of dRefs.length ? dRefs.map(r => r.q) : [port]) {
+                    const px = _apDLon(A.lon, T.lon) * mLon, py = (T.lat - A.lat) * mLat;
+                    const u = Math.max(0, Math.min(0.95, (px * bx + py * by) / ((bx * bx + by * by) || 1)));
+                    if (u * segL <= 500) continue;
+                    const P = { lat: A.lat + (B.lat - A.lat) * u, lon: A.lon + (B.lon - A.lon) * u };
+                    if (outOfHarbor(P) && cost(P, along + u * segL) < best.c - 300) best = { c: cost(P, along + u * segL), k, P };
+                }
+                along += segL;
+            }
+            kOutEnd = best.k; outLeave = best.P;
+        }
+        const outCut = kOutEnd < (fwOut ? fwOut.pts.length - 1 : -1);
+        // （切り上げ・途中の合流を使わなかったなら、同じ探し方をくり返さない）
+        if (!cut && !cutUsed) continue;
+        if (cut) cutUsed = outCut;
         if (onFw >= 0) {
-            for (let k = Math.max(1, onFw + 1); k < fwOut.pts.length; k++)
-                route.push(Object.assign({ lat: fwOut.pts[k].lat, lon: fwOut.pts[k].lon }, { label: k === fwOut.pts.length - 1 ? `${np.port.name} 航路の出口` : `${np.port.name} 航路`, channel: true,
+            for (let k = Math.max(1, onFw + 1); k <= kOutEnd; k++)
+                route.push(Object.assign({ lat: fwOut.pts[k].lat, lon: fwOut.pts[k].lon }, { label: k === fwOut.pts.length - 1 ? `${np.port.name} 航路の出口` : (k === kOutEnd && !outLeave) ? `${np.port.name} 航路を離れる所` : `${np.port.name} 航路`, channel: true,
                     narrow: fwOut.depth < M.need || rhumbCourse(fwOut.pts[k].lat, fwOut.pts[k].lon, np.port.lat, np.port.lon).dist < 4000 || _apInDetail(fwOut.pts[k - 1]) }));
+            if (outLeave) route.push({ lat: outLeave.lat, lon: outLeave.lon, label: `${np.port.name} 航路を離れる所`, channel: true, narrow: fwOut.depth < M.need });
         } else if (np && np.port !== port && !np.port.real) {
             const P = np.port, TP = PORT_TYPES[P.type], chL = worldPortChannelLen(P);
             if (np.dist < TP.basin + chL + 1500 && TP.depth + 2 >= M.needTug) {
@@ -866,15 +938,65 @@ async function autopilotStart(port) {
             }
             const from = route.length ? route[route.length - 1] : here;
             if (mode === 'tug') _apMsg(`${port.name} へは狭い所があるので、タグの補助を前提に航路を探しています…`);
+            // 途中からの合流：行き先の港の航路の線のうち、ここからいちばん近い所（泊地から 600m・船の長さの 2 倍より沖）。
+            // 航路の端（沖の入口）を回るより、まっすぐ行って合流するほうが 3km 以上近く、150km より近いとき
+            //（湾の奥の港へ、湾の中から行くとき：東京港 → 横浜港 なら、浦賀水道の外の端ではなく湾の中で横浜の航路に乗る）
+            const joins = [];
+            if (cut && fw.length >= 3 && !deepShip) {
+                const mLat = WORLD_R * _apRad, mLon = mLat * Math.cos(from.lat * _apRad);
+                const X = (q) => _apDLon(from.lon, q.lon) * mLon, Y = (q) => (q.lat - from.lat) * mLat;
+                // 港のそば（泊地から 3km・船の長さの 4 倍の内）は浅く狭いので、そこでは合流しない（航路をたどって入る）
+                const minAlong = Math.max(3000, apShipLen() * 4);
+                let along = 0;
+                const cands = [];
+                for (let k = 1; k < fw.length - 1; k++) {
+                    const A = fw[k], B = fw[k + 1], segL = worldDistance(A.lat, A.lon, B.lat, B.lon);
+                    const ax = X(A), ay = Y(A), bx = X(B), by = Y(B), L2 = (bx - ax) ** 2 + (by - ay) ** 2 || 1;
+                    let u = Math.max(0, Math.min(1, -(ax * (bx - ax) + ay * (by - ay)) / L2));
+                    if (along + u * segL < minAlong) u = Math.min(1, (minAlong - along) / Math.max(1, segL));
+                    if (along + u * segL >= minAlong - 1) {
+                        cands.push({ d: Math.hypot(ax + u * (bx - ax), ay + u * (by - ay)), k, u, inward: along + u * segL });
+                        // 区間の沖の端（次の点）も候補に
+                        if (k + 1 < fw.length - 1) cands.push({ d: Math.hypot(bx, by), k: k + 1, u: 0, inward: along + segL });
+                    }
+                    along += segL;
+                }
+                const viaEnd = worldDistance(from.lat, from.lon, end.lat, end.lon) + along;
+                cands.sort((p, q) => (p.d + p.inward) - (q.d + q.inward));
+                const seen = new Set();
+                for (const c of cands) {
+                    if (joins.length >= 3) break;
+                    if (!(c.d < 150000 && c.d + c.inward < viaEnd - 3000)) continue;
+                    const A = fw[c.k], B = fw[c.k + 1] || fw[c.k];
+                    const q = { lat: A.lat + (B.lat - A.lat) * c.u, lon: A.lon + (B.lon - A.lon) * c.u, k: c.k, u: c.u };
+                    const key = q.lat.toFixed(4) + ',' + q.lon.toFixed(4);
+                    if (seen.has(key)) continue;
+                    seen.add(key); joins.push(q);
+                }
+            }
             try {
-                let pts = null, viaFar = !!far, err = null;
-                for (const tgt of far ? [far, end] : [end]) {
-                    try { pts = await worldPlanRoute(from, tgt, { tug: mode === 'tug', wide: mode === 'wide' }); viaFar = tgt === far; break; }
+                let pts = null, viaFar = !!far, join = null, err = null;
+                for (const tgt of [...joins, far, end].filter(Boolean)) {
+                    try { pts = await worldPlanRoute(from, tgt, { tug: mode === 'tug', wide: mode === 'wide' }); viaFar = tgt === far; join = joins.includes(tgt) ? tgt : null; break; }
                     catch (e) { err = e; if (/ocean/.test(e.message) || autopilot.dest !== port || !autopilot.planning) break; }
                 }
+                const viaJoin = !!join;
                 if (!pts) throw err;
                 if (autopilot.dest !== port || !autopilot.planning) return;
+                if (viaJoin) cutUsed = true;
                 for (const q of pts.slice(1)) route.push({ lat: q.lat, lon: q.lon, label: q.label || '', narrow: !!q.narrow });
+                if (viaJoin) {
+                    // 合流した所から、航路をたどって泊地へ
+                    const nearPort = (q) => rhumbCourse(q.lat, q.lon, port.lat, port.lon).dist < 4000 || _apInDetail(q);
+                    Object.assign(route[route.length - 1], { label: `${port.name} 航路に合流`, channel: true, narrow: channelNarrow || nearPort(join) });
+                    for (let k = join.u > 0 ? join.k : join.k - 1; k >= 2; k--) route.push({ lat: fw[k].lat, lon: fw[k].lon, label: `${port.name} 航路`, channel: true, narrow: channelNarrow || nearPort(fw[k]) });
+                    const fin = fw[1];
+                    route.push({ lat: fin.lat, lon: fin.lon, label: berthPlan ? `${port.name} 泊地` : `${port.name} 港口`, channel: true, final: true, narrow: true });
+                    autopilot.berthPlan = berthPlan; autopilot.berthWhy = berthWhy; autopilot.deepShip = deepShip;
+                    autopilot._newRoute = route;
+                    lastErr = null;
+                    break;
+                }
                 if (viaFar) { route[route.length - 1].label = `${port.name} 航路の延長線`; route.push({ lat: end.lat, lon: end.lon, label: `${port.name} 航路の入口`, channel: true, narrow: channelNarrow }); }
                 else Object.assign(route[route.length - 1], { label: deepShip ? `${port.name} 沖の錨地` : `${port.name} 航路の入口` });
                 if (deepShip) Object.assign(route[route.length - 1], { final: true });
@@ -2068,6 +2190,164 @@ function _apSelfDepart(dt) {
 
 // 港の航路・狭い水路を通る速さ[ノット]
 const AP_CH_KN = 10;
+// ════════════════════════════════════════════════════════════════
+//  先読みの回避：浅い所・岸壁・桟橋・防波堤（航路の地図に無い物も：worldSeabedAt は港の施設の当たりも返す）
+// ════════════════════════════════════════════════════════════════
+//  航路をこのままたどった（変針点で旋回半径で曲がる）ときの船体の外周を、止まれる距離の 1.5 倍＋船の長さ（3km まで）先まで
+//  予測して、浅い所（喫水＋0.4m より浅い）・施設にかかるなら：
+//   ・針路を少しずつずらして（左右 10〜60°）、かからない向きがあれば、そちらへ（かかる所を過ぎたら航路へ戻る）
+//   ・どの向きでもかかるなら減速し、止まれる距離に近づいたら止める。止まったまま 15 秒たったら、今いる所から航路を引き直す
+//  （以前は航路の線をそのままたどり、少しよければ避けられる浅瀬や、航路の地図に無い桟橋にそのまま乗り上げていた）
+const AP_HZ_EVERY = 0.25;
+function _apHzRing() {
+    const hp = window.hullProfile, sc = physics.scale || 1, hl = (hp && hp.ready) ? hp.halfLen : 6, HL = hl * sc;
+    const key = hl + ':' + sc + ':' + worldShipDraft().toFixed(2);
+    if (_apHzRing.k === key) return _apHzRing.v;
+    const D = worldShipDraft(), out = [[HL * 0.97, 0, D], [-HL * 0.97, 0, D]];
+    for (const k of [0.6, 0, -0.6]) { const H = worldHullAt(k * hl); out.push([k * HL, H.hw * 0.95, H.d], [k * HL, -H.hw * 0.95, H.d]); }
+    _apHzRing.k = key; _apHzRing.v = out;
+    return out;
+}
+// その姿勢で、外周のどこかが浅い所・施設にかかるか（now：今もうかかっている点は数えない）
+function _apHzPoseHit(X, Z, h, ring, now) {
+    const fx = Math.sin(h), fz = Math.cos(h), qx = Math.cos(h), qz = -Math.sin(h);
+    for (let i = 0; i < ring.length; i++) {
+        if (now[i]) continue;
+        const [a, o, d] = ring[i];
+        const sb = worldSeabedAt(X + fx * a + qx * o, Z + fz * a + qz * o);
+        if (sb > -(d + 0.4)) { _apHzPoseHit.last = { x: X + fx * a + qx * o, z: Z + fz * a + qz * o, sb, i }; return true; }
+    }
+    return false;
+}
+// 道すじを進めて、最初にかかる所までの距離（かからなければ Infinity）。
+// W：たどる点（物理の面の座標。W[0] の前は今の区間の始まり A0）。updateAutopilot と同じに、区間の線からのずれを直しながら進む
+//（変針点へまっすぐ向かう予測だと、曲がり角の内側を斜めに横切って、起きない座礁を見込んでいた）。
+// W が null なら、向き hFix[ラジアン] へ回ってからまっすぐ
+const _AP_D2R = Math.PI / 180;
+function _apHzRun(maxD, W, hFix, ring, now, A0) {
+    // 旋回半径：舵 35°（向きのずれが 25° より大きいとき）と 20°。走っている間に測った実際の旋回半径（_apHazard の R35）があればそれを、
+    // 無ければ名目の値（_apTurnRadius は航路を引くための 1.4 倍の余裕込み）から
+    const L = apShipLen(), Rn = _apTurnRadius() / 1.4, Hz = autopilot.hz || {};
+    const Rbig = Math.max(30, Hz.R35 ? Hz.R35 * 1.1 : Rn * 0.85), Rt = Math.max(Rbig, Hz.R35 ? Hz.R35 * 1.6 : Rn * 1.25);
+    const ds = Math.max(12, Math.min(40, L / 5));
+    let X = physics.cgWorldX, Z = physics.cgWorldZ, h = physics.heading * _apRad, wi = 0;
+    for (let d = ds; d <= maxD; d += ds) {
+        let hd;
+        if (W) {
+            while (wi < W.length - 1 && Math.hypot(W[wi].x - X, W[wi].z - Z) < W[wi].reach) wi++;
+            const B = W[wi], A = wi > 0 ? W[wi - 1] : A0;
+            if (wi === W.length - 1 && Math.hypot(B.x - X, B.z - Z) < ds) break;
+            const hB = Math.atan2(B.x - X, B.z - Z);
+            hd = hB;
+            if (A) {
+                const lx = B.x - A.x, lz = B.z - A.z, ll = Math.hypot(lx, lz);
+                if (ll > 1) {
+                    const legH = Math.atan2(lx, lz), u = ((X - A.x) * lx + (Z - A.z) * lz) / (ll * ll);
+                    const vx = A.x + lx * u - X, vz = A.z + lz * u - Z, off = Math.hypot(vx, vz);
+                    const sg = Math.sign(vx * Math.cos(legH) - vz * Math.sin(legH)) || 1;
+                    const want = legH + sg * Math.min(35, off / Math.max(60, L) * 12) * _AP_D2R;
+                    const dd = Math.abs(Math.atan2(Math.sin(want - hB), Math.cos(want - hB)));
+                    hd = dd > 60 * _AP_D2R ? hB : want;
+                }
+            }
+        } else hd = hFix;
+        let e = hd - h; e = Math.atan2(Math.sin(e), Math.cos(e));
+        // 向きのずれが 25° より大きいと、舵を 35° まで切る（updateAutopilot）：舵 20° の旋回半径の 0.7 倍ほどで回る
+        const lim = ds / (Math.abs(e) > 25 * _AP_D2R ? Rbig : Rt);
+        h += Math.max(-lim, Math.min(lim, e));
+        X += Math.sin(h) * ds; Z += Math.cos(h) * ds;
+        if (d >= L * 0.3 && _apHzPoseHit(X, Z, h, ring, now)) return d;
+    }
+    return Infinity;
+}
+function _apHazard(course, wp, rc, dt) {
+    const H = autopilot.hz || (autopilot.hz = { t: 0, dc: 0, dcT: 0, order: null, why: '', stopT: 0, replanT: -1e9 });
+    const v = Math.max(0, physics.speed || 0);
+    // 実際の旋回半径を測る：舵を 28° より大きく切って回っている間の、速さ ÷ 向きの変わる速さ（ならして覚える。船を替えたら測り直す）
+    {
+        const key = apShipLen().toFixed(0) + ':' + (physics.turningRadiusFactor || 0);
+        if (H.rKey !== key) { H.rKey = key; H.R35 = 0; }
+        if (Number.isFinite(H.ph) && dt > 0 && v > 3 && Math.abs(physics.rudderAngle || 0) > 28) {
+            const rate = Math.abs(((physics.heading - H.ph + 540) % 360) - 180) / dt * _apRad;      // [rad/秒]
+            if (rate > 0.002) { const R = v * 0.514444 / rate; if (R > 20 && R < 20000) H.R35 = H.R35 ? H.R35 * 0.97 + R * 0.03 : R; }
+        }
+        H.ph = physics.heading;
+    }
+    // 着く所のすぐ近く（着岸の手前の止め方は、別に見ている）・ほとんど止まっている間は見ない
+    if ((wp.final && rc.dist < 300 + apShipLen() / 2) || (v < 0.4 && !(H.order !== null))) { H.dc = 0; H.order = null; H.why = ''; H.stopT = 0; return H; }
+    H.t -= dt;
+    if (H.t <= 0) {
+        H.t = AP_HZ_EVERY;
+        const L = apShipLen(), ring = _apHzRing();
+        const h0 = physics.heading * _apRad, fx = Math.sin(h0), fz = Math.cos(h0), qx = Math.cos(h0), qz = -Math.sin(h0);
+        const now = ring.map(([a, o, d]) => worldSeabedAt(physics.cgWorldX + fx * a + qx * o, physics.cgWorldZ + fz * a + qz * o) > -(d + 0.4));
+        const dStop = apStopDist(Math.max(v, 2));
+        const maxD = Math.min(3000, Math.max(L * 1.5, dStop * 1.5 + L));
+        // たどる点：今の変針点から先（物理の面の座標）
+        // （変針を始める所は、updateAutopilot と同じ：次が航路・狭い水路なら、回る角度と旋回の大きさから。ほかは早めに）
+        const R = autopilot.route, W = [], Rt = _apTurnRadius();
+        for (let k = autopilot.leg; k < R.length && W.length < 8; k++) {
+            const loc = worldUnitToLocal(worldLatLonToUnit(R[k].lat, R[k].lon));
+            if (!Number.isFinite(loc.x)) break;
+            const P = k > 0 ? R[k - 1] : autopilot.legFrom, N = R[k + 1];
+            let reach = R[k].final ? Math.max(60, L * 0.5) : R[k].channel ? Math.max(150, L) : Math.max(900, L * 4);
+            if (!R[k].final && N && (N.narrow || N.channel) && P) {
+                const c1 = rhumbCourse(P.lat, P.lon, R[k].lat, R[k].lon), c2 = rhumbCourse(R[k].lat, R[k].lon, N.lat, N.lon);
+                const dC = Math.min(80, Math.abs(((c2.course - c1.course + 540) % 360) - 180));
+                reach = Math.max(R[k].channel ? Math.max(150, L) : 150, Math.min(2500, Rt * Math.tan(dC / 2 * _apRad)));
+                reach = Math.min(reach, Math.max(60, 0.5 * Math.min(c1.dist, c2.dist)));
+            }
+            W.push({ x: loc.x, z: loc.z, reach });
+        }
+        const pf = autopilot.leg > 0 ? R[autopilot.leg - 1] : autopilot.legFrom;
+        const A0 = pf ? worldUnitToLocal(worldLatLonToUnit(pf.lat, pf.lon)) : null;
+        let hit = W.length ? _apHzRun(maxD, W, 0, ring, now, A0 && Number.isFinite(A0.x) ? A0 : null) : Infinity;
+        // 遠い所（止まれる距離＋船の長さの 1.5 倍より先）は、まだ予測が粗いので様子を見る。2 回続けて見えたら動く
+        if (hit > dStop * 1.2 + L * 1.5) hit = Infinity;
+        H.seen = Number.isFinite(hit) ? (H.seen || 0) + 1 : 0;
+        if (Number.isFinite(hit) && H.seen < 2 && H.order === null && !H.dc) hit = Infinity;
+        if (!Number.isFinite(hit)) {
+            // 航路のままで大丈夫：ずらしていた針路は、戻しても大丈夫なら少しずつ戻す
+            H.dc = Math.abs(H.dc) < 3 ? 0 : H.dc * 0.6; H.order = null; H.why = ''; H.stopT = 0;
+        } else {
+            // 針路をずらす：今の針路（物理の向き）から左右へ。前にずらしていた側を先に
+            const hBase = _apHeadingForTrue(course) * _apRad;
+            const side = H.dc > 0 ? 1 : H.dc < 0 ? -1 : 1;
+            // （候補の向きも、先読みの全距離で調べる：近くだけ見ると、その先の行き止まり（桟橋と岸の間など）へ入り込む）
+            const horizon = maxD;
+            let pick = null, bestRun = hit, bestDc = 0;
+            // （前によけていた側を先に、大きめまで試してから反対側へ：左右に行き来して蛇行しないように）
+            for (const dcC of [10, 20, -10, 30, -20, 45, -30, 60, -45, -60].map(m => m * side)) {     // 羅針盤の向きで（＋：右へ）
+                const r = _apHzRun(horizon, null, hBase - dcC * _apRad, ring, now, null);
+                if (!Number.isFinite(r)) { pick = dcC; break; }
+                if (r > bestRun) { bestRun = r; bestDc = dcC; }
+            }
+            if (pick !== null) {
+                H.dc = pick; H.dcT = 0; H.order = hit < dStop * 1.2 + L ? 1 : null;
+                H.why = '浅い所・岸壁をよけています';
+                H.stopT = 0;
+            } else {
+                // どの向きでもかかる：減速。止まれる距離に近いなら止める（かかる所までいちばん遠い向きへ）。
+                // 近いほど強く後進をかける（微速後進では、大きな船は止まり切れずに岸へ触れた）
+                H.dc = bestDc;
+                const dS = apStopDist(v);
+                H.order = hit < dS * 1.6 + L * 0.6 ? (v > 1.5 ? -3 : v > 0.6 ? -1 : 0) : hit < dS * 2.5 + L ? 0 : 1;
+                H.why = H.order <= 0 ? '前方に浅い所・岸壁：止まります' : '前方に浅い所・岸壁：減速しています';
+            }
+        }
+    }
+    // 止まったまま進めない：今いる所から航路を引き直す（1 分に 1 回まで）
+    if (H.order !== null && H.order <= 0 && v < 0.5) {
+        H.stopT += dt;
+        const tt = performance.now() / 1000;
+        if (H.stopT > 15 && tt - H.replanT > 60 && autopilot.dest && !autopilot.planning) {
+            H.replanT = tt; H.stopT = 0; H.order = null; H.dc = 0; H.why = '';
+            autopilot.agWide = true;
+            autopilotStart(autopilot.dest).then(() => { autopilot.agWide = false; if (autopilot.active && !autopilot.note) { autopilot.note = '前方に浅い所・岸壁があったので、今いる所から航路を引き直しました'; renderAutopilotPanel(); } });
+        }
+    } else H.stopT = 0;
+    return H;
+}
 function updateAutopilot(t, dt) {
     _apOrderClock(dt);
     if (!autopilot.chase) physics.apRpm = null;        // 回転数で速さを合わせるのは、並走と航路の中だけ（毎回決め直す）
@@ -2309,7 +2589,14 @@ function updateAutopilot(t, dt) {
     const adv = (typeof trafficAdvice === 'function') ? trafficAdvice({ dest: autopilot.dest, remain, channel: !!wp.channel, narrow: !!wp.narrow, course }) : null;
     if (adv && Number.isFinite(adv.order)) order = Math.min(order, adv.order);
     if (adv && adv.dc && !wp.final) course = ((course + adv.dc) % 360 + 360) % 360;      // （右へ＋・追い越しは左へ−）
-    if ((adv ? adv.why : '') !== (autopilot.trafficWhy || '')) { autopilot.trafficWhy = adv ? adv.why : ''; renderAutopilotPanel(); }
+    // 先読みの回避（浅い所・岸壁・桟橋）：他の船をよける向きも含めて
+    {
+        const hz = _apHazard(course, wp, rc, dt);
+        if (hz.dc && !wp.final) course = ((course + hz.dc) % 360 + 360) % 360;
+        if (hz.order !== null) order = Math.min(order, hz.order);
+        const why = [adv ? adv.why : '', hz.why].filter(Boolean).join('・');
+        if (why !== (autopilot.trafficWhy || '')) { autopilot.trafficWhy = why; renderAutopilotPanel(); }
+    }
     // 後ろへの行き足が残っていたら（タグなしの出港で後進して下がった直後など）、前進微速で止める。
     // 以前は、付き添いのタグを待つ間などに機関を止めたまま後ろへ流れ続け、船尾から浅い所へ下がっていた
     const sv = physics.speed || 0;

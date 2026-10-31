@@ -45,6 +45,14 @@
 - `moon.jpg`：月面（1024 × 512）。元データ：NASA SVS **CGI Moon Kit**（`lroc_color_poles_1k.jpg`：LRO の広角カメラの写真）
 - 作り直し：`python3 build_sky.py <作業フォルダ>`（OpenEXR（pip の OpenEXR）が要る。入れるファイルは build_sky.py の最初に）
 
+## japan.webp / japan.json（日本の主な湾：九州北部・関門・瀬戸内海・大阪湾・伊勢湾・東京湾・相模湾）
+
+- 範囲：北緯 32.6°〜36.2°、東経 129.6°〜140.95°（15 秒角 ≒ 460m × 380m ごと、2725 × 865 点）。世界全体の区画（1.5 分角）の上に重ねる
+  （43-world.js の REAL_WORLDS.japan。縁の 0.12° で土台となめらかにつなぐ）
+- 元データ：NOAA NCEI **ETOPO 2022**（15 秒角）そのまま。形式は britain と同じ（高さ ＝ R × 256 ＋ G − 32768、上が北）、可逆の WebP
+- 作り直し：`python3 fetch_japan.py <作業フォルダ>` → `python3 build_japan.py <作業フォルダ>`。作り直したら、範囲の中の港の
+  置き場所・航路の前計算（world/overview_fairways.json）も作り直す（ブラウザで worldBuildFairwayCache()）
+
 ## britain.png / britain.json（ブリテン諸島・アイルランド島のまわり）
 
 - 範囲：北緯 48.3°〜61.0°、西経 11.0°〜東経 3.0°（15 秒角 ≒ 460m ごと、3361 × 3050 点）

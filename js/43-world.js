@@ -231,6 +231,9 @@ const REAL_WORLDS = {
         ],
     },
 };
+// 日本の主な湾（九州北部・関門・瀬戸内海・大阪湾・伊勢湾・東京湾・相模湾）：地形は 15 秒角（data/japan）。
+// 世界全体の区画（1.5 分角 ≒ 2.8km）では東京湾が幅 8 升ほどしかなく、埋め立て地・岬・水道の形が大まかだった。港は世界の港（data/world/ports.json）
+REAL_WORLDS.japan = { name: '日本の主な湾', url: 'data/japan', center: { lat: 35.2, lon: 139.75 }, start: '横浜港', harbors: [], ports: [] };
 // 北大西洋：ブリテン諸島とアメリカ東海岸を、間の大西洋ごと 1 つの世界に（港・作り込んだ港は両方の分）
 REAL_WORLDS.natl = {
     name: '北大西洋（ブリテン諸島・アメリカ東海岸）', url: 'data/natl', center: { lat: 45, lon: -35 }, start: 'サウサンプトン港 オーシャン・ドック（43/44番）',
@@ -244,12 +247,12 @@ REAL_WORLDS.natl.ports = [].concat(...REAL_WORLDS.natl.regions.map(r => REAL_WOR
 REAL_WORLDS.earth = {
     name: '世界（実在）', url: 'data/world/overview', tiles: 'data/world', portsUrl: 'data/world/ports.json', lanesUrl: 'data/world/lanes.json',
     center: { lat: 45, lon: -35 }, start: 'サウサンプトン港 オーシャン・ドック（43/44番）',
-    regions: ['britain', 'useast'],
+    regions: ['britain', 'useast', 'japan'],
 };
 REAL_WORLDS.earth.harbors = REAL_WORLDS.natl.harbors;
 REAL_WORLDS.earth.ports = REAL_WORLDS.natl.ports;
 // 前の版の世界（ブリテン諸島・アメリカ東海岸・北大西洋）は、世界全体の中の地域として扱う（位置はそのまま）
-const REAL_WORLD_ALIAS = { britain: 'earth', useast: 'earth', natl: 'earth' };
+const REAL_WORLD_ALIAS = { britain: 'earth', useast: 'earth', natl: 'earth', japan: 'earth' };
 // 運河・細い海峡：全体図・区画の格子（升目が運河より広い）では陸になってしまうので、線に沿って掘る（深さ[m]・幅[m]）
 // 自動航行の航路（67-sea-lanes.js）も、この線をたどる
 const RW_CANALS = [
@@ -1425,6 +1428,8 @@ async function worldLoadReal(key) {
         for (const r of W.regions) {
             const g = await _rwLoadGrid(REAL_WORLDS[r].url);
             g.blend = 0.12; g.region = r;
+            // 運河・細い海峡（関門海峡など）は、細かい格子でも升目より狭いことがあるので掘る
+            if (W.tiles) for (const cn of RW_CANALS) if (_rwCanalHits(cn, g)) _rwCarveCanal(cn, g);
             rw.grids.push(g);
         }
         rw.grids.push(base);

@@ -121,7 +121,14 @@ function seaLaneRoute(from, to) {
     dist[S] = 0;
     // 入る・出る航路の点：まっすぐ行って陸を横切らない点だけ（陸を無視して途中の点へ飛び込む近道を選ばないように：
     // 横浜 → 神戸で、伊勢湾口の点 1 つだけを通る道になり、航路をたどらなかった）
-    const reach = (a, q) => { const d = _slDist(a, q); return d < SEA_LANE_REACH && _slLegDeep(a, q, 1, Math.max(2000, Math.min(5000, d / 40))) ? d : Infinity; };
+    // （湾の奥（東京湾の中など）からは、まっすぐでは岬を横切ってしまう：40km より近い点は、まわり道の分だけ高くつけて使う。
+    //  その区間はふつうの探し方で地形を見て引く）
+    const reach = (a, q) => {
+        const d = _slDist(a, q);
+        if (!(d < SEA_LANE_REACH)) return Infinity;
+        if (_slLegDeep(a, q, 1, Math.max(2000, Math.min(5000, d / 40)))) return d;
+        return d < 40000 ? d * 2.5 : Infinity;
+    };
     const near0 = (a) => N.map((q, i) => [i, _slDist(a, q)]).filter(([, d]) => d < SEA_LANE_REACH).sort((x, y) => x[1] - y[1]).slice(0, 40);
     const entry = near0(from).map(([i]) => [i, reach(from, N[i])]).filter(([, d]) => Number.isFinite(d));
     const exitD = N.map(() => Infinity);

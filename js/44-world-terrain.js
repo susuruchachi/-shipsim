@@ -800,6 +800,52 @@ function _pBoxes(list, mat) {
     im.userData.noLightBake = true;
     return im;
 }
+// 港の施設の当たり判定（港の座標系の四角 [a0, a1, b0, b1]：a＝海の方、b＝岸沿い）と、桟橋の横の船の大きさ。
+// 乱数は _buildPort と同じ順に引く（r を渡すと、そのまま続きを _buildPort が使う）。
+// 自動航行の航路探し（49-autopilot.js）が、まだ建てていない港の桟橋・防波堤もよけられるように、建てずに出せる
+function _portLayout(S, r) {
+    r = r || _wRng(S.seed);
+    const half = S.quayLen / 2, colliders = [], breakwaters = [], ships = [], boats = [];
+    if (!S.detail) colliders.push([-S.apron - 20, 6, -half, half]);
+    if (S.type !== 'cargo' && !S.real) {
+        const R = S.basin * 0.95, gap = S.type === 'fishing' ? 70 : 140;
+        for (const side of [-1, 1]) {
+            const b0 = side * (half + 40), len = R * 0.8;
+            const armLen = Math.max(20, Math.abs(b0) - gap / 2);
+            breakwaters.push({ side, b0, len, armLen, gap });
+            colliders.push([0, len, b0 - 8, b0 + 8]);
+            colliders.push([len - 8, len + 8, Math.min(side * Math.abs(b0), side * (Math.abs(b0) - armLen)), Math.max(side * Math.abs(b0), side * (Math.abs(b0) - armLen))]);
+        }
+    }
+    const PL = _portPierLayout(S.type, S.quayLen), pierLen = PL.len;
+    for (const pr of PL.piers) {
+        const b = pr.b, w = pr.w;
+        colliders.push([0, pierLen, b - w / 2, b + w / 2]);
+        for (const side of [-1, 1]) {
+            if (S.type === 'naval') {
+                const len = 120 + r() * 70, beam = 14 + r() * 5;
+                const bb = b + side * (w / 2 + beam / 2 + 3);
+                ships.push({ a: pierLen * 0.5, b: bb, len, beam });
+                colliders.push([pierLen * 0.5 - len / 2, pierLen * 0.5 + len / 2, bb - beam / 2, bb + beam / 2]);
+            } else {
+                const len = 14 + r() * 8;
+                boats.push({ a: pierLen * 0.55, b: b + side * 6.5, len, color: [0xd8d8d0, 0x2e5d8a, 0xb3352a, 0xe2c14b][Math.floor(r() * 4)] });
+            }
+        }
+    }
+    return { colliders, breakwaters, ships, boats, PL, pierLen };
+}
+// 港の当たり判定（港 p。建てていれば建てた港のもの、まだなら _portLayout で：港ごとに覚えておく）
+const _portColCache = new Map();
+function worldPortColliders(p) {
+    const B = terrain.ports.get(p.id);
+    if (B) return B.colliders;
+    const key = p.id + ':' + p.seed + ':' + p.type;
+    let c = _portColCache.get(key);
+    if (!c) { c = _portLayout(_portShape(p)).colliders; _portColCache.set(key, c); }
+    return c;
+}
+window.worldPortColliders = worldPortColliders;
 function _buildPort(S) {
     const r = _wRng(S.seed);
     const g = new THREE.Group();
@@ -817,7 +863,9 @@ function _buildPort(S) {
     if (!S.detail) addBox(concrete, -S.apron / 2 + 4, 0, -3, S.apron + 8, 12, S.quayLen);
     // （作り込んだ港は、本物の岸壁の地形で当たりが取れるので、作り物の岸壁の当たりは置かない。同じ岸沿いの
     //  別の埠頭の岸壁と少し向きがずれていると、となりの埠頭の船に食い込んでしまう）
-    if (!S.detail) colliders.push([-S.apron - 20, 6, -half, half]);
+    // 当たり判定と、桟橋・防波堤・横付けの船の配置（_portLayout：乱数はここで引く）
+    const LY = _portLayout(S, r);
+    colliders.push(...LY.colliders);
     // 係船柱（ボラード）：岸壁の縁に 25m おき
     const bollards = [];
     for (let b = -half + 12; b <= half - 12 && !S.detail; b += 25) {
@@ -827,14 +875,10 @@ function _buildPort(S) {
     // 防波堤（港の前を囲む。真ん中に出入り口）。現実世界の港は、実際の航路（曲がっている）から入るので作らない
     if (S.type !== 'cargo' && !S.real) {
         const R = S.basin * 0.95, gap = S.type === 'fishing' ? 70 : 140;
-        for (const side of [-1, 1]) {
+        for (const { side, b0, len, armLen } of LY.breakwaters) {
             // 岸から沖へ伸び、先を港の出入り口の方へ曲げる
-            const b0 = side * (half + 40), len = R * 0.8;
             addBox(dark, len / 2, b0, -2, len, 8, 16);
-            colliders.push([0, len, b0 - 8, b0 + 8]);
-            const armLen = Math.max(20, Math.abs(b0) - gap / 2);
             addBox(dark, len, side * (Math.abs(b0) - armLen / 2), -2, 16, 8, armLen);
-            colliders.push([len - 8, len + 8, Math.min(side * Math.abs(b0), side * (Math.abs(b0) - armLen)), Math.max(side * Math.abs(b0), side * (Math.abs(b0) - armLen))]);
             // 灯台（出入り口の脇。片側だけ）
             if (side === 1) {
                 const q = P(len, gap / 2 + 8);
@@ -853,31 +897,19 @@ function _buildPort(S) {
         }
     }
     // 桟橋（漁港・軍港）
-    const PL = _portPierLayout(S.type, S.quayLen);
-    const pierLen = PL.len;
-    for (const pr of PL.piers) {
+    const pierLen = LY.pierLen;
+    for (const pr of LY.PL.piers) {
         const b = pr.b, w = pr.w;
         addBox(S.type === 'naval' ? concrete : wood, pierLen / 2, b, S.type === 'naval' ? -3 : 1.6, pierLen, S.type === 'naval' ? 12 : 1, w);
-        colliders.push([0, pierLen, b - w / 2, b + w / 2]);
         for (let a = 15; a < pierLen - 5; a += 25) { const q = P(a, b + w / 2 - 0.6); bollards.push({ x: q.x, y: S.type === 'naval' ? 3.35 : 2.4, z: q.z, w: 0.6, h: 0.6, d: 0.6, rot }); }
-        if (S.type === 'naval') {
-            // 桟橋の両側に軍艦
-            for (const side of [-1, 1]) {
-                const len = 120 + r() * 70, beam = 14 + r() * 5;
-                const bb = b + side * (w / 2 + beam / 2 + 3);
-                addBox(greyShips, pierLen * 0.5, bb, 2, len, 9, beam);
-                addBox(greyShips, pierLen * 0.5 - len * 0.05, bb, 9, len * 0.28, 7, beam * 0.6);
-                addBox(greyShips, pierLen * 0.5 - len * 0.05, bb, 15, len * 0.08, 8, beam * 0.3);
-                colliders.push([pierLen * 0.5 - len / 2, pierLen * 0.5 + len / 2, bb - beam / 2, bb + beam / 2]);
-            }
-        } else {
-            // 漁船
-            for (const side of [-1, 1]) {
-                const len = 14 + r() * 8;
-                addBox(boats, pierLen * 0.55, b + side * 6.5, 0.8, len, 2.4, 4.5, { color: [0xd8d8d0, 0x2e5d8a, 0xb3352a, 0xe2c14b][Math.floor(r() * 4)] });
-            }
-        }
     }
+    // 桟橋の両側の軍艦（軍港）・漁船（漁港）
+    for (const sh of LY.ships) {
+        addBox(greyShips, sh.a, sh.b, 2, sh.len, 9, sh.beam);
+        addBox(greyShips, sh.a - sh.len * 0.05, sh.b, 9, sh.len * 0.28, 7, sh.beam * 0.6);
+        addBox(greyShips, sh.a - sh.len * 0.05, sh.b, 15, sh.len * 0.08, 8, sh.beam * 0.3);
+    }
+    for (const bt of LY.boats) addBox(boats, bt.a, bt.b, 0.8, bt.len, 2.4, 4.5, { color: bt.color });
     // 陸の建物（作り込んだ港は、本物の建物・クレーン（51-harbor-detail.js）があるので作らない：
     //  大きさの決まった作り物を重ねると、本物の岸壁や建物と大きさが合わず、縮尺がおかしく見えた）
     const nB = S.detail ? 0 : { fishing: 14, town: 40, city: 90, cargo: 18, naval: 16 }[S.type];
