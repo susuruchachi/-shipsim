@@ -310,12 +310,22 @@ const _isStrikeType = (type) => type === 'bell' || type === 'gong';
 // ════════════════════════════════════════════════════════════════
 //  鳴らす・止める
 // ════════════════════════════════════════════════════════════════
+// 汽笛の距離による減衰：ref[m] までは減らず、その先は ref/(ref＋roll×(d−ref))。
+// 以前は 60m より先が距離にそのまま反比例（roll 1）で、少し離れて見るだけで汽笛が小さくなりすぎた
+// （汽笛は遠くまで届くように低く大きな音で作られている。1km 先で以前より約 7dB 大きい）
+const HORN_FALLOFF = { ref: 100, roll: 0.7 };
+window.HORN_FALLOFF = HORN_FALLOFF;
+function hornFalloff(d, ref, roll) {
+    ref = ref || HORN_FALLOFF.ref; roll = roll == null ? HORN_FALLOFF.roll : roll;
+    return ref / (ref + roll * Math.max(0, d - ref));
+}
+window.hornFalloff = hornFalloff;
 function _hornRt(i) {
     if (!audio.ctx) return null;
     let R = _hornRuntime[i];
     if (!R) {
-        // 聞く所までの距離に比例して小さく（60m より先は 距離に反比例。遠いほど高い音も抜ける：AudioEmitter）
-        R = { em: new AudioEmitter(audio.buses.horn, 60, 1.0), voices: [], presses: 0, strikeNext: 0 };
+        // 聞く所までの距離で小さく（HORN_FALLOFF：100m より先はゆるやかに。遠いほど高い音も抜ける：AudioEmitter）
+        R = { em: new AudioEmitter(audio.buses.horn, HORN_FALLOFF.ref, HORN_FALLOFF.roll), voices: [], presses: 0, strikeNext: 0 };
         R.out = _mkGain(1, R.em.input);
         // こだま（45-horn-echo.js）には、聞く所までの減衰の前の音を渡す（こだまはこだまの道のりで減衰させる）
         if (!audio.hornDry) audio.hornDry = audio.ctx.createGain();

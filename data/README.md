@@ -24,6 +24,27 @@
 - `overview_fairways.json`：港の置き場所と航路（港から沖の深い所まで掘る水路）の前計算。ブラウザで世界（実在）を読んでから
   `worldBuildFairwayCache()` の結果を書き出したもの。北大西洋の港は `natl_fairways.json`（前の北大西洋の前計算）の値をそのまま使う
 
+## world/lights*（街明かり・光害：70-night-sky.js）
+
+- 元データ：NASA Earth Observatory **Black Marble 2016**（VIIRS の夜の地球の灯り、3km の灰色の版
+  `BlackMarble_2016_3km_gray_geo.tif`。米国政府の作成：自由に利用・再配布できる）
+  - 表示用に明るさを強めた画像（都市の中心は 255 で頭打ち）。リニアの明るさは (値/255)^2.2 とみなす
+- `lights.webp`：全体の粗い図（0.08° ≒ 9km、4500 × 2250）。画素の値 ＝ √(3 × 3 画素の灯りの平均) × 255。光害（空の明るさ・
+  地平線の光の丘）の計算に、まわり 250km を使う。いつも（世界（実在）では）読む
+- `lights/lTT_JJ.webp`：海岸の区画（10°×10°、375 × 375 の元の 3km のまま。番号は地形の区画と同じ）。船のまわり 30km の陸に
+  灯りの点を置くのに、要る所だけ読む。348 区画。`lights.json`：範囲と区画の一覧
+- 作り直し：`python3 build_lights.py <BlackMarble_2016_3km_gray_geo.tif>`
+
+## sky/（夜空：70-night-sky.js・05-sky-dome.js）
+
+- `stars.bin`：7.5 等より明るい星 25,723 個（明るい順。1 個 6 バイト：赤経・赤緯（J2000）・等級・色（B−V））。
+  元データ：**Hipparcos 星表**（ESA 1997）、NASA HEASARC の表 `heasarc_hipparcos`
+- `milkyway.jpg`：天の川（明るい星を除いた星の光の地図、赤経・赤緯の正距円筒、2048 × 1024）。
+  元データ：NASA/Goddard Space Flight Center Scientific Visualization Studio **Deep Star Maps 2020**（`milkyway_2020_4k.exr`。
+  Gaia DR2：ESA/Gaia/DPAC）
+- `moon.jpg`：月面（1024 × 512）。元データ：NASA SVS **CGI Moon Kit**（`lroc_color_poles_1k.jpg`：LRO の広角カメラの写真）
+- 作り直し：`python3 build_sky.py <作業フォルダ>`（OpenEXR（pip の OpenEXR）が要る。入れるファイルは build_sky.py の最初に）
+
 ## britain.png / britain.json（ブリテン諸島・アイルランド島のまわり）
 
 - 範囲：北緯 48.3°〜61.0°、西経 11.0°〜東経 3.0°（15 秒角 ≒ 460m ごと、3361 × 3050 点）

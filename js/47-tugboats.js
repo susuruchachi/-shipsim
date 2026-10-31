@@ -334,7 +334,7 @@ Object.assign(window, { tugCall, tugSet, tugReleaseAll });
 function _tugToot(t, n) {
     if (typeof audioEnsure !== 'function' || !audioEnsure() || !audio.buses || !audio.buses.horn) return;
     const c = audio.ctx;
-    const em = new AudioEmitter(audio.buses.horn, 40, 0.8);
+    const em = new AudioEmitter(audio.buses.horn, 60, 0.6);
     em.update(t.g.position.clone().setY(8));
     for (let k = 0; k < n; k++) {
         const t0 = c.currentTime + 0.05 + k * 0.55;

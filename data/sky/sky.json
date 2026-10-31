@@ -1,0 +1,13 @@
+{
+ "stars": 25723,
+ "starMagMax": 7.5,
+ "milkyScale": 1.0,
+ "milkyMedian": 0.013756725937128067,
+ "milkyP99": 0.19506625831127167,
+ "moonMean": 0.2954149544239044,
+ "source": {
+  "stars": "Hipparcos Main Catalogue (ESA 1997), via NASA HEASARC",
+  "milkyway": "NASA/Goddard Space Flight Center Scientific Visualization Studio, Deep Star Maps 2020 (milkyway_2020_4k). Gaia DR2: ESA/Gaia/DPAC",
+  "moon": "NASA Scientific Visualization Studio, CGI Moon Kit (LRO LROC WAC color mosaic)"
+ }
+}

@@ -75,6 +75,8 @@ function _skyHorizon(q, lst, lat, out) {
     return out.set(-east, up, north).normalize();
 }
 const _skySunDir = new THREE.Vector3(), _skyMoonDir = new THREE.Vector3();
+const skyFrameNow = { n: 0, lst: 0, lat: 40 * _SKY_RAD, lon: -30, eps: 23.44 * _SKY_RAD };
+window.skyFrameNow = skyFrameNow;
 function skyBodyDirections(dayProgress) {
     const ll = skyObserverLatLon();
     const day = (typeof calDayNow === 'function') ? calDayNow() : 0;
@@ -88,6 +90,8 @@ function skyBodyDirections(dayProgress) {
     _skyHorizon(_skyEquatorial(lamS, 0, eps), lst, lat, _skySunDir);
     const F = (93.272 + 13.229350 * n) * _SKY_RAD;
     _skyHorizon(_skyEquatorial(lamS + (physics.moonPhase || 0) * 2 * Math.PI, 5.128 * _SKY_RAD * Math.sin(F), eps), lst, lat, _skyMoonDir);
+    // 星空（70-night-sky.js）も同じ時刻・場所で回す：J2000 からの日数・地方恒星時・緯度・地軸の傾き
+    skyFrameNow.n = n; skyFrameNow.lst = lst; skyFrameNow.lat = lat; skyFrameNow.lon = ll.lon; skyFrameNow.eps = eps;
     return { sun: _skySunDir, moon: _skyMoonDir, lat: ll.lat, lon: ll.lon };
 }
 window.skyBodyDirections = skyBodyDirections;

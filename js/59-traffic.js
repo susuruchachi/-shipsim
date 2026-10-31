@@ -2130,7 +2130,7 @@ function _tfHorn(S, pat) {
     let tt = 0;
     const sh = typeof HORN_SHORT !== 'undefined' ? HORN_SHORT : 1, lg = typeof HORN_LONG !== 'undefined' ? HORN_LONG : 5, gp = typeof HORN_GAP !== 'undefined' ? HORN_GAP : 1;
     for (const ch of seq) { const len = ch === 'L' ? lg : (pat === 'D' ? 0.5 : sh); blasts.push([tt, len]); tt += len + (ch === 'L' ? 2 : (pat === 'D' ? 0.4 : gp)); }
-    const em = new AudioEmitter(audio.buses.horn, 120, 0.9);
+    const em = new AudioEmitter(audio.buses.horn, 160, 0.6);   // 大きな船の汽笛：遠くまで届く（36-horns.js の HORN_FALLOFF よりさらにゆるやか）
     em.update(new THREE.Vector3(loc.x, 25, loc.z));
     // 保存した船：その船の汽笛（船体設定の汽笛・音・種類）で鳴らす
     const horns = S.saved && S.saved.cfg && S.saved.cfg.sound && Array.isArray(S.saved.cfg.sound.horns) ? S.saved.cfg.sound.horns : null;

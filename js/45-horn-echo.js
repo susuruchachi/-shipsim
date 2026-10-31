@@ -4,7 +4,7 @@
 //  船のまわりを 32 の向きに見て、いちばん近い陸（崖・岸壁・島）までの距離を測り、
 //  よく返ってきそうな所（近くて高い所）を最大 4 つ選んで、こだまにする。
 //    ・遅れ   ＝ 汽笛 → 崖 → 聞く所 の道のり ÷ 音の速さ（1km 先の崖なら約 6 秒後）
-//    ・大きさ ＝ その道のりに反比例（汽笛そのものと同じ減衰：60m より先は距離に反比例）＋空気に吸われる分。
+//    ・大きさ ＝ その道のりで弱まる（汽笛そのものと同じ減衰：36-horns.js の hornFalloff）＋空気に吸われる分。
 //               高い崖ほどよく返る
 //    ・音色   ＝ 道のりが長いほど高い音が抜けてこもる
 //    ・左右   ＝ 返ってくる向き（視点の向きに合わせて振る）
@@ -124,9 +124,9 @@ function updateHornEcho(t) {
             const back = cam ? Math.hypot(cam.x - wx, cam.z - wz) : h.r;
             const L = h.r + back;
             const delay = L / AUDIO_SPEED_OF_SOUND;
-            // 汽笛そのものと同じ減衰（60m より先は距離に反比例）× 空気に吸われる分 × 崖の返しやすさ。
+            // 汽笛そのものと同じ減衰（36-horns.js の hornFalloff）× 空気に吸われる分 × 崖の返しやすさ。
             // こだまは聞き分けやすいので少し持ち上げる（×6）。汽笛の音は 'dry' では聞く所までの減衰の前なので、この値がそのまま効く
-            const spread = 60 / (60 + Math.max(0, L - 60)), air = Math.exp(-L / 9000);
+            const spread = (typeof hornFalloff === 'function') ? hornFalloff(L) : 60 / (60 + Math.max(0, L - 60)), air = Math.exp(-L / 9000);
             const gain = _echo.src === 'dry' ? Math.min(0.5, 6 * h.refl * spread * air) : Math.min(0.45, 2.2 * h.s);
             h.L = L;
             if (!T.active || Math.abs(delay - T.delay) > 0.25) {

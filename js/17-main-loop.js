@@ -1312,6 +1312,8 @@ function updateSky(t) {
     skyMesh.material.uniforms.time.value = t;
     skyMesh.material.uniforms.camPos.value.copy(camera.position);
     skyMesh.material.uniforms.skyExposure.value = 0.75 * lightSettings.skyMult;
+    // 本物の星空・月の向き・光害・街明かり（70-night-sky.js）
+    if (typeof updateNightSky === 'function') updateNightSky(t);
 }
 
 // 表示の文字は、変わったときだけ書き換える（毎フレーム十数か所を書き換えると、そのたびにブラウザが配置を計算し直す）

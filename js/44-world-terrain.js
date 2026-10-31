@@ -184,15 +184,43 @@ function _trDeepRange() {
 }
 // ── 地面の材質：海底の網より深い所は描かない ──
 let _trMat = null;
+// 街明かりに照らされた地面（夜）：70-night-sky.js が、まわり 30km の灯りの明るさの絵（tex）・その範囲（box：x0, z0, 1/幅, 中心からの丸みの補正用の半幅）・
+// 明るさ（k）を入れる。陸（本当の高さ 0.6m 以上）だけを、升目ごとにまだらに光らせる
+const _trCityU = { tex: { value: null }, box: { value: new THREE.Vector4(0, 0, 0, 0) }, k: { value: 0 }, win: { value: 0 } };
+window._trCityU = _trCityU;
 function _trMaterial() {
     if (_trMat) return _trMat;
     _trMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
     _trMat.onBeforeCompile = (sh) => {
         sh.uniforms.uTrSeabed = _trSeabedU;
-        sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vTrY;')
-            .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\n    vTrY = (modelMatrix * vec4(transformed, 1.0)).y;');
-        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vTrY;\nuniform float uTrSeabed;')
-            .replace('void main() {', 'void main() {\n    if (vTrY < uTrSeabed) discard;');
+        sh.uniforms.uCityTex = _trCityU.tex; sh.uniforms.uCityBox = _trCityU.box; sh.uniforms.uCityK = _trCityU.k;
+        sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vTrY;\nvarying vec2 vTrXZ;')
+            .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\n    vec4 trWp = modelMatrix * vec4(transformed, 1.0);\n    vTrY = trWp.y; vTrXZ = trWp.xz;');
+        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+varying float vTrY;
+varying vec2 vTrXZ;
+uniform float uTrSeabed;
+uniform sampler2D uCityTex;
+uniform vec4 uCityBox;
+uniform float uCityK;
+float trCityHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float trCityNoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(trCityHash(i), trCityHash(i + vec2(1.0, 0.0)), f.x), mix(trCityHash(i + vec2(0.0, 1.0)), trCityHash(i + vec2(1.0, 1.0)), f.x), f.y);
+}`)
+            .replace('void main() {', 'void main() {\n    if (vTrY < uTrSeabed) discard;')
+            .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+    if (uCityK > 0.0) {
+        vec2 cuv = (vTrXZ - uCityBox.xy) * uCityBox.z;
+        vec2 dc = vTrXZ - uCityBox.xy - vec2(uCityBox.w);
+        float hTrue = vTrY + dot(dc, dc) / 12742000.0;          // 惑星の丸みで下げた分を戻す
+        if (hTrue > 0.6 && cuv.x > 0.0 && cuv.y > 0.0 && cuv.x < 1.0 && cuv.y < 1.0) {
+            // 街の明るさを、なめらかなまだらに（明るい通り・暗い公園や畑）
+            float m = 0.25 + 1.6 * trCityNoise(vTrXZ / 110.0) * (0.35 + trCityNoise(vTrXZ / 37.0 + 7.3));
+            totalEmissiveRadiance += texture2D(uCityTex, cuv).rgb * (uCityK * m * smoothstep(0.6, 2.0, hTrue));
+        }
+    }`);
     };
     _trMat.customProgramCacheKey = () => 'worldTerrain';
     noShipLightProbe(_trMat);
@@ -664,6 +692,7 @@ function _trRequest(cx, cz) {
     if (maxH < -140 && !_trNearbyShapes(cx, cz, TR_FAR.half).length) {   // 大陸棚（浅瀬があり得る所）も無い外洋
         _trDispose(terrain.near); _trDispose(terrain.far); _trDispose(terrain.fine);
         terrain.near = terrain.far = terrain.fine = null;
+        terrain.nearH = terrain.farH = terrain.fineH = null;
         return;
     }
     const F = worldFrame();
@@ -675,7 +704,7 @@ function _trRequest(cx, cz) {
     // 作り込んだ港のそばなら、船のまわりをもっと細かく
     terrain.fineOn = _trNearDetail(cx, cz);
     if (terrain.fineOn) w.postMessage({ id, which: 'fine', frame, n: TR_FINE.n, half: TR_FINE.half, cx, cz, oct: WORLD_OCT_FULL, shapes });
-    else { _trDispose(terrain.fine); terrain.fine = null; terrain.quay = null; }
+    else { _trDispose(terrain.fine); terrain.fine = null; terrain.quay = null; terrain.fineH = null; }
     w.postMessage({ id, which: 'near', frame, n: TR_NEAR.n, half: TR_NEAR.half, cx, cz, oct: WORLD_OCT_FULL, shapes });
     w.postMessage({ id, which: 'far', frame, n: TR_FAR.n, half: TR_FAR.half, cx, cz, oct: 15, shapes: [] });
 }
@@ -683,7 +712,7 @@ function _trOnHeights(msg) {
     if (msg.id !== terrain.reqId || world.mode !== 'world' || !terrain.center) return;
     const { x: cx, z: cz } = terrain.center;
     if (msg.which === 'near') {
-        terrain.nearH = { H: msg.H, n: TR_NEAR.n, half: TR_NEAR.half, cx, cz };
+        terrain.nearH = { H: msg.H, n: TR_NEAR.n, half: TR_NEAR.half, cx, cz, id: msg.id };
         _brkBuild(terrain.nearH);
         _trSeabedTex(terrain.nearH);
         _trDispose(terrain.near);
@@ -693,12 +722,14 @@ function _trOnHeights(msg) {
         _trDispose(terrain.fine);
         const ll = worldUnitToLatLon(worldLocalToUnit(cx, cz));
         terrain.fine = _trBuildMesh(msg.H, TR_FINE.n, TR_FINE.half, cx, cz, null, { coastOnly: 10, smoothCoast: true, quayWalls: true, detail: _rwDetailOf(ll.lat, ll.lon) || (typeof _hdNearDetail === 'function' ? _hdNearDetail(cx, cz) : null) });
+        terrain.fineH = { H: msg.H, n: TR_FINE.n, half: TR_FINE.half, cx, cz, id: msg.id };   // 街明かり（70-night-sky.js）が岸壁の上に灯りを置くのに使う
         _trQuayIndex(terrain.fine);
         if (terrain.fine) scene.add(terrain.fine);
     } else {
         _trDispose(terrain.far);
         terrain.far = _trBuildMesh(msg.H, TR_FAR.n, TR_FAR.half, cx, cz, { cx, cz, half: TR_NEAR.half }, { far: true });
         if (terrain.far) scene.add(terrain.far);
+        terrain.farH = { H: msg.H, n: TR_FAR.n, half: TR_FAR.half, cx, cz, id: msg.id };
         terrain.pending = false;
     }
 }
@@ -715,9 +746,40 @@ function _pMat(key, color, opts) {
         noShipLightProbe(m);
         if (key !== 'lamp') m.color.multiplyScalar(0.6);      // 海の上の強い光に合わせて少し暗く
         if (opts && opts.emissive !== undefined) m.emissive.setHex(opts.emissive).convertSRGBToLinear();
+        if (key === 'bld') _pWindowLights(m);
         _pMats[key] = m;
     }
     return _pMats[key];
+}
+// 港の建物の窓：夜は、階（3.4m）ごと・窓（2.6m）ごとに、ところどころ灯りがともる（70-night-sky.js が _trCityU.win に夜の明るさを入れる）
+function _pWindowLights(m) {
+    m.onBeforeCompile = (sh) => {
+        sh.uniforms.uWin = _trCityU.win;
+        sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vBwp;\nvarying vec3 vBn;')
+            .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+    vec4 bwp = vec4(transformed, 1.0);
+    vec3 bn = objectNormal;
+    #ifdef USE_INSTANCING
+        bwp = instanceMatrix * bwp; bn = mat3(instanceMatrix) * bn;
+    #endif
+    vBwp = (modelMatrix * bwp).xyz; vBn = normalize(mat3(modelMatrix) * bn);`);
+        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+varying vec3 vBwp;
+varying vec3 vBn;
+uniform float uWin;
+float pWinHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }`)
+            .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+    if (uWin > 0.0 && abs(vBn.y) < 0.5) {
+        float u = dot(vBwp.xz, vec2(-vBn.z, vBn.x)) / 2.6, v = (vBwp.y - 1.0) / 3.4;
+        vec2 cell = floor(vec2(u, v)), f = fract(vec2(u, v));
+        float win = step(0.18, f.x) * step(f.x, 0.82) * step(0.3, f.y) * step(f.y, 0.8) * step(0.0, v);
+        float h = pWinHash(cell + floor(vBwp.xz / 40.0) * 13.1);
+        float lit = step(0.55, h);
+        vec3 wc = mix(vec3(1.0, 0.72, 0.42), vec3(0.85, 0.92, 1.0), step(0.85, h));
+        totalEmissiveRadiance += wc * (win * lit * uWin * (0.5 + 0.8 * pWinHash(cell + 3.7)));
+    }`);
+    };
+    m.customProgramCacheKey = () => 'portBldWin';
 }
 // 箱をたくさん（同じ材質）まとめて1つの網にする
 function _pBoxes(list, mat) {
@@ -868,6 +930,10 @@ function _buildPort(S) {
      [cranes, _pMat('crane', 0xd9a12c, { metalness: 0.3 })], [boats, _pMat('boat', 0xffffff)], [roofs, _pMat('roof', 0xffffff)], [bollards, _pMat('bollard', 0x2a2a2a, { metalness: 0.4 })]]
         .forEach(([list, mat]) => { const m = _pBoxes(list, mat); if (m) g.add(m); });
     g.userData.bollards = bollards.map(b => ({ x: b.x, y: b.y, z: b.z }));
+    // 照明塔の灯り（夜：70-night-sky.js が点にする）：岸壁の縁の少し内側と、荷さばき地の奥に 45m おき（高さ 20m）
+    const lamps = [];
+    for (let b = -half + 20; b <= half - 20; b += 45) for (const a of [-8, -Math.max(20, (S.apron || 40) * 0.7)]) { const q = P(a, b); lamps.push({ x: q.x, y: 23, z: q.z }); }
+    g.userData.lamps = lamps;
     scene.add(g);
     return { group: g, colliders, shape: S };
 }
@@ -906,7 +972,7 @@ function _trClearAll() {
     terrain.ports.clear();
     terrain.grounded = false;
     terrain.depth = null;
-    terrain.nearH = null;
+    terrain.nearH = null; terrain.farH = null; terrain.fineH = null;
     _brkBuild(null);
     _trSeabedTex(null);
 }
