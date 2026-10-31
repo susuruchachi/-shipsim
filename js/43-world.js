@@ -1397,40 +1397,84 @@ async function _rwDecodeHeights(blob, cols, rows, name) {
     if (bmp.close) bmp.close();
     return h;
 }
-async function _rwLoadGrid(url) {
-    const meta = await (await fetch(url + '.json')).json();
+async function _rwLoadGrid(url, metaIn) {
+    const meta = metaIn || await (await fetch(url + '.json')).json();
     const blob = await (await fetch(url + '.' + (meta.ext || 'png'))).blob();
     const h = await _rwDecodeHeights(blob, meta.cols, meta.rows, url);
     return { lat0: meta.lat0, lat1: meta.lat1, lon0: meta.lon0, lon1: meta.lon1, rows: meta.rows, cols: meta.cols, cell: meta.cell, h, blend: 0, wrap: !!meta.wrap };
+}
+// 地域の細かい格子（britain・useast・japan）：世界全体では、船・航路・地図で見ている所が近づいたときに初めて読む
+//（以前は世界を読むときに 3 つとも読んで展開していて（3000 万点ほど）、読み込みが重かった）。
+// 読んだら、運河と港の航路（R.carves）を掘り、土台（最後）の前に、決めた順に並べる
+const _rwRegionLoading = new Map();
+function _rwEnsureRegions(R, boxes) {
+    if (!R || !R.regionDefs) return Promise.resolve(0);
+    const hit = (d) => boxes.some(b => b && b.lat1 > d.lat0 - 0.2 && b.lat0 < d.lat1 + 0.2 && _rwLonOverlap({ lon0: d.lon0 - 0.3, lon1: d.lon1 + 0.3 }, b));
+    const need = R.regionDefs.filter(d => !d.grid && hit(d));
+    if (!need.length) return Promise.resolve(0);
+    return Promise.all(need.map(d => {
+        if (!_rwRegionLoading.has(d.key)) _rwRegionLoading.set(d.key, _rwLoadGrid(d.url, d.meta).then(g => {
+            if (_RW !== R || d.grid) return 0;
+            g.blend = 0.12; g.region = d.key;
+            for (const cn of RW_CANALS) if (_rwCanalHits(cn, g)) _rwCarveCanal(cn, g);
+            for (const fw of R.carves || []) if (_rwFwHits(fw, g)) _rwCarveGrid(fw, g);
+            d.grid = g;
+            // 決めた順（REAL_WORLDS の regions の順）に、土台の前へ
+            R.grids = R.regionDefs.filter(q => q.grid).map(q => q.grid).concat(R.grids.filter(q => !q.region));
+            R.apFull = true;          // 自動航行のワーカーへは、次に航路を探すとき丸ごと渡し直す（49-autopilot.js）
+            return 1;
+        }).catch(e => { console.warn('地域の細かい地形を読めませんでした：' + d.key, e); return 0; }).finally(() => _rwRegionLoading.delete(d.key)));
+        return _rwRegionLoading.get(d.key);
+    })).then(a => a.reduce((x, y) => x + (y || 0), 0));
 }
 async function worldLoadReal(key) {
     key = _rwWorldKey(key);
     if (_rwCache[key]) return _rwCache[key];
     const W = REAL_WORLDS[key];
+    // 小さなファイル（一覧・港・航路・地域の範囲・作り込んだ港の範囲と埠頭・航路の前計算）は、同時に取りに行く
+    //（以前は 30 ほどを 1 つずつ待っていて、通信の往復の待ち時間が積み重なっていた）。使う順番・中身は前と同じ
+    const json = (u) => fetch(u).then(r => { if (!r.ok) throw new Error(r.status + ' ' + u); return r.json(); });
+    const soft = (p) => p.then(v => ({ v }), e => ({ e }));
+    const pIdx = W.tiles ? soft(json(W.tiles + '/index.json')) : null;
+    const pPorts = W.portsUrl ? soft(json(W.portsUrl)) : null;
+    const pLanes = W.lanesUrl ? soft(json(W.lanesUrl)) : null;
+    const pRegMeta = (W.regions || []).map(r => soft(json(REAL_WORLDS[r].url + '.json')));
+    const pHarb = (W.harbors || []).map(hk => [soft(json('data/harbors/' + hk + '.json')), soft(fetch('data/harbors/' + hk + '_berths.json').then(r => r.ok ? r.json() : null))]);
+    const pFw = soft(fetch(W.url + '_fairways.json').then(r => r.ok ? r.json() : null));
     const base = await _rwLoadGrid(W.url);
     base.base = true;
     const rw = Object.assign({ key }, base);
     // 世界全体：船の近くだけ読む区画の一覧と、世界の主な港・運河（全体図にも掘る：全体図の上の航路探し・地図に）
     if (W.tiles) {
-        rw.tileIdx = await (await fetch(W.tiles + '/index.json')).json();
+        const r = await pIdx; if (r.e) throw r.e;
+        rw.tileIdx = r.v;
         rw.tileHave = new Set(rw.tileIdx.have);
         rw.tileUrl = W.tiles;
         rw.tiles = {};
         rw.carves = [];
         for (const cn of RW_CANALS) _rwCarveCanal(cn, base);
     }
-    if (W.portsUrl) { try { rw.extraPorts = await (await fetch(W.portsUrl)).json(); } catch (e) { console.warn('世界の港の一覧を読めませんでした', e); } }
+    if (pPorts) { const r = await pPorts; if (r.e) console.warn('世界の港の一覧を読めませんでした', r.e); else rw.extraPorts = r.v; }
     // 世界全体の航路の点・区間（67-sea-lanes.js）
-    if (W.lanesUrl) { try { const L = await (await fetch(W.lanesUrl)).json(); if (typeof seaLaneSetWorld === 'function') seaLaneSetWorld(L); } catch (e) { console.warn('世界の航路を読めませんでした', e); } }
+    if (pLanes) { const r = await pLanes; if (r.e) console.warn('世界の航路を読めませんでした', r.e); else if (typeof seaLaneSetWorld === 'function') seaLaneSetWorld(r.v); }
     // 地域の細かい格子を上に重ねる（縁の 0.12°（≒ 8〜13km）で土台となめらかにつなぐ）
     if (W.regions) {
         rw.grids = [];
-        for (const r of W.regions) {
-            const g = await _rwLoadGrid(REAL_WORLDS[r].url);
-            g.blend = 0.12; g.region = r;
-            // 運河・細い海峡（関門海峡など）は、細かい格子でも升目より狭いことがあるので掘る
-            if (W.tiles) for (const cn of RW_CANALS) if (_rwCanalHits(cn, g)) _rwCarveCanal(cn, g);
-            rw.grids.push(g);
+        if (W.tiles) {
+            // 世界全体：範囲だけ覚えておき、近づいたら読む（_rwEnsureRegions：worldEnsureTiles から）
+            rw.regionDefs = [];
+            for (let i = 0; i < W.regions.length; i++) {
+                const r = await pRegMeta[i];
+                if (r.e) { console.warn('地域の細かい地形の範囲を読めませんでした：' + W.regions[i], r.e); continue; }
+                rw.regionDefs.push({ key: W.regions[i], url: REAL_WORLDS[W.regions[i]].url, meta: r.v, lat0: r.v.lat0, lat1: r.v.lat1, lon0: r.v.lon0, lon1: r.v.lon1, grid: null });
+            }
+        } else {
+            for (let i = 0; i < W.regions.length; i++) {
+                const r = await pRegMeta[i]; if (r.e) throw r.e;
+                const g = await _rwLoadGrid(REAL_WORLDS[W.regions[i]].url, r.v);
+                g.blend = 0.12; g.region = W.regions[i];
+                rw.grids.push(g);
+            }
         }
         rw.grids.push(base);
     }
@@ -1439,17 +1483,18 @@ async function worldLoadReal(key) {
     rw.hd = [];
     rw.hdMeta = [];
     rw.berths = [];
-    for (const hk of W.harbors || []) {
-        try { const m = await (await fetch('data/harbors/' + hk + '.json')).json(); rw.hdMeta.push({ key: hk, name: m.name, lat0: m.lat0, lat1: m.lat1, lon0: m.lon0, lon1: m.lon1 }); }
-        catch (e) { console.warn('作り込んだ港の範囲を読めませんでした：' + hk, e); continue; }
+    for (let i = 0; i < (W.harbors || []).length; i++) {
+        const hk = W.harbors[i], [pm, pb] = pHarb[i];
+        const m = await pm;
+        if (m.e) { console.warn('作り込んだ港の範囲を読めませんでした：' + hk, m.e); continue; }
+        rw.hdMeta.push({ key: hk, name: m.v.name, lat0: m.v.lat0, lat1: m.v.lat1, lon0: m.v.lon0, lon1: m.v.lon1 });
         // その港の埠頭（作るときに書き出したもの：[名前, 種類, 緯度, 経度, 通る所, { at, bearing, quay, dock, group, berth }]）
-        try { const r = await fetch('data/harbors/' + hk + '_berths.json'); if (r.ok) rw.berths.push(...(await r.json())); }
-        catch (e) { /* 埠頭の一覧の無い港 */ }
+        const b = await pb;
+        if (!b.e && b.v) rw.berths.push(...b.v);
     }
     // 前もって探しておいた港の航路（data/<key>_fairways.json。無ければ、その場で探す：重い）
     rw.fwCache = null;
-    try { const r = await fetch(W.url + '_fairways.json'); if (r.ok) { const c = await r.json(); if (c.v === RW_FAIRWAY_VER) rw.fwCache = c.ports; } }
-    catch (e) { /* 無ければその場で */ }
+    { const r = await pFw; if (!r.e && r.v && r.v.v === RW_FAIRWAY_VER) rw.fwCache = r.v.ports; }
     _rwCache[key] = rw;
     return rw;
 }
@@ -1538,16 +1583,18 @@ async function worldEnsureTiles(boxes, opt) {
     if (opt && opt.limit && keys.length > opt.limit) return 0;
     const now = performance.now();
     for (const k of keys) if (R.tiles[k]) R.tiles[k].used = now;
+    // 地域の細かい格子（まだ読んでいなければ）も一緒に
+    const pReg = _rwEnsureRegions(R, boxes);
     const need = keys.filter(k => !R.tiles[k]);
-    if (!need.length) return 0;
+    if (!need.length) { const nr = await pReg; if (nr && _RW === R) _rwTilesChanged(); return nr; }
     let n = 0;
-    await Promise.all(need.map(k => {
+    await Promise.all([pReg.then(nr => { n += nr; })].concat(need.map(k => {
         if (!_rwTileLoading.has(k)) _rwTileLoading.set(k, _rwLoadTile(R, k).then(t => {
             if (_RW !== R || R.tiles[k]) return;
             _rwTileLoaded(R, t); t.used = performance.now(); R.tiles[k] = t; n++;
         }).catch(e => console.warn('地形の区画を読めませんでした：' + k, e)).finally(() => _rwTileLoading.delete(k)));
         return _rwTileLoading.get(k);
-    }));
+    })));
     if (_RW !== R) return n;
     const all = Object.keys(R.tiles);
     if (all.length > RW_TILE_MAX && !R.keepAll) {

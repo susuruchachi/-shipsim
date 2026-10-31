@@ -547,7 +547,11 @@
 //               ・先読みの回避（49-autopilot.js の _apHazard）：航路をたどったときの船体の外周を、止まれる距離＋船の長さの 1.5 倍先まで予測し、
 //                 浅い所・施設にかかるなら針路を左右 10〜60° ずらしてよける。よけられなければ減速・後進で止め、止まったまま 15 秒たったら
 //                 今いる所から航路を引き直す。予測は実際の舵の取り方（線からのずれを直す・ずれが大きいと舵 35°）と、走って測った旋回半径で
-var APP_VERSION = '0.03.030.000';
+// 0.03.030.001 ・地図（現実の世界）の読み込みを速く（43-world.js の worldLoadReal）：小さな JSON（区画の一覧・港・航路の点・作り込んだ港・
+//                 港の航路）を順番ではなく同時に取りに行く。細かい地域の格子（イギリス・アメリカ東岸・日本）は最初に全部読まず、
+//                 船のまわりの区画を読むとき（worldEnsureTiles）に、その地域にかかるものだけ読む（_rwEnsureRegions）。
+//                 読んだら港の航路・運河を掘り、自動航行の計算にも全部送り直す
+var APP_VERSION = '0.03.030.001';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
