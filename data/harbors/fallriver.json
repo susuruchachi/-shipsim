@@ -1,0 +1,68 @@
+{
+ "key": "fallriver",
+ "name": "フォール・リヴァー",
+ "lat0": 41.62492303543554,
+ "lat1": 41.735,
+ "lon0": -71.25,
+ "lon1": -71.13994342160987,
+ "rows": 1225,
+ "cols": 915,
+ "dLat": 8.993216059187306e-05,
+ "dLon": 0.00012041201136776151,
+ "cell": 10,
+ "scale": 0.1,
+ "kinds": {
+  "0": "sea",
+  "1": "land",
+  "2": "dock water",
+  "3": "pier",
+  "4": "port land"
+ },
+ "measured": true,
+ "measured_frac": 1.0,
+ "sources": [
+  {
+   "name": "NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)",
+   "url": "https://nauticalcharts.noaa.gov/data/bluetopo.html",
+   "license": "CC0-1.0（元の測量もすべて CC0-1.0 を確認）",
+   "crs": "NAD83 / UTM（タイルごと）→ WGS84 の緯度・経度に置き直し",
+   "vertical": "NAVD88[m]",
+   "resolution": [
+    "4m"
+   ],
+   "tiles": [
+    "BH4ZP5FZ",
+    "BH4ZQ5G4",
+    "BH4ZP5G2",
+    "BH4ZQ5G2",
+    "BH4ZR5G2",
+    "BH4ZP5G4",
+    "BH4ZR5G4",
+    "BH4ZQ5FZ"
+   ],
+   "surveys": 33,
+   "survey_years": [
+    1951,
+    2026
+   ],
+   "institutions": [
+    "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+    "DOD/USACE -- US Army Corps of Engineers New England District"
+   ]
+  },
+  {
+   "name": "NOAA NCEI Coastal Relief Model 2023（BlueTopo の無い所・陸の高さ）",
+   "url": "https://www.ncei.noaa.gov/products/coastal-relief-model",
+   "license": "米国政府の作成したデータ（パブリック・ドメイン）",
+   "vertical": "NAVD88[m]",
+   "resolution": "1 秒角"
+  },
+  {
+   "name": "OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）",
+   "url": "https://www.openstreetmap.org/copyright",
+   "license": "ODbL 1.0（© OpenStreetMap contributors）"
+  }
+ ],
+ "channels": true,
+ "fairway_depth": 8.4
+}

@@ -82,6 +82,18 @@
   - southampton（サウサンプトン：西ドック・東ドック・オーシャン・ドック・テスト川・イッチェン川・サウサンプトン・ウォーター）
   - liverpool（リヴァプール：マージー川・ピア・ヘッドの浮き桟橋・ドック・クロスビー水道・クイーンズ水道）
 
+## 港のまわりの実測の水深・浚渫区域（harbors/fallriver：試験）
+
+- 調べたデータ源・利用条件・形式と容量・統合の方法は **`harbors/HARBOR_DATA.md`**
+- 水深：**NOAA BlueTopo**（4m、CC0-1.0。タイルごとに元の測量の利用条件を確かめ、CC0 以外があれば作るのを止める）→ 無い所は CRM
+  - NAD83 / UTM → 緯度・経度、高さは NAVD88[m]（ゲームの海面 0 ≒ 平均海面）
+  - `measured`：実測の深さのまま（港の航路・岸壁の前を掘らない。43-world.js の `_rwCarveHD`・44-world-terrain.js の `_portAdjust`）
+- 浚渫区域：**USACE National Channel Framework**（航路・回頭水域・泊地の範囲と計画・維持水深）→ `harbors/<key>_channels.json`。
+  米国政府の著作物（利用の制限なし）。深さはフィートを m に、基準面は記録に無い（ふつう MLLW）。**地形には混ぜない**
+  （海図モードで破線と維持水深を描く・港の中の航路はこの中を通りやすく）
+- 陸と水・桟橋・建物：OpenStreetMap（ODbL）
+- 作り直し：`python3 harbors/build_harbor.py fallriver --cache <作業フォルダ>`（tifffile・imagecodecs・pyproj が要る）
+
 ## useast.png / useast.json（アメリカ東海岸：フロリダ〜メイン・ノヴァスコシア・バミューダ・バハマの北）
 
 - 範囲：北緯 24.3°〜46.0°、西経 82.0°〜63.0°（20 秒角 ≒ 620m × 470m ごと、3421 × 3907 点）

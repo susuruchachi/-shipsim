@@ -559,7 +559,13 @@
 //                 16-daynight-and-telegraph.js：ボタンの出す／止めるを表示と同じ決め方に。以前は消えないまま、もう一度押しても出せなかった）
 //               ・カメラが初めて水中に入ったときだけ大きく止まっていたのを直す（23-underwater.js：水中では水面を両面で描くが、
 //                 その版のシェーダーを初めて使うときに作っていた。水上にいるうちに 1 フレームだけ両面で描いて作っておく）
-var APP_VERSION = '0.03.030.003';
+// 0.03.031.000 ・港のまわりの詳しいデータ（試験：フォール・リヴァー港。調べた結果は data/harbors/HARBOR_DATA.md）：
+//                 水深は NOAA BlueTopo（4m おきの実測。CC0：タイルごとに元の測量の利用条件を確かめる）、無い所は CRM、その外は今までどおり ETOPO。
+//                 浚渫区域（航路・回頭水域・泊地の範囲と維持水深）は USACE National Channel Framework を data/harbors/<key>_channels.json に
+//                 分けて置き、地形には混ぜない。実測の港（measured）は港の航路・岸壁の前を掘らず、測った深さのまま（43-world.js の _rwCarveHD、
+//                 44-world-terrain.js の _portAdjust）。港の中の航路は浚渫区域の中を通りやすく、海図モードは浚渫区域を破線と維持水深で描く。
+//                 フォール・リヴァー港は州営埠頭に置き、航路はマウント・ホープ橋からナラガンセット湾の東水道へ
+var APP_VERSION = '0.03.031.000';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

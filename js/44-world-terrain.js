@@ -47,8 +47,10 @@ function _portShape(p) {
     // s：海の方、l：岸沿い（s を右に90°）
     // 海の方の向き（物理の面では東が −x）
     // detail：作り込んだ港の地形の中（本物の岸壁・ドックがあるので、地形はほとんど手直ししない）
-    const detail = !!(p.real && typeof _rwDetailBoxOf === 'function' && _RW && _rwDetailBoxOf(p.lat, p.lon));     // （細かい地形をまだ読んでいなくても）
-    return { id: p.id, type: p.type, real: !!p.real, detail, x: loc.x, z: loc.z, sx: -Math.sin(br), sz: Math.cos(br),
+    const dBox = p.real && typeof _rwDetailBoxOf === 'function' && _RW ? _rwDetailBoxOf(p.lat, p.lon) : null;     // （細かい地形をまだ読んでいなくても）
+    const detail = !!dBox;
+    // measured：実測の水深の港（岸壁の前も掘らない。測った深さのまま）
+    return { id: p.id, type: p.type, real: !!p.real, detail, measured: !!(dBox && dBox.measured), x: loc.x, z: loc.z, sx: -Math.sin(br), sz: Math.cos(br),
              quayLen, apron, basin, depth: T.depth, seed: p.seed, name: p.name, chLen: worldPortChannelLen(p) };
 }
 // 桟橋の並び（港の座標：b＝岸沿い）。軍港は桟橋を岸壁の片側に寄せ、残りを大きな船が横付けできる岸壁にする
@@ -80,6 +82,7 @@ function _portAdjust(h, x, z, shapes) {
         const half = S.quayLen / 2;
         // 作り込んだ港：岸壁の後ろの陸を平らにし、前の水面を掘るだけ（陸は削らない・沖への航路は掘らない）
         if (S.detail) {
+            if (S.measured) continue;
             // 地形に合わせる：陸は削らず・平らにもしない（本物の岸の線のまま）。岸壁の前の、もともと水
             // （か干潟ほどの低い所）だけを、船が付けられる深さに掘る。船を寄せる位置は本物の岸の線から測る
             //（50-harbor-auto.js の harborBerthPlan）
