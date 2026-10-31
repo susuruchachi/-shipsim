@@ -1822,7 +1822,6 @@ function computeHullBuoyancyPhysics(cgWorldX, cgWorldZ, rotY, pitchAngle, shipY,
     // 各サンプル区間が船体上で占める実世界での長さ[m]（等幅ビンなので一定）
     const deltaZWorld = (2 * len) / BUOY_SEG_COUNT;
 
-    const selfWaveSpd = (typeof selfWaveAlongHull === 'function' && Math.abs(physics.speed || 0) > 0.5) ? physics.speed : 0;
     let volSubmerged = 0;        // m³
     let Awp = 0;                 // m²
     let momentVolAboutCG = 0;    // m⁴（× ρg でN・mのトルクになる）
@@ -1841,8 +1840,8 @@ function computeHullBuoyancyPhysics(cgWorldX, cgWorldZ, rotY, pitchAngle, shipY,
         // 要望に基づき、ここだけ引き波を含めた水面高さを使うようにする。
         // これにより、船首が持ち上げた波が(伝播して)船体を押し上げ／沈める形で
         // ピッチにフィードバックされ、双方向の関係になる。
-        // 船が自分で立てている波（船首の山・その後ろの谷）も足す：速く走る小さな船は船首が持ち上がる（02-utils-and-wave-physics.js）
-        const waveY = getWaveHeight(px, pz, t, false) + (selfWaveSpd ? selfWaveAlongHull(alongDistW, len, selfWaveSpd) : 0);
+        // （船が自分で立てている船首の山・その後ろの谷も入っている：02-utils-and-wave-physics.js の selfWaveAt。速く走る小さな船は船首が持ち上がる）
+        const waveY = getWaveHeight(px, pz, t, false);
 
         const baseKeelY = shipY - waterlineYScaled + (hp.designWaterlineY - sl.draft) * physScale;
         const keelY = baseKeelY - alongDistW * Math.sin(pitchAngle);

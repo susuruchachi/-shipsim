@@ -253,22 +253,85 @@ function bowWaveAmplitude(speedKn) {
     if (kn < 0.5) return 0;
     return kn * 0.028 * Math.min(1.4, Math.max(0.45, Math.sqrt(kn / 20.0))) * (physics.bowFullness || 1) * wakeScaleRatioFor(kn);
 }
-// 船が自分で立てている波の、船体に沿った水面の高さ[m]（a：船体の中ほどから前へ[m]、halfLen：半長[m]）。
-// 進む向きの端（船首）に山、そこから後ろへ波長 2πv²/g で山・谷が続く（船の後ろに残る横波と同じ）。
-// 波長が船より長い（小さな船が速く走る）と、船首は山・船尾は谷に入って、船首が持ち上がり船尾が沈む。
-// 船の長さの割に遅い船（フルード数 0.25 まで：大きな船のふだんの速さ）では、山と谷が船体の上で打ち消しあうので
-// 何もしない（今までどおり）。0.4 で全部。波長は船の長さの 2.5 倍までとする（それより速いと、波は船体の下で
-// ほぼ平らになって船首が上がらなくなるが、実際の小さな船は速いほど船首を上げて滑る）。
-// 船体のすぐ脇の波は、広がっていった引き波より高いので、船首の波の高さの 1.5 倍にする
-function selfWaveAlongHull(a, halfLen, speedKn) {
-    const v = Math.abs(speedKn || 0) * 0.514444;
-    const fr = v / Math.sqrt(9.81 * Math.max(0.5, 2 * halfLen));
+// ── 船が自分で立てている波（船体のまわりの水面）──
+// 浮力（18 の computeHullBuoyancyPhysics：getWaveHeight で）・喫水線の輪郭と水面の穴（04 の updateHullWaterlinePolygon）・
+// スクリューの深さ（32 の propImmersion・21 の getPropellerEfficiency）・泡の粒（getWaveHeight）・水面の描画
+//（04 のシェーダーの selfWaveHF）で、同じ水面を使う（物理だけ船首が上がり、描いた水面・喫水線はそのまま、にならないように）。
+//  ・進む向きの端（船首）に山、そこから後ろへ波長 2πv²/g で山・谷が続く（船の後ろに残る横波と同じ）。波長が船より
+//    長い（小さな船が速く走る）と、船首は山・船尾は谷に入って、船首が持ち上がり船尾が沈む。
+//    船の長さの割に遅い船（フルード数 0.25 まで：大きな船のふだんの速さ）では、山と谷が船体の上で打ち消しあうので
+//    何もしない（今までどおり）。0.4 で全部。波長は船の長さの 2.5 倍までとする（それより速いと、波は船体の下で
+//    ほぼ平らになって船首が上がらなくなるが、実際の小さな船は速いほど船首を上げて滑る）。
+//    船体のすぐ脇の波は、広がっていった引き波より高いので、船首の波の高さ（bowWaveAmplitude）の 1.5 倍にする
+//  ・揺れ：引き波の周期（getWakeHeight の波長÷波の速さ）で、船首の山が息をするように高く・低くなり、引き波の波長の
+//    細かな波が船体に沿って後ろへ流れる。左右の舷の波も同じ周期で少しずつ高さが入れ替わる（横揺れ）。
+//    どれも山の高さに比例するので、引き波が大きいほど大きく揺れる
+//  ・船体の外へは、横へ（船の長さの 12%）・前へ（6%）・後ろへ（40%）なめらかに消える
+const selfWave = { on: 0, H: 0, H0: 0, k: 0, hl: 1, dir: 1, ox: 0, oz: 0, fx: 0, fz: 1, ra: 0, rk: 0, rph: 0, sa: 0, wl: 1, wf: 1, wb: 1, ps: 1, T: 0, env: 0, wet: 1, tPrev: null };
+window.selfWave = selfWave;
+// 毎フレーム（17-main-loop.js）：船の今の位置・向き・速さから
+function updateSelfWave(t) {
+    const S = selfWave, hp = window.hullProfile;
+    S.on = 0;
+    // 船体が水に触れている度合い（17-main-loop.js の physics.hullWet）をなめらかにしたもの：
+    // 波の上で跳ねて船体が水から出ている間は、船首の山も立たない（水に戻ると 0.4 秒ほどでまた立つ）
+    const dt = S.tPrev === null ? 0 : Math.max(0, Math.min(0.5, t - S.tPrev)); S.tPrev = t;
+    const wetNow = Number.isFinite(physics.hullWet) ? Math.max(0, Math.min(1, physics.hullWet)) : 1;
+    S.wet += (wetNow - S.wet) * (1 - Math.exp(-dt / 0.4));
+    if (!hp || !hp.ready || typeof _hullOriginWorld !== 'function' || typeof _wakeAxisRad !== 'function') return;
+    // 潜水艦が船体の上まで潜っている間は、水面に船首の波は立たない（54-submarine.js）
+    if (typeof subHullUnder === 'function' && subHullUnder()) return;
+    const kn = physics.speed || 0, absKn = Math.abs(kn), v = absKn * 0.514444;
+    const ps = Math.max(0.25, physics.scale || 1), hl = hp.halfLen * ps;
+    const fr = v / Math.sqrt(9.81 * Math.max(0.5, 2 * hl));
     const on = THREE.MathUtils.smoothstep(fr, 0.25, 0.40);
-    if (!(on > 0)) return 0;
-    const H = 1.5 * bowWaveAmplitude(speedKn) * on;
-    const lam = Math.min(2 * Math.PI * v * v / 9.81, 5 * halfLen), k = 2 * Math.PI / Math.max(0.5, lam);
-    const d = speedKn >= 0 ? halfLen - a : a + halfLen;          // 進む向きの端からの距離
-    return H * Math.cos(k * Math.max(0, d));
+    if (!(on > 0) || absKn < 0.5 || !(S.wet > 0.01)) return;
+    const H0 = 1.5 * bowWaveAmplitude(kn) * on * S.wet;
+    const lam = Math.min(2 * Math.PI * v * v / 9.81, 5 * hl);
+    // 引き波の周期と波長（getWakeHeight と同じ：波長 (5＋0.3kn)・波の速さ (3＋0.2kn)。周期は船の大きさに寄らない）
+    const bf = Math.sqrt(Math.max(0.1, physics.bowFullness || 1));
+    const pws = THREE.MathUtils.clamp(1.8 / Math.sqrt(Math.max(0.05, physics.pitchNaturalOmega || 1.0)), 0.5, 4.0);
+    const Tw = (5.0 + 0.3 * absKn) * bf * pws / (3.0 + 0.2 * absKn), w = 2 * Math.PI / Tw;
+    const lw = (5.0 + 0.3 * absKn) * wakeScaleRatioFor(absKn) * bf * pws;
+    S.H0 = H0; S.T = Tw;
+    S.H = H0 * (1 + 0.3 * Math.sin(w * t) + 0.15 * Math.sin(1.73 * w * t + 1.1));
+    S.ra = 0.25 * H0; S.rk = 2 * Math.PI / Math.max(0.3, lw); S.rph = w * t;
+    // 左右の舷の高さの差（右舷＋・左舷−）：同じ周期で、強さがゆっくり変わる
+    S.sa = 0.06 * H0 * Math.sin(w * t + 1.7) * (0.7 + 0.3 * Math.sin(0.37 * w * t + 0.5));
+    S.k = 2 * Math.PI / Math.max(0.5, lam); S.hl = hl; S.dir = kn >= 0 ? 1 : -1; S.ps = ps;
+    const rad = _wakeAxisRad(physics.heading * Math.PI / 180), o = _hullOriginWorld(physics.cgWorldX, physics.cgWorldZ, rad, ps);
+    S.ox = o.x; S.oz = o.z; S.fx = Math.sin(rad); S.fz = Math.cos(rad);
+    S.wl = 0.5 + 0.24 * hl; S.wf = 0.5 + 0.12 * hl; S.wb = 0.8 * hl;
+    S.on = on;
+}
+// 船体に沿った水面の高さ[m]（a：船体の原点から前へ[m]。船体の中なので横には減らさない。左右の差は入れない）
+// （前後の消え方を S.env に残す：selfWaveAt が左右の差にも使う）
+function selfWaveOnHull(a) {
+    const S = selfWave; if (!S.on) return (S.env = 0);
+    const d = S.dir > 0 ? S.hl - a : a + S.hl;          // 進む向きの端からの距離
+    let env = 1;
+    if (d < 0) env = Math.exp(-(d * d) / (S.wf * S.wf));
+    else if (d > 2 * S.hl) { const e = d - 2 * S.hl; env = Math.exp(-(e * e) / (S.wb * S.wb)); }
+    S.env = env;
+    const dd = Math.max(0, d);
+    return env * (S.H * Math.cos(S.k * dd) + S.ra * Math.sin(S.rk * dd - S.rph));
+}
+// 世界の点 (x, z) での高さ[m]（船体の外では横へなめらかに消える。04 のシェーダーの selfWaveHF と同じ式）
+function selfWaveAt(x, z) {
+    const S = selfWave; if (!S.on) return 0;
+    const dx = x - S.ox, dz = z - S.oz;
+    const a = dx * S.fx + dz * S.fz;
+    if (a > S.hl + 4 * S.wf || a < -S.hl - 4 * S.wb) return 0;
+    const sds = dx * S.fz - dz * S.fx, sd = Math.abs(sds);   // 右舷＋
+    if (sd > S.hl + 4 * S.wl) return 0;
+    const hw = (typeof _hullHalfWidthAtNorm === 'function') ? _hullHalfWidthAtNorm(a / S.hl) * S.ps : 0;
+    const out = sd - hw;
+    const lat = out > 0 ? Math.exp(-(out * out) / (S.wl * S.wl)) : 1;
+    if (lat < 1e-3) return 0;
+    const h = selfWaveOnHull(a);
+    // 左右の差：船体の中では真ん中で 0 になるよう、舷までまっすぐつなぐ
+    const side = Math.max(-1, Math.min(1, sds / Math.max(0.3, hw)));
+    return lat * (h + side * S.sa * S.env);
 }
 const _wakeHRes = { y: 0, foam: 0 };   // 使い回す（呼び出し側は .y をすぐ読むだけ）
 function getWakeHeight(x, z, t) {
@@ -585,9 +648,14 @@ function getOceanHeight(x, z, t) {
         + s3 * 0.55 * swellMul + s4 * 0.5 * 0.22 * chopMul);
 }
 
+// 海の波＋船が今立てている船体のまわりの波（引き波の履歴は入れない：喫水線の輪郭・スクリューの深さ・横揺れ・水中の判定）
+function getWaveHeightSelf(x, z, t) {
+    return getOceanHeight(x, z, t) + selfWaveAt(x, z);
+}
 function getWaveHeight(x, z, t, excludeWake = false) {
     const oceanWave = getOceanHeight(x, z, t);
-    const wakeWave = excludeWake ? 0 : getWakeHeight(x, z, t).y;
+    // 引き波には、船が自分で立てている船体のまわりの波（selfWaveAt）も入れる
+    const wakeWave = excludeWake ? 0 : getWakeHeight(x, z, t).y + selfWaveAt(x, z);
     return oceanWave + wakeWave;
 }
 

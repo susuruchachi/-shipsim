@@ -125,10 +125,9 @@ function updateUnderwater(t) {
     if (typeof scene === 'undefined' || !scene || typeof camera === 'undefined' || !camera) return;
 
     const cam = camera;
-    // カメラ位置での水面の高さ（引き波込み）
-    const surfaceY = (typeof getWaveHeight === 'function')
-        ? getWaveHeight(cam.position.x, cam.position.z, t, true)
-        : 0;
+    // カメラ位置での水面の高さ（船が自分で立てている船体のまわりの波も：描いた水面と同じ高さ）
+    const surfaceY = (typeof getWaveHeightSelf === 'function') ? getWaveHeightSelf(cam.position.x, cam.position.z, t)
+        : (typeof getWaveHeight === 'function') ? getWaveHeight(cam.position.x, cam.position.z, t, true) : 0;
     const depth = surfaceY - cam.position.y;   // 正なら水中
 
     // 船体設定（設定パネルを開いている間）は、船底を下から確認することが

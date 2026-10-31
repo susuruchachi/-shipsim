@@ -238,6 +238,9 @@ function animate() {
         const dx = isDesignMode ? 0 : Math.sin(rotY) * cosPitchFwd * speedMps * subDt;
         const dz = isDesignMode ? 0 : Math.cos(rotY) * cosPitchFwd * speedMps * subDt;
         physics.cgWorldX += dx; physics.cgWorldZ += dz;
+        // 船が自分で立てている船体のまわりの波（02-utils-and-wave-physics.js）：今の位置・向き・速さで
+        //（浮力・スクリューの深さ・横揺れ・水面の描画・喫水線の輪郭が、みなこれを見る）
+        if (typeof updateSelfWave === 'function') { if (isDesignMode) selfWave.on = 0; else updateSelfWave(t); }
 
         // ── 喫水線基準の目標Y計算 ──────────────────────────────────
         // physics.y はshipGroupのワールドY原点位置。shipGroup.position.y の計算
@@ -409,6 +412,16 @@ function animate() {
                 if (Math.abs(dragDelta) < Math.abs(physics.speed)) physics.speed -= dragDelta;
                 else physics.speed = 0;
             }
+            // 自分の波の坂（船首の山・船尾の谷）を登りながら走る抵抗（造波抵抗）：船首が上がるほど進みにくい。
+            // 重さ × 波の坂の傾きの 35%（船体は坂を全部は登らない。10m の船の 25 ノットで 5% ほど遅くなる）
+            if (selfWave.on && Math.abs(physics.speed) > 0.5) {
+                const _hl = selfWave.hl, _sg = Math.sign(physics.speed);
+                const _slope = (selfWaveOnHull(_sg * _hl) - selfWaveOnHull(-_sg * _hl)) / (2 * _hl);
+                if (_slope > 0) {
+                    const dv = 0.35 * G_REAL * Math.min(0.35, _slope) * hullWet * subDt / 0.514444;
+                    physics.speed = Math.abs(physics.speed) <= dv ? 0 : physics.speed - _sg * dv;
+                }
+            }
 
             // ════════════════════════════════════════════════════════════
             //  船尾補正（Stage 2）── プロペラのレーシング・船尾スラミング
@@ -566,7 +579,8 @@ function animate() {
             // ════════════════════════════════════════════════════════════
             const rightX = physics.cgWorldX + Math.cos(rotY) * wid, rightZ = physics.cgWorldZ - Math.sin(rotY) * wid;
             const leftX  = physics.cgWorldX - Math.cos(rotY) * wid, leftZ  = physics.cgWorldZ + Math.sin(rotY) * wid;
-            const yLeft  = getWaveHeight(leftX, leftZ, t, true), yRight = getWaveHeight(rightX, rightZ, t, true);
+            // （船が自分で立てている波の、左右の舷の高さの差も：速く走る小さな船は、自分の引き波の周期で横にも揺れる）
+            const yLeft  = getWaveHeightSelf(leftX, leftZ, t), yRight = getWaveHeightSelf(rightX, rightZ, t);
             const waveRoll  = Math.atan2(yLeft  - yRight, wid * 2.0);
 
             const g_eff = 9.81;
@@ -1246,7 +1260,12 @@ function updateWater(t) {
     // 補正が必要になった）。
     // 引き波が届く範囲（すべての波源の、波源から maxDist＋船の半長の円を囲む四角）。
     // 頂点シェーダーはこの外の頂点では引き波を計算しない（大半の頂点は引き波から遠い）
-    const _wkReach = Math.sqrt(8000) * (uni.physScaleU.value / 12) + (uni.hullHalfLenU.value || 0) + 5;
+    // （波の広がる大きさは、小さな船でも速く走れば大きくなる：02-utils-and-wave-physics.js の wakeScaleRatioFor。
+    //   以前は船の大きさだけで決めていて、10m の船では 16m ほどで引き波が四角く切れていた）
+    let _wkKn = 0;
+    for (let i = 0; i < _wkLive.length; i++) _wkKn = Math.max(_wkKn, Math.abs(_wkLive[i].speed || 0));
+    const _wkSr = (typeof wakeScaleRatioFor === 'function') ? wakeScaleRatioFor(_wkKn) : uni.physScaleU.value / 12;
+    const _wkReach = Math.sqrt(8000) * Math.max(_wkSr, uni.physScaleU.value / 12) + (uni.hullHalfLenU.value || 0) + 5;
     let _bx0 = Infinity, _bz0 = Infinity, _bx1 = -Infinity, _bz1 = -Infinity;
     for (let i = 0; i < wCount; i++) {
         const p = _wkLive[i];
@@ -1262,6 +1281,14 @@ function updateWater(t) {
         _bz0 = Math.min(_bz0, pz - _wkReach); _bz1 = Math.max(_bz1, pz + _wkReach);
     }
     if (uni.wakeBox) { if (wCount) uni.wakeBox.value.set(_bx0, _bz0, _bx1, _bz1); else uni.wakeBox.value.set(0, 0, -1, -1); }
+    // 船が自分で立てている船体のまわりの波（02-utils-and-wave-physics.js の selfWave：物理の刻みで最後に求めたもの）
+    if (uni.selfWaveA) {
+        const S = selfWave;
+        uni.selfWaveA.value.set(S.ox, S.oz, S.fx, S.fz);
+        uni.selfWaveB.value.set(S.H, S.k, S.hl, S.dir);
+        uni.selfWaveC.value.set(S.ra, S.rk, S.rph, S.sa);
+        uni.selfWaveD.value.set(S.wl, S.wf, S.wb, S.on);
+    }
     uni.wakeCount.value = wCount;
 
     // ── 船体に密着した波しぶき帯用のウォーターラインポリゴン更新 ──

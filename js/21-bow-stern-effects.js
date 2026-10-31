@@ -345,7 +345,8 @@ function getPropellerEfficiency(t, physScale) {
     const paddle = typeof $ === 'function' && $('prop-type') && $('prop-type').value === 'paddlewheel' && typeof paddleImmersionEff === 'function';
     for (const p of propulsors) {
         worldPos.set(p.x, p.y, p.z).applyMatrix4(shipGroup.matrixWorld);
-        const waveY = getWaveHeight(worldPos.x, worldPos.z, t, true);
+        // （船が自分で立てている波も：02-utils-and-wave-physics.js の selfWaveAt）
+        const waveY = (typeof getWaveHeightSelf === 'function') ? getWaveHeightSelf(worldPos.x, worldPos.z, t) : getWaveHeight(worldPos.x, worldPos.z, t, true);
         const depth = waveY - worldPos.y; // 正=没水、負=露出（プロペラが波面より上）
         if (paddle) {
             const rW = Math.max(0.1, (p.size || 1.0) * 0.8 * physScale);   // makePaddleWheel の半径 0.8×サイズ

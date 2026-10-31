@@ -550,6 +550,11 @@ function createWater() {
         sternFullnessU: { value: 1.0 },
         wakeCount:      { value: 0 },
         wakeBox:        { value: new THREE.Vector4(0, 0, -1, -1) },   // 引き波が届く範囲（x0, z0, x1, z1。17-main-loop.js）
+        // 船が自分で立てている船体のまわりの波（02-utils-and-wave-physics.js の selfWave。17-main-loop.js が毎フレーム入れる）
+        selfWaveA:      { value: new THREE.Vector4(0, 0, 0, 1) },   // 船体の原点 x, z・船首の向き x, z
+        selfWaveB:      { value: new THREE.Vector4(0, 0, 1, 1) },   // 船首の山の高さ・波数・半長・進む向き（＋1 前進）
+        selfWaveC:      { value: new THREE.Vector4(0, 0, 0, 0) },   // 細かな波の高さ・波数・位相・左右の差
+        selfWaveD:      { value: new THREE.Vector4(1, 1, 1, 0) },   // 横・前・後ろへの消える幅・強さ（0 で無し）
         wakeXZTH:       { value: Array.from({ length: MAX_WAKE }, () => new THREE.Vector4()) },
         wakeSpeed:      { value: new Float32Array(MAX_WAKE) },
     });
@@ -841,7 +846,8 @@ function createWater() {
             // 呼ばれる。水面形状は船体スケールに対して十分緩やかなので、
             // 仮位置での1サンプルで実用上の精度が出る（旧実装も同じ判断）。
             toWorld(alongLocal, sign, hwLocal, y);
-            const waveY = (typeof getWaveHeight === 'function') ? getWaveHeight(_P.x, _P.z, tNow, true) : 0;
+            // 船が自分で立てている船体のまわりの波（船首の山・その後ろの谷）も入れる：浮力・水面の描画と同じ水面で輪郭を引く
+            const waveY = (typeof getWaveHeightSelf === 'function') ? getWaveHeightSelf(_P.x, _P.z, tNow) : 0;
 
             for (let it = 0; it < 3; it++) {
                 toWorld(alongLocal, sign, hwLocal, y);
@@ -1065,6 +1071,10 @@ function createWater() {
             uniform float     sternFullnessU;
             uniform int       wakeCount;
             uniform vec4      wakeBox;
+            uniform vec4      selfWaveA;
+            uniform vec4      selfWaveB;
+            uniform vec4      selfWaveC;
+            uniform vec4      selfWaveD;
             uniform float     uBloomDark;   // ブルーム抽出パス（黒く塗るだけ）では引き波・法線の計算を省く
             uniform vec4      wakeXZTH[MAX_WAKE];   // x, z, t, headingRad
             uniform float     wakeSpeed[MAX_WAKE];
@@ -1447,6 +1457,30 @@ function createWater() {
                 return vec2(wakeY, min(1.0, wakeFoam));
             }
 
+            // 船が自分で立てている船体のまわりの波（02-utils-and-wave-physics.js の selfWaveAt と同じ式）
+            float selfWaveHF(vec2 xz) {
+                if (selfWaveD.w <= 0.0) return 0.0;
+                vec2 d = xz - selfWaveA.xy;
+                float hl = selfWaveB.z;
+                float a = dot(d, selfWaveA.zw);
+                if (a > hl + 4.0 * selfWaveD.y || a < -hl - 4.0 * selfWaveD.z) return 0.0;
+                float sds = d.x * selfWaveA.w - d.y * selfWaveA.z;
+                float sd = abs(sds);
+                if (sd > hl + 4.0 * selfWaveD.x) return 0.0;
+                float hw = hullHalfWidthAt(clamp(a / hl, -1.15, 1.15));
+                float o = sd - hw;
+                float lat = o > 0.0 ? exp(-(o * o) / (selfWaveD.x * selfWaveD.x)) : 1.0;
+                if (lat < 1e-3) return 0.0;
+                float dd = selfWaveB.w > 0.0 ? hl - a : a + hl;
+                float env = 1.0;
+                if (dd < 0.0) env = exp(-(dd * dd) / (selfWaveD.y * selfWaveD.y));
+                else if (dd > 2.0 * hl) { float e = dd - 2.0 * hl; env = exp(-(e * e) / (selfWaveD.z * selfWaveD.z)); }
+                float dp = max(0.0, dd);
+                float hh = selfWaveB.x * cos(selfWaveB.y * dp) + selfWaveC.x * sin(selfWaveC.y * dp - selfWaveC.z);
+                float side = clamp(sds / max(0.3, hw), -1.0, 1.0);
+                return lat * env * (hh + side * selfWaveC.w);
+            }
+
             void main() {
                 vUv = uv;
                 vec4 wp = modelMatrix * vec4(position, 1.0);
@@ -1493,6 +1527,9 @@ function createWater() {
                     }
                 }
 
+                // 船が自分で立てている船体のまわりの波（物理の浮力・喫水線の輪郭と同じ水面）
+                float swH = selfWaveHF(wp.xz);
+                oceanH += swH;
                 wp.y += oceanH + sweH;
                 // b：引き波（船首・船尾の波）の山の泡。フラグメント側でまだらにして白く塗る
                 vColor    = vec3(foam, depthRatio, wakeCrestFoam);
@@ -1514,6 +1551,11 @@ function createWater() {
                     float eps = 0.6;
                     float hX = oceanWaveHC(wp.xz + vec2(eps, 0.0), time, h, w).x - oceanH;
                     float hZ = oceanWaveHC(wp.xz + vec2(0.0, eps), time, h, w).x - oceanH;
+                    // 船体のまわりの波の傾きも（oceanH に入っている分を差し引くだけにならないよう、隣の点の高さを足す）
+                    if (selfWaveD.w > 0.0) {
+                        hX += selfWaveHF(wp.xz + vec2(eps, 0.0));
+                        hZ += selfWaveHF(wp.xz + vec2(0.0, eps));
+                    }
                     vec3 approxNormal = normalize(vec3(-hX / eps, 1.0, -hZ / eps));
                     // 世界の座標のまま（フラグメント側は視線・太陽の向きを世界の座標で扱う。以前は normalMatrix で
                     // カメラの座標に直していて、カメラの向き・見下ろす角度によって海の明るさ・照り返しの位置がずれていた）
