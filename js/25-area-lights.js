@@ -718,6 +718,18 @@ function updateAreaLights(t) {
 // UI/保存用。
 function getAreaLightDefs() { return areaLightDefs; }
 
+// 水面の照り返し（04-scene-and-water-init.js の _updateWaterShipLights）用：点いている面光源・発光パネルの**すべて**
+// （枠に割り当てた近くの数灯だけでなく）の、世界の位置・色・明るさを足す。位置は前の描画で決まった行列から
+// （近くの数灯だけだと、遠くから見たとき、船の一部の下の海面しか照らされなかった）
+function getAreaLightWaterSources(add) {
+    for (const d of areaLightDefs) {
+        if (!_alDefVisible(d)) continue;
+        const I = _alDefIntensity(d);
+        if (!(I > 0)) continue;
+        const e = d.node.matrixWorld.elements;
+        add(e[12], e[13], e[14], d.color, I);
+    }
+}
 // 水面への映り込み（04-scene-and-water-init.js の _updateWaterShipLights）用。
 // glbLights に入っているエリアライトは「シーンに居ないデータ保持役」なので、
 // ワールド座標を持たない。実際にシーンに居る枠のライトを返す。

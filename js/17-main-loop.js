@@ -1046,6 +1046,14 @@ function updateSunShadowFollow() {
             c.left = -half; c.right = half; c.top = half; c.bottom = -half;
             c.updateProjectionMatrix();
         }
+        // 影のずらし（影の判定で、面が自分自身に影を落とさないためのずらし）を、影の地図の 1 升の大きさに合わせる。
+        // 以前は奥行きのずらしが影の範囲の奥行き（約 900m）の 0.05%、つまり升目に関係なく約 45cm あり、
+        // 影を落とす物から 45cm 以内の所（舷墻と甲板・壁の角、壁の根元など）は影にならず、角が明るく抜けていた。
+        // 升目の 1.2 倍（高画質 約 12cm・中 約 24cm、45cm まで）に。面に沿ったずらしは升目の 1.5 倍（今までの高画質と同じ割合）で、
+        // 30cm まで（大きいと、壁が面に沿って押し出されて、壁の角の影がまた抜ける：低画質）
+        const texel = 2 * half / Math.max(256, sunLight.shadow.mapSize.x || 2048);
+        sunLight.shadow.bias = -Math.min(0.45, 1.2 * texel) / Math.max(1, c.far - c.near);
+        sunLight.shadow.normalBias = Math.min(0.3, 1.5 * texel);
     }
 
     // 水面シェーダーへシャドウマップ本体と変換行列を渡す。

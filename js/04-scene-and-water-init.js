@@ -136,7 +136,7 @@ function init() {
     sunLight.shadow.camera.far    = SHADOW_CAM_FAR;
     sunLight.shadow.mapSize.set(perf.shadowMapSize, perf.shadowMapSize);
     // （影の地図の升目を細かくした分、ずらしも小さく：手すり・煙突の根元などの影が浮かないように。
-    //  影の範囲は船の大きさに合わせて 17-main-loop.js の updateSunShadowFollow で決め直す）
+    //  影の範囲とずらしは、船の大きさ・影の地図の升目に合わせて 17-main-loop.js の updateSunShadowFollow で決め直す）
     sunLight.shadow.bias       = -0.0005;
     sunLight.shadow.normalBias = 0.15;
     sunLight.shadow.radius     = 3; // PCFSoftShadowMapの追加ソフト化
@@ -447,24 +447,72 @@ function createWater() {
         // このuniformも一緒に更新する。
         textureMatrix: { value: new THREE.Matrix4() },
     };
-    // 毎フレーム glbLights からユニフォームを更新する関数（main-loopから呼ぶ）
-    window._updateWaterShipLights = function() {
-        // エリアライトは glbLights に「シーンに居ないデータ保持役」として入って
-        // いるのでワールド座標を持たない。実際にシーンで光っている枠のライト
-        // （25-area-lights.js）を代わりに足す。
-        const lights = (window.glbLights || [])
-            .filter(l => (l.visible || (l.userData && l.userData.bakedHidden)) && l.intensity > 0 && !(l.userData && l.userData.isAreaLight))
-            .concat(typeof getAreaLightSceneLights === 'function' ? getAreaLightSceneLights() : []);
-        const cnt = Math.min(lights.length, WATER_SHIP_LIGHT_MAX);
-        waterUniforms.shipLightCount.value = cnt;
-        const _wp = new THREE.Vector3();
-        for (let i = 0; i < cnt; i++) {
-            const l = lights[i];
-            if (l.getWorldPosition) l.getWorldPosition(_wp); else _wp.copy(l.position);
-            waterShipLightPositions[i].copy(_wp);
-            waterShipLightColors[i].copy(l.color);
-            waterShipLightIntensities[i] = l.intensity * 0.18;
+    // 毎フレーム、船の灯りから水面の照り返しの光（最大 WATER_SHIP_LIGHT_MAX 個）を決める（main-loopから呼ぶ）。
+    // 灯り：glbLights の点光源・スポット（面光源の「データ保持役」を除く）と、面光源・窓の発光パネルの**すべて**
+    // （25-area-lights.js の getAreaLightWaterSources）。以前は、面光源のうち実際に点けている（カメラに近い）数灯と、
+    // 並び順で最初の 16 灯だけを渡していて、遠くから見ると船の一部の下の海面しか照らされていなかった。
+    // 灯りが多いときは、船の長さ方向に 8 つ × 左右の 16 区画にまとめ、区画ごとに明るさの重みで真ん中の位置・色を出し、
+    // 明るさは足したもの（多いほど明るいが、頭打ちにする）を 1 つの光として渡す（船の全長の下の海面が照らされる）
+    const WS_ALONG = WATER_SHIP_LIGHT_MAX >> 1;
+    const _ws = { n: 0, cap: 0, x: null, y: null, z: null, r: null, g: null, b: null, I: null,
+                  bI: new Float64Array(WATER_SHIP_LIGHT_MAX), bx: new Float64Array(WATER_SHIP_LIGHT_MAX), by: new Float64Array(WATER_SHIP_LIGHT_MAX), bz: new Float64Array(WATER_SHIP_LIGHT_MAX),
+                  br: new Float64Array(WATER_SHIP_LIGHT_MAX), bg: new Float64Array(WATER_SHIP_LIGHT_MAX), bb: new Float64Array(WATER_SHIP_LIGHT_MAX) };
+    const _wsAdd = (x, y, z, c, I) => {
+        if (_ws.n >= _ws.cap) {
+            const cap = Math.max(64, _ws.cap * 2), grow = (a) => { const b = new Float32Array(cap); if (a) b.set(a); return b; };
+            _ws.x = grow(_ws.x); _ws.y = grow(_ws.y); _ws.z = grow(_ws.z); _ws.r = grow(_ws.r); _ws.g = grow(_ws.g); _ws.b = grow(_ws.b); _ws.I = grow(_ws.I); _ws.cap = cap;
         }
+        const i = _ws.n++;
+        _ws.x[i] = x; _ws.y[i] = y; _ws.z[i] = z; _ws.r[i] = c.r; _ws.g[i] = c.g; _ws.b[i] = c.b; _ws.I[i] = I;
+    };
+    const _wsP = new THREE.Vector3();
+    const WS_K = 0.18, WS_CAP = 0.55;      // 1 灯あたりの水面への強さ・区画の明るさの頭打ち（窓の発光パネル 1 枚分ほど）
+    window._updateWaterShipLights = function() {
+        _ws.n = 0;
+        for (const l of (window.glbLights || [])) {
+            if (!((l.visible || (l.userData && l.userData.bakedHidden)) && l.intensity > 0) || (l.userData && l.userData.isAreaLight)) continue;
+            if (l.getWorldPosition) l.getWorldPosition(_wsP); else _wsP.copy(l.position);
+            _wsAdd(_wsP.x, _wsP.y, _wsP.z, l.color, l.intensity);
+        }
+        if (typeof getAreaLightWaterSources === 'function') getAreaLightWaterSources(_wsAdd);
+        let cnt = 0;
+        if (_ws.n <= WATER_SHIP_LIGHT_MAX) {
+            for (let i = 0; i < _ws.n; i++, cnt++) {
+                waterShipLightPositions[cnt].set(_ws.x[i], _ws.y[i], _ws.z[i]);
+                waterShipLightColors[cnt].setRGB(_ws.r[i], _ws.g[i], _ws.b[i]);
+                waterShipLightIntensities[cnt] = _ws.I[i] * WS_K;
+            }
+        } else {
+            // 船の長さ方向・左右の区画にまとめる
+            const hp = window.hullProfile, ps = Math.max(0.25, (typeof physics !== 'undefined' && physics.scale) || 1);
+            const HL = Math.max(5, ((hp && hp.ready) ? hp.halfLen : 6) * ps * 1.05);
+            const rad = (typeof _wakeAxisRad === 'function' && hp && hp.ready) ? _wakeAxisRad(physics.heading * Math.PI / 180) : physics.heading * Math.PI / 180;
+            const o = (typeof _hullOriginWorld === 'function') ? _hullOriginWorld(physics.cgWorldX, physics.cgWorldZ, rad, ps) : { x: physics.cgWorldX, z: physics.cgWorldZ };
+            const fx = Math.sin(rad), fz = Math.cos(rad);
+            _ws.bI.fill(0); _ws.bx.fill(0); _ws.by.fill(0); _ws.bz.fill(0); _ws.br.fill(0); _ws.bg.fill(0); _ws.bb.fill(0);
+            for (let i = 0; i < _ws.n; i++) {
+                const dx = _ws.x[i] - o.x, dz = _ws.z[i] - o.z, a = dx * fx + dz * fz, sd = dx * fz - dz * fx;
+                const k = Math.max(0, Math.min(WS_ALONG - 1, Math.floor((a + HL) / (2 * HL) * WS_ALONG)));
+                // 真ん中の線の上の灯り（マストの灯など）は、左右の両方へ半分ずつ
+                const w0 = Math.abs(sd) < 1.5 ? 0.5 : (sd >= 0 ? 1 : 0);
+                for (let side = 0; side < 2; side++) {
+                    const w = (side === 0 ? w0 : 1 - w0) * _ws.I[i];
+                    if (!(w > 0)) continue;
+                    const b = k * 2 + side;
+                    _ws.bI[b] += w; _ws.bx[b] += w * _ws.x[i]; _ws.by[b] += w * _ws.y[i]; _ws.bz[b] += w * _ws.z[i];
+                    _ws.br[b] += w * _ws.r[i]; _ws.bg[b] += w * _ws.g[i]; _ws.bb[b] += w * _ws.b[i];
+                }
+            }
+            for (let b = 0; b < WATER_SHIP_LIGHT_MAX; b++) {
+                const I = _ws.bI[b];
+                if (!(I > 0)) continue;
+                waterShipLightPositions[cnt].set(_ws.bx[b] / I, _ws.by[b] / I, _ws.bz[b] / I);
+                waterShipLightColors[cnt].setRGB(_ws.br[b] / I, _ws.bg[b] / I, _ws.bb[b] / I);
+                waterShipLightIntensities[cnt] = WS_CAP * (1 - Math.exp(-I * WS_K / WS_CAP));
+                cnt++;
+            }
+        }
+        waterUniforms.shipLightCount.value = cnt;
         waterUniforms.shipLightIntensities.value = waterShipLightIntensities;
     };
     window.waterShipLightUniforms = waterUniforms; // 外部参照用

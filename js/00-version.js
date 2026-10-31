@@ -514,7 +514,14 @@
 //                 入口・出口にする（陸を無視して途中の点へ飛び込む近道を選んで、航路をたどらないことがあった）
 //               ・他の船（59-traffic.js）：決まった航路でない船は自分の船のまわり（2500km）の港に出し、遠くへ行ったらそこで並べ直す。
 //                 定期便の「地図の外の出入口」は実在の港へ（ハンブルク・ナポリ・ハバナ・ケベック）
-var APP_VERSION = '0.03.027.000';
+// 0.03.028.000 ・夜の海面の照り返し（04-scene-and-water-init.js の _updateWaterShipLights）：窓の発光パネル・面光源のうち、実際に点けている
+//                 カメラに近い数灯と、並び順で最初の 16 灯だけを海面に渡していて、遠くから見ると船の一部の下の海面しか照らされなかった。
+//                 船の灯りすべて（25-area-lights.js の getAreaLightWaterSources）を、船の長さ方向に 8 つ × 左右の 16 区画にまとめて渡す
+//                 （区画の明るさは足したものを頭打ちに）。船の全長の下の海面が照らされる
+//               ・太陽の影（17-main-loop.js の updateSunShadowFollow）：影のずらしが、影の地図の升目に関係なく約 45cm あり、
+//                 影を落とす物から 45cm 以内（舷墻と甲板・壁が出会う角、壁の根元）は影にならず、角が明るく抜けていた。
+//                 ずらしを影の地図の 1 升に合わせる（高画質 約 12cm・中 約 24cm。面に沿ったずらしは升目の 1.5 倍で 30cm まで）
+var APP_VERSION = '0.03.028.000';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
