@@ -555,7 +555,11 @@
 //                 もう行き先の航路の上（線から 350m・船幅の 4 倍の内）にいるなら、そこから航路をたどって泊地へ（_apOnFairway）。
 //                 航路の延長線の沖へ回るのは、沖の方（延長線から 60° の内）から来るときだけ（横から来るのに沖へ出て戻らない）。
 //                 作った世界の港も、航路・泊地の中にいるなら、そのまま泊地へ
-var APP_VERSION = '0.03.030.002';
+// 0.03.030.003 ・オーロラを天候の欄のボタンで出したあと、止めても消えなかったのを直す（17-main-loop.js：止めたら 10 秒ほどで消える。
+//                 16-daynight-and-telegraph.js：ボタンの出す／止めるを表示と同じ決め方に。以前は消えないまま、もう一度押しても出せなかった）
+//               ・カメラが初めて水中に入ったときだけ大きく止まっていたのを直す（23-underwater.js：水中では水面を両面で描くが、
+//                 その版のシェーダーを初めて使うときに作っていた。水上にいるうちに 1 フレームだけ両面で描いて作っておく）
+var APP_VERSION = '0.03.030.003';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

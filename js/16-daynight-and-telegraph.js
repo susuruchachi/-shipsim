@@ -341,7 +341,7 @@ window.calISO = calISO; window.calMoonPhase = calMoonPhase; window.calDayOf = ca
 // ── オーロラ（天候の欄のボタン）：今夜から出す・止める（夜だけ見える） ──
 function auroraToggle(on) {
     const days = physics.gameTime / physics.dayDuration;
-    if (on === undefined) on = !(auroraActive > 0.01 || days >= nextAuroraDay);
+    if (on === undefined) on = !(window._auroraHold || days >= nextAuroraDay);      // ボタンの表示（auroraSyncUI）と同じ決め方
     if (on) { nextAuroraDay = days; window._auroraHold = true; }
     else { window._auroraHold = false; nextAuroraDay = days + 25 + Math.random() * 9; }
     auroraSyncUI();

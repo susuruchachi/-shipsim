@@ -119,9 +119,35 @@ function _uwInFloodWater(L) {
 }
 window.cameraInsideHull = () => (typeof camera !== 'undefined' && camera) ? !!_uwInsideHull(camera.position) : false;
 
+// 初めて潜ったときに止まらないように：水面の材質の「両面描画」版のシェーダーを、水上にいるうちに 1 度だけ作っておく。
+// 潜ると水面を両面描画に切り替える（下から見上げた水面）。three.js はその版のシェーダーを初めて使うときに作るので、
+// 大きな水面のシェーダーだと、1 回目の潜水だけ長く止まっていた（作った版は材質ごとに残るので、2 回目からは止まらない）。
+// 水上で 1 フレームだけ両面で描いて作らせる（上から見た水面の見た目はほぼ同じ）。材質を作り直したら、もう一度
+let _uwWarmMat = null, _uwWarmFront = null, _uwWarmNow = false, _uwWarmWait = 0;
+function _uwWarmWaterSide() {
+    if (typeof waterMesh === 'undefined' || !waterMesh || !waterMesh.visible || typeof renderer === 'undefined' || !renderer || !renderer.properties) return;
+    const m = waterMesh.material;
+    if (!m || _uwWarmMat === m || m.side !== THREE.FrontSide) return;
+    if (_uwWarmWait > 0) { _uwWarmWait--; return; }
+    const pr = renderer.properties.get(m);
+    if (!pr || !pr.currentProgram) return;           // ふつうの版を作って描いてから
+    _uwWarmFront = pr.currentProgram;
+    m.side = THREE.DoubleSide; m.needsUpdate = true; _uwWarmNow = true;
+}
+function _uwWarmDone() {
+    _uwWarmNow = false;
+    const m = waterMesh.material;
+    if (!m || m.side !== THREE.DoubleSide) return;
+    const pr = renderer.properties.get(m);
+    m.side = THREE.FrontSide; m.needsUpdate = true;
+    // 両面の版ができていれば済み（水面が画面に入らず描かれなかったなら、少し待ってもう一度）
+    if (pr && pr.currentProgram && pr.currentProgram !== _uwWarmFront) _uwWarmMat = m; else _uwWarmWait = 30;
+}
+
 // 毎フレーム呼ぶ。updateDayNightCycle() より後、描画より前。
 function updateUnderwater(t) {
     _uwSaved = null;
+    if (_uwWarmNow) _uwWarmDone();          // （前のフレームで描かずに終わったときも、片面へ戻す）
     if (typeof scene === 'undefined' || !scene || typeof camera === 'undefined' || !camera) return;
 
     const cam = camera;
@@ -148,6 +174,7 @@ function updateUnderwater(t) {
     window.underwaterDepth  = Math.max(0, depth);
 
     if (amount <= 0.001) {
+        if (!_uwActive) _uwWarmWaterSide();
         if (_uwActive) {
             // 浮上した瞬間の後始末。色や霧はupdateDayNightCycleが毎フレーム
             // 目標値へ寄せているので、ここで戻す必要があるのは自前の要素だけ。
@@ -247,6 +274,7 @@ function updateUnderwater(t) {
 // 描画の直後に呼ぶ（17-main-loop.js）。updateUnderwater() が描画のために
 // 書き換えた霧・背景・光の強さを、水上での値へ戻す。
 function restoreUnderwaterOverrides() {
+    if (_uwWarmNow) _uwWarmDone();
     const sv = _uwSaved;
     if (!sv) return;
     _uwSaved = null;

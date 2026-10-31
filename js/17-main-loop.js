@@ -83,6 +83,9 @@ function animate() {
                 auroraActive = Math.max(0.0, auroraActive - dt * 0.015);
                 if (auroraActive <= 0.0) nextAuroraDay = totalDays2 + 25.0 + Math.random() * 9.0;
             }
+        } else if (auroraActive > 0.0) {
+            // 止めたあと（天候の欄のボタン）：10 秒ほどで消える（以前は出ていた明るさのまま残っていた）
+            auroraActive = Math.max(0.0, auroraActive - dt * 0.1);
         }
         const sunH2 = Number.isFinite(physics.sunElev) ? physics.sunElev : Math.sin((physics.dayProgress - 0.25) * Math.PI * 2);
         const nightF2 = Math.max(0.0, -sunH2);
