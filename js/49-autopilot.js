@@ -482,6 +482,8 @@ function worldPlanRoute(from, to, opt) {
     const draft = opt.draft || ((typeof worldShipDraft === 'function') ? worldShipDraft() : 8);
     return new Promise((resolve, reject) => {
         const w = _apWorker();
+        // 世界全体の区画を新しく読んでいれば、ワーカーにも渡し直す（43-world.js の worldEnsureTiles）
+        if (typeof _RW !== 'undefined' && _RW && _RW.apDirty) { _RW.apDirty = false; worldWorkerSyncTiles(w); }
         const on = (ev) => {
             if (ev.data.id !== id) return;
             w.removeEventListener('message', on);

@@ -209,7 +209,11 @@ const TF_SERVICES = {
     ];
     const local = (k) => TF_SERVICES[k].filter(sv => sv.cls !== 'liner');
     TF_SERVICES.natl = liners.concat(local('britain'), local('useast'));
+    // 世界全体（43-world.js の REAL_WORLDS.earth）：北大西洋の定期便のまま。外洋の出入口（地図の外）だった所は、その先の実在の港へ
+    const GATE_PORT = { 'g:ns': 'ハンブルク港', 'g:med': 'ナポリ港', 'g:sa': 'ハバナ港', 'g:gsl': 'ケベック港', 'g:am': 'ニューヨーク港', 'g:an': 'ケベック港', 'g:eu': 'サウサンプトン港' };
+    TF_SERVICES.earth = TF_SERVICES.natl.map(sv => Object.assign({}, sv, { route: sv.route.map(r => GATE_PORT[r] || r) }));
 })();
+TF_GATES.earth = [];
 window.TF_SERVICES = TF_SERVICES;
 // 決まった航路の船の、就航〜引退の年（名前｜会社 か 名前で引く）。乗っている船の年（13-save-load-config.js の
 // 船の情報）と重なる船だけを出す。年の分からない船は、いつでも出す
@@ -295,6 +299,17 @@ function _tfMsg(s) { traffic.msgs.unshift({ s, t: traffic.t }); if (traffic.msgs
 //  港・埠頭・錨地
 // ════════════════════════════════════════════════════════════════
 function _tfPorts() { return (typeof worldBuildPorts === 'function') ? worldBuildPorts() : []; }
+// 世界全体：決まった航路でない船は、自分の船のまわり（TF_REGION_R）の港に出し、その中を行き来させる
+//（世界中の港に散らすと、自分の船の近くにほとんど船がいなくなる）。自分の船が遠くへ行ったら、そこで並べ直す
+const TF_REGION_R = 2500000;
+function _tfWorldWide() { return world.kind === 'real' && world.realKey === 'earth'; }
+function _tfLocalPorts() {
+    const ports = _tfPorts();
+    if (!_tfWorldWide() || !traffic.regionC) return ports;
+    const c = traffic.regionC;
+    if (traffic._lpSrc !== ports || traffic._lpC !== c) { traffic._lpSrc = ports; traffic._lpC = c; traffic._lp = ports.filter(p => _tfDist(c, p) < TF_REGION_R); }
+    return traffic._lp.length ? traffic._lp : ports;
+}
 function _tfGroupOf(P) { return P.group || P.name; }
 // 埠頭に付ける船の喫水の上限：作り込んだ港の埠頭（前を 14m に掘ってある）は 11m まで
 function _tfPortMaxDraft(P) { return _tfDetail(P) ? 11 : PORT_TYPES[P.type].depth + 1; }
@@ -872,7 +887,7 @@ function _tfChooseDest(S) {
     }
     const here = S.port ? { lat: S.port.lat, lon: S.port.lon } : { lat: S.lat, lon: S.lon };
     const maxD = { fishing: 120000, coastal: 900000, ferry: 600000 }[S.cls] || Infinity;
-    const cands = _tfPorts().filter(p => p !== S.port && _tfSuits(S.cls, p) && _tfFits(S, p) && (!S.port || _tfGroupOf(p) !== _tfGroupOf(S.port)) && _tfDist(here, p) < maxD && _tfDist(here, p) > 3000);
+    const cands = _tfLocalPorts().filter(p => p !== S.port && _tfSuits(S.cls, p) && _tfFits(S, p) && (!S.port || _tfGroupOf(p) !== _tfGroupOf(S.port)) && _tfDist(here, p) < maxD && _tfDist(here, p) > 3000);
     // 外洋の出入口（大きな客船・貨物船）
     const gates = world.kind === 'real' ? (TF_GATES[world.realKey] || []) : [];
     if (gates.length && !S.saved && ['liner', 'container', 'tanker', 'bulk', 'steamer', 'cruise'].includes(S.cls) && Math.random() < 0.3) return { G: _tfPick(gates) };
@@ -917,7 +932,7 @@ function _tfPlayerBerthKeep() {
     }
 }
 function _tfSpawnFleet() {
-    const ports = _tfPorts();
+    const ports = _tfLocalPorts();
     if (!ports.length) return false;
     _tfPlayerBerthKeep();
     const rk = world.kind === 'real' ? world.realKey : null;
@@ -934,9 +949,16 @@ function _tfSpawnFleet() {
         traffic.ships.push(_tfMakeShip(sv));
     }
     // そのほかの船：その世界の港の種類に合う船を、出る割合で
+    // （世界全体では、まわりの地域の船の数を、決まった航路の船（世界中を回る）とは別に数える）
     const classes = Object.keys(TF_CLASSES).filter(c => _tfEraOk(c) && ports.some(p => _tfSuits(c, p)));
     const wsum = classes.reduce((a, c) => a + TF_CLASSES[c].w, 0);
-    for (let guard = 0; traffic.ships.length < target && guard < 600; guard++) {
+    let want = target;
+    if (_tfWorldWide() && traffic.regionC) {
+        // 決まった航路の船のうち、寄る港がこの地域に無い船（よその海を回る船）は数えない
+        const all = _tfPorts(), near = (nm) => all.some(p => (p.name === nm || p.group === nm) && _tfDist(traffic.regionC, p) < TF_REGION_R);
+        want += traffic.ships.filter(S => S.svc && !S.svc.route.some(near)).length;
+    }
+    for (let guard = 0; traffic.ships.length < want && guard < 600; guard++) {
         let r = Math.random() * wsum, cls = classes[0];
         for (const c of classes) { r -= TF_CLASSES[c].w; if (r <= 0) { cls = c; break; } }
         const S = _tfMakeShip({ cls });
@@ -965,7 +987,7 @@ function _tfUnstack() {
     }
 }
 function _tfSeed(S) {
-    const ports = _tfPorts().filter(p => _tfSuits(S.cls, p) && _tfFits(S, p));
+    const ports = _tfLocalPorts().filter(p => _tfSuits(S.cls, p) && _tfFits(S, p));
     let home = null;
     if (S.svc) {
         const R = S.svc.route, order = R.map((_, i) => i).sort(() => Math.random() - 0.5);
@@ -975,6 +997,12 @@ function _tfSeed(S) {
         // 保存した船は、自分の船の近くの港に
         const me = _tfPlayerLL(), near = ports.slice().sort((a, b) => _tfDist(me, a) - _tfDist(me, b)).slice(0, 6);
         home = _tfPick(near);
+    } else if (ports.length && _tfWorldWide()) {
+        // 世界全体：自分の船の近くの港を多めに（遠い港ほど少なく）
+        const me = _tfPlayerLL(), w = ports.map(p => 1 / Math.pow(1 + _tfDist(me, p) / 500000, 2));
+        let r = Math.random() * w.reduce((a, b) => a + b, 0);
+        home = ports[ports.length - 1];
+        for (let i = 0; i < ports.length; i++) { r -= w[i]; if (r <= 0) { home = ports[i]; break; } }
     } else if (ports.length) home = _tfPick(ports);
     if (!home) { S.st = 'gone'; return; }
     // 保存した船は、すぐ近くに見えるよう、埠頭か港の航路に（海の上の途中には置かない）
@@ -2556,7 +2584,12 @@ function updateTraffic(t, dt) {
         const nk = _tfSavedNameKeys(), nsig = [...nk].sort().join('|');
         if (nsig !== traffic.savedNamesSig) { traffic.savedNames = nk; traffic.savedNamesSig = nsig; _tfDropSavedNameDupes(); }
     }
-    const key = _tfWorldKey() + '|' + traffic.density + '|' + traffic.era + '|' + traffic.sig;
+    // 世界全体：自分の船が、船を並べた所から 1800km より遠くへ行ったら、そこで並べ直す
+    if (_tfWorldWide() && world.mode === 'world') {
+        const me0 = _tfPlayerLL();
+        if (!traffic.regionC || _tfDist(traffic.regionC, me0) > 1800000) { traffic.regionC = { lat: me0.lat, lon: me0.lon }; traffic.regionN = (traffic.regionN || 0) + 1; }
+    }
+    const key = _tfWorldKey() + '|' + traffic.density + '|' + traffic.era + '|' + traffic.sig + (_tfWorldWide() ? '|r' + traffic.regionN : '');
     if (key !== traffic.key) { _tfClear(); traffic.key = key; traffic.initT = t; }
     if (!traffic.ready) {
         if (!world.ports || t - traffic.initT < 3) return;

@@ -238,8 +238,46 @@ REAL_WORLDS.natl = {
 };
 REAL_WORLDS.natl.harbors = [].concat(...REAL_WORLDS.natl.regions.map(r => REAL_WORLDS[r].harbors));
 REAL_WORLDS.natl.ports = [].concat(...REAL_WORLDS.natl.regions.map(r => REAL_WORLDS[r].ports));
-// 前の版の世界（ブリテン諸島・アメリカ東海岸を別々に選んでいた）は、北大西洋の中の地域として扱う
-const REAL_WORLD_ALIAS = { britain: 'natl', useast: 'natl' };
+// 世界全体（実在）：全体図（6 分角 ≒ 11km）の上に、船の近くだけ 10°×10° の区画（1.5 分角 ≒ 2.8km）を読んで重ね、
+// さらにブリテン諸島・アメリカ東海岸の細かい格子と作り込んだ港を重ねる（data/world・data/README.md）。
+// 港は北大西洋の港に、世界の主な港（data/world/ports.json：おおよその位置。実際の海岸に合わせて置き直す）を足す
+REAL_WORLDS.earth = {
+    name: '世界（実在）', url: 'data/world/overview', tiles: 'data/world', portsUrl: 'data/world/ports.json', lanesUrl: 'data/world/lanes.json',
+    center: { lat: 45, lon: -35 }, start: 'サウサンプトン港 オーシャン・ドック（43/44番）',
+    regions: ['britain', 'useast'],
+};
+REAL_WORLDS.earth.harbors = REAL_WORLDS.natl.harbors;
+REAL_WORLDS.earth.ports = REAL_WORLDS.natl.ports;
+// 前の版の世界（ブリテン諸島・アメリカ東海岸・北大西洋）は、世界全体の中の地域として扱う（位置はそのまま）
+const REAL_WORLD_ALIAS = { britain: 'earth', useast: 'earth', natl: 'earth' };
+// 運河・細い海峡：全体図・区画の格子（升目が運河より広い）では陸になってしまうので、線に沿って掘る（深さ[m]・幅[m]）
+// 自動航行の航路（67-sea-lanes.js）も、この線をたどる
+const RW_CANALS = [
+    { key: 'suez', name: 'スエズ運河', depth: 24, w: 300, pts: [[31.42, 32.335], [31.27, 32.312], [31.10, 32.305], [30.90, 32.31], [30.72, 32.33], [30.58, 32.305], [30.45, 32.35], [30.33, 32.40], [30.21, 32.49], [30.08, 32.565], [29.96, 32.565], [29.85, 32.55]] },
+    { key: 'panama', name: 'パナマ運河', depth: 15, w: 300, pts: [[9.42, -79.92], [9.35, -79.915], [9.27, -79.92], [9.21, -79.87], [9.16, -79.81], [9.12, -79.74], [9.11, -79.695], [9.07, -79.665], [9.03, -79.63], [9.015, -79.605], [8.99, -79.59], [8.95, -79.56], [8.87, -79.52]] },
+    { key: 'kiel', name: 'キール運河', depth: 11, w: 160, pts: [[53.885, 9.13], [53.96, 9.215], [54.03, 9.28], [54.10, 9.36], [54.20, 9.50], [54.29, 9.66], [54.32, 9.80], [54.34, 9.95], [54.36, 10.08], [54.375, 10.16]] },
+    { key: 'bosporus', name: 'ボスポラス海峡', depth: 30, w: 700, pts: [[41.25, 29.135], [41.18, 29.08], [41.12, 29.06], [41.08, 29.05], [41.04, 29.01], [41.01, 28.99], [40.97, 28.99]] },
+    { key: 'dardanelles', name: 'ダーダネルス海峡', depth: 50, w: 1300, pts: [[40.44, 26.72], [40.30, 26.58], [40.20, 26.45], [40.13, 26.40], [40.08, 26.33], [40.03, 26.22], [39.99, 26.14]] },
+    { key: 'corinth', name: 'コリントス運河', depth: 7, w: 25, pts: [[37.955, 22.95], [37.935, 22.98], [37.915, 23.01]] },
+    // シンガポール海峡（分離通航帯のおおよその線）・グレートベルト（デンマーク：T 航路）：区画の升目では島と混ざって浅くなる
+    { key: 'singapore', name: 'シンガポール海峡', depth: 22, w: 2000, pts: [[1.18, 103.55], [1.135, 103.65], [1.17, 103.75], [1.195, 103.85], [1.21, 103.95], [1.25, 104.10], [1.28, 104.25], [1.30, 104.40]] },
+    { key: 'greatbelt', name: 'グレートベルト', depth: 17, w: 1500, pts: [[56.20, 11.20], [56.05, 11.15], [55.80, 11.05], [55.55, 10.98], [55.33, 11.00], [55.15, 10.97], [54.95, 11.02], [54.75, 11.00], [54.55, 11.30]] },
+    // エルベ川（クックスハーフェン → ハンブルク）：区画の升目より川幅が狭い（おおよその川筋）
+    { key: 'elbe', name: 'エルベ川', depth: 15, w: 600, pts: [[53.92, 8.55], [53.88, 8.75], [53.85, 8.95], [53.88, 9.12], [53.82, 9.32], [53.73, 9.45], [53.65, 9.53], [53.585, 9.62], [53.565, 9.75], [53.545, 9.88], [53.54, 9.95]] },
+    // 湾口・港口：区画の升目（2.8km）より狭く、湾が閉じてしまう所（おおよその線）
+    { key: 'goldengate', name: 'ゴールデン・ゲート', depth: 30, w: 1500, pts: [[37.79, -122.60], [37.805, -122.52], [37.815, -122.478], [37.81, -122.44], [37.80, -122.40]] },
+    { key: 'sydney', name: 'シドニー湾口（ヘッズ）', depth: 15, w: 800, pts: [[-33.835, 151.33], [-33.833, 151.29], [-33.845, 151.26], [-33.850, 151.235], [-33.855, 151.21]] },
+    { key: 'auckland', name: 'ランギトト水道', depth: 12, w: 600, pts: [[-36.76, 174.93], [-36.80, 174.86], [-36.83, 174.81], [-36.84, 174.77]] },
+    { key: 'vancouver', name: 'ファースト・ナローズ', depth: 15, w: 400, pts: [[49.32, -123.25], [49.315, -123.16], [49.313, -123.14], [49.30, -123.11], [49.29, -123.09]] },
+    { key: 'havana', name: 'ハバナ港口', depth: 12, w: 250, pts: [[23.17, -82.365], [23.152, -82.357], [23.14, -82.345]] },
+    { key: 'daressalaam', name: 'ダルエスサラーム港口', depth: 12, w: 300, pts: [[-6.79, 39.33], [-6.815, 39.305], [-6.83, 39.29]] },
+    { key: 'mombasa', name: 'キリンディニ水道', depth: 13, w: 300, pts: [[-4.11, 39.71], [-4.08, 39.675], [-4.065, 39.655]] },
+    { key: 'nagasaki', name: '長崎港口', depth: 12, w: 500, pts: [[32.70, 129.79], [32.72, 129.835], [32.74, 129.862]] },
+    { key: 'kanmon', name: '関門海峡', depth: 13, w: 500, pts: [[33.98, 130.80], [33.955, 130.90], [33.962, 130.955], [33.945, 131.00], [33.90, 131.10]] },
+    // セント・ローレンス川（ケベック → モントリオール）：川幅が区画の升目より狭い所があるので（おおよその川筋）
+    { key: 'stlawrence', name: 'セント・ローレンス川', depth: 11, w: 400, pts: [[46.84, -71.10], [46.75, -71.45], [46.66, -71.88], [46.53, -72.15], [46.40, -72.40], [46.33, -72.55], [46.23, -72.75], [46.15, -72.95], [46.04, -73.12], [45.85, -73.30], [45.70, -73.45], [45.55, -73.52]] },
+];
+window.RW_CANALS = RW_CANALS;
 function _rwWorldKey(k) { return REAL_WORLD_ALIAS[k] || k; }
 let _RW = null;
 // 作り込んだ港の細かい地形（10m おき）：その緯度・経度の高さ[m]。範囲の外は NaN
@@ -320,6 +358,7 @@ function _rwSample(lat, lon, sharp) {
 }
 // 1 つの格子の高さ（4 点から直線で補う）。範囲の外は NaN
 function _rwGridAt(R, lat, lon) {
+    if (R.wrap && lon < R.lon0) lon += 360;          // 世界一周の格子（全体図・区画）：−180° の手前は＋180° の先
     const fy = (R.lat1 - lat) / R.cell, fx = (lon - R.lon0) / R.cell;
     if (!(fx >= 0 && fy >= 0 && fx <= R.cols - 1 && fy <= R.rows - 1)) return NaN;
     const x0 = Math.min(R.cols - 2, Math.floor(fx)), y0 = Math.min(R.rows - 2, Math.floor(fy));
@@ -333,6 +372,7 @@ function _rwCoarse(lat, lon) {
     if (!G) { const h = _rwGridAt(_RW, lat, lon); return h === h ? h : 60; }
     for (let i = 0; i < G.length; i++) {
         const g = G[i];
+        if (g.base) break;             // 土台（全体図）：その前に区画を見る（_rwBaseAt）
         if (!(lat >= g.lat0 && lat <= g.lat1 && lon >= g.lon0 && lon <= g.lon1)) continue;
         const h = _rwGridAt(g, lat, lon);
         if (!(h === h)) continue;
@@ -340,22 +380,39 @@ function _rwCoarse(lat, lon) {
         const e = g.blend ? Math.min(lat - E.lat0, E.lat1 - lat, lon - E.lon0, E.lon1 - lon) : 1e9;
         if (e >= g.blend) return h;
         let o = NaN;
-        for (let j = i + 1; j < G.length && !(o === o); j++) o = _rwGridAt(G[j], lat, lon);
+        for (let j = i + 1; j < G.length && !(o === o); j++) o = G[j].base ? _rwBaseAt(lat, lon) : _rwGridAt(G[j], lat, lon);
         if (!(o === o)) return h;
         const t = e / g.blend, w = (h < 0 && h < o) ? Math.min(1, t * 3) : t;
         return h * w + o * (1 - w);
     }
-    return 60;
+    return _rwBaseAt(lat, lon);
+}
+// 世界全体の区画（10°×10°、1.5 分角）のうち、その所を含む読んである区画（無ければ null）
+function _rwTileOf(lat, lon) {
+    const T = _RW.tiles, I = _RW.tileIdx;
+    if (!T || !I) return null;
+    const span = I.cell * I.tile;
+    const ti = Math.floor((lat - I.lat0) / span), tj = Math.floor((((lon - I.lon0) % 360) + 360) % 360 / span);
+    return T[ti * 100 + tj] || null;
+}
+// 土台の高さ：読んである区画があればそれ、無ければ全体図（いちばん下の格子）
+function _rwBaseAt(lat, lon) {
+    const t = _RW.tiles ? _rwTileOf(lat, lon) : null;
+    if (t) { const h = _rwGridAt(t, lat, lon); if (h === h) return h; }
+    const G = _RW.grids, b = G ? G[G.length - 1] : _RW;
+    const h = _rwGridAt(b, lat, lon);
+    return h === h ? h : 60;
 }
 // その所を含む、いちばん細かい格子（港の航路を探す・掘る格子）
 function _rwGridOf(lat, lon) {
     const G = _RW.grids;
     if (!G) return _RW;
-    for (const g of G) if (lat >= g.lat0 && lat <= g.lat1 && lon >= g.lon0 && lon <= g.lon1) return g;
-    return G[G.length - 1];
+    for (const g of G) if (!g.base && lat >= g.lat0 && lat <= g.lat1 && lon >= g.lon0 && lon <= g.lon1) return g;
+    return (_RW.tiles && _rwTileOf(lat, lon)) || G[G.length - 1];
 }
 function _rwInside(lat, lon) {
     const R = _RW;
+    if (R && R.wrap) return lat >= R.lat0 - 0.2 && lat <= R.lat1 + 0.2;       // 世界全体
     return !!R && lat >= R.lat0 && lat <= R.lat1 && lon >= R.lon0 && lon <= R.lon1;
 }
 // 球の上の点の高さ。oct が細かいとき（船のまわり）は、岸の近くに小さな起伏を足す
@@ -389,13 +446,20 @@ function worldWorkerSource() {
     return `
         let WORLD_R = ${WORLD_R};
         let _RW = null;
-        const _rwHook = (ev) => { if (ev.data && ev.data.__rw) { _RW = ev.data.rw; WORLD_R = ev.data.R; return true; } return false; };
+        const _rwHook = (ev) => {
+            if (ev.data && ev.data.__rw) { _RW = ev.data.rw; WORLD_R = ev.data.R; return true; }
+            // 世界全体の区画だけの足し引き（worldWorkerSyncTiles）
+            if (ev.data && ev.data.__rwTiles) { if (_RW) { _RW.tiles = _RW.tiles || {}; Object.assign(_RW.tiles, ev.data.add); for (const k of ev.data.drop) delete _RW.tiles[k]; } return true; }
+            return false;
+        };
         ${_rwDetailAt.toString()}
         ${_rwDetailAtSharp.toString()}
         ${_rwDetailOf.toString()}
         ${_rwSample.toString()}
         ${_rwGridAt.toString()}
         ${_rwCoarse.toString()}
+        ${_rwTileOf.toString()}
+        ${_rwBaseAt.toString()}
         ${_rwHeight.toString()}
         ${_rwEFromH.toString()}
         ${_rwShoalFree.toString()}
@@ -410,12 +474,33 @@ function worldWorkerSync(w, win) {
     if (_RW) {
         rw = Object.assign({}, _RW, { hd: _RW.hd ? _RW.hd.map(d => Object.assign({}, d, { k: null })) : null, berths: null });
         if (win && _RW.grids) {
-            rw.grids = _RW.grids.map(g => _rwCropGrid(g, win)).filter(Boolean);
+            // （世界一周の土台は、範囲が ±180° をまたぐときは切り出さずにそのまま：切り出すと向こう側が無くなる）
+            const dl = win.lon0 < -180 || win.lon1 > 180;
+            rw.grids = _RW.grids.map(g => { if (g.wrap && dl) return g; const c = _rwCropGrid(g, win); if (c && g.base) { c.base = true; c.wrap = g.wrap; } return c; }).filter(Boolean);
+            if (!rw.grids.some(g => g.base) && _RW.grids[_RW.grids.length - 1].base) rw.grids.push(_RW.grids[_RW.grids.length - 1]);
             rw.h = null;
+            // 世界全体の区画：範囲に掛かる区画だけ（区画は小さいので切り出さない）
+            if (_RW.tiles) { rw.tiles = {}; for (const k in _RW.tiles) { const t = _RW.tiles[k]; if (t.lat1 > win.lat0 && t.lat0 < win.lat1 && _rwLonOverlap(t, win)) rw.tiles[k] = t; } }
             if (rw.hd) rw.hd = rw.hd.filter(d => d.lat1 > win.lat0 && d.lat0 < win.lat1 && d.lon1 > win.lon0 && d.lon0 < win.lon1);
         }
     }
     w.postMessage({ __rw: true, rw, R: WORLD_R });
+    w._rwTileKeys = new Set(rw && rw.tiles ? Object.keys(rw.tiles) : []);
+}
+// 世界全体の区画だけを、ワーカーに足し引きする（地形を丸ごと送り直すと、北大西洋の細かい格子ごと 90MB ほどを毎回写すので）
+function worldWorkerSyncTiles(w) {
+    if (!w || !_RW || !_RW.tiles) return;
+    if (!w._rwTileKeys) { worldWorkerSync(w); return; }
+    const add = {}, drop = [];
+    for (const k in _RW.tiles) if (!w._rwTileKeys.has(k)) { add[k] = _RW.tiles[k]; w._rwTileKeys.add(k); }
+    for (const k of [...w._rwTileKeys]) if (!_RW.tiles[k]) { drop.push(k); w._rwTileKeys.delete(k); }
+    if (Object.keys(add).length || drop.length) w.postMessage({ __rwTiles: true, add, drop });
+}
+window.worldWorkerSyncTiles = worldWorkerSyncTiles;
+// 区画と範囲が経度で重なるか（±180° をまたいでも）
+function _rwLonOverlap(t, win) {
+    for (const d of [0, 360, -360]) if (t.lon1 + d > win.lon0 && t.lon0 + d < win.lon1) return true;
+    return false;
 }
 // 格子の一部を切り出す（重ならなければ null）。縁のつなぎ（blend）は元の格子の縁で測るので、元の縁も持たせる
 function _rwCropGrid(g, win) {
@@ -676,7 +761,10 @@ function _rwDockOut(p, dist) {
 window._rwDockOut = _rwDockOut;
 function _rwFairway(p) {
     // 作り込んだ港（大きな客船の港）は、喫水 15〜20m の超大型客船でも通れるよう深く掘る
-    const R = _rwGridOf(p.lat, p.lon), T = PORT_TYPES[p.type], D = (_rwDetailOf(p.lat, p.lon) ? 24 : T.depth + 2);
+    // （世界全体の区画の上の港は、まわりの区画をつないだ格子の上で探す：区画の縁で探す範囲が切れないように）
+    let R = _rwGridOf(p.lat, p.lon);
+    if (R.tile || R.base) R = _rwPatch(p.lat, p.lon);
+    const T = PORT_TYPES[p.type], D = (_rwDetailOf(p.lat, p.lon) ? 24 : T.depth + 2);
     const RAD = Math.PI / 180;
     const cellOf = (lat, lon) => ({ i: Math.round((lon - R.lon0) / R.cell), j: Math.round((R.lat1 - lat) / R.cell) });
     const llOf = (i, j) => ({ lat: R.lat1 - j * R.cell, lon: R.lon0 + i * R.cell });
@@ -824,6 +912,17 @@ function _rwFairway(p) {
         simp.push(cells[b]); a = b;
     }
     return { depth: D, pts: _rwUnhook([{ lat: p.lat, lon: p.lon }, ...pre, ...simp.map(([i, j]) => llOf(i, j))]) };
+}
+// その所のまわり（±1.1°）の土台（区画・全体図）を、区画と同じ 1.5 分角の 1 つの格子にする（港の航路を探すときだけ）
+function _rwPatch(lat, lon) {
+    const I = _RW.tileIdx, c = I ? I.cell : 0.025;
+    const k0 = I ? I.lat0 : -89.99791666666667, j0 = I ? I.lon0 : -179.99791666666667;
+    const r = Math.round(1.1 / c), rl = Math.round(Math.min(3, 1.1 / Math.max(0.2, Math.cos(lat * Math.PI / 180))) / c);
+    const ci = Math.round((lat - k0) / c), cj = Math.round((lon - j0) / c);
+    const rows = 2 * r + 1, cols = 2 * rl + 1, h = new Int16Array(rows * cols);
+    const lat1 = k0 + (ci + r) * c, lon0 = j0 + (cj - rl) * c;
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) h[y * cols + x] = Math.round(_rwBaseAt(lat1 - y * c, lon0 + x * c));
+    return { lat0: lat1 - (rows - 1) * c, lat1, lon0, lon1: lon0 + (cols - 1) * c, rows, cols, cell: c, h, blend: 0, patch: true };
 }
 // 航路の短い折り返し（細かい地形の道の終わりと粗い格子の升目の真ん中の継ぎ目などで、少し戻ってから曲がる所）を除く。
 // 大きな船はそこを回りきれず、点のまわりを回り続けていた（ベルファストの出口など）。
@@ -973,8 +1072,42 @@ function _rwCarve(fw) {
     const P = fw.pts[0], G = _RW.grids;
     if (!G) return _rwCarveGrid(fw, _RW);
     const own = _rwGridOf(P.lat, P.lon);
-    for (const g of G) if (g === own || g.blend) _rwCarveGrid(fw, g);
+    for (const g of G) if (g === own || (g.blend && !g.base)) _rwCarveGrid(fw, g);
+    // 世界全体の区画の上の港：読んである区画に掘り、あとで読む区画にも掘れるよう覚えておく（_rwTileLoaded）
+    if (_RW.tiles && (own.tile || own.base)) {
+        (_RW.carves || (_RW.carves = [])).push(fw);
+        for (const k in _RW.tiles) if (_rwFwHits(fw, _RW.tiles[k])) _rwCarveGrid(fw, _RW.tiles[k]);
+    }
 }
+// 航路（点の並び）が格子に掛かるか（掘る幅の分だけ広げて）
+function _rwFwHits(fw, R) {
+    let a = Infinity, b = -Infinity, c = Infinity, d = -Infinity;
+    for (const q of fw.pts) { a = Math.min(a, q.lat); b = Math.max(b, q.lat); c = Math.min(c, q.lon); d = Math.max(d, q.lon); }
+    const m = 0.02;
+    return b > R.lat0 - m && a < R.lat1 + m && d > R.lon0 - m && c < R.lon1 + m;
+}
+// 運河・細い海峡を格子に掘る：線から（幅の半分か、升目の 1.45 倍の広い方）までを運河の深さに（陸も削る）
+// （線の通る升目の 4 隅がみな掘られるように：升目より狭く掘ると、まわりの陸の高さと混ざって運河の真ん中でも陸になる）
+function _rwCarveCanal(cn, R) {
+    const RAD = Math.PI / 180, mLat = WORLD_R * RAD;
+    for (let s = 0; s < cn.pts.length - 1; s++) {
+        const A = { lat: cn.pts[s][0], lon: cn.pts[s][1] }, B = { lat: cn.pts[s + 1][0], lon: cn.pts[s + 1][1] };
+        const mLon = mLat * Math.cos((A.lat + B.lat) / 2 * RAD);
+        const half = Math.max(cn.w / 2, R.cell * mLat * 1.45);
+        const ax = (A.lon - R.lon0) * mLon, ay = (R.lat1 - A.lat) * mLat, bx = (B.lon - R.lon0) * mLon, by = (R.lat1 - B.lat) * mLat;
+        const L2 = (bx - ax) ** 2 + (by - ay) ** 2 || 1;
+        const ci0 = Math.max(0, Math.floor((Math.min(ax, bx) - half) / (R.cell * mLon))), ci1 = Math.min(R.cols - 1, Math.ceil((Math.max(ax, bx) + half) / (R.cell * mLon)));
+        const cj0 = Math.max(0, Math.floor((Math.min(ay, by) - half) / (R.cell * mLat))), cj1 = Math.min(R.rows - 1, Math.ceil((Math.max(ay, by) + half) / (R.cell * mLat)));
+        for (let j = cj0; j <= cj1; j++) for (let i = ci0; i <= ci1; i++) {
+            const px = i * R.cell * mLon, py = j * R.cell * mLat;
+            const t = Math.max(0, Math.min(1, ((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / L2));
+            if (Math.hypot(px - ax - t * (bx - ax), py - ay - t * (by - ay)) > half) continue;
+            const k = j * R.cols + i;
+            if (R.h[k] > -cn.depth) R.h[k] = -cn.depth;
+        }
+    }
+}
+function _rwCanalHits(cn, R) { return _rwFwHits({ pts: cn.pts.map(([lat, lon]) => ({ lat, lon })) }, R); }
 function _rwCarveGrid(fw, R) {
     const RAD = Math.PI / 180, mLat = WORLD_R * RAD;
     const P0 = fw.pts[0];
@@ -1041,7 +1174,7 @@ function _rwBuildPorts() {
     const out = [];
     // 前もって探しておいた港の置き場所・航路があれば、それを使う（探すのは重い）
     const C = _RW && _RW.fwCache;
-    (W.ports || []).concat((_RW && _RW.berths) || []).forEach((d, i) => {
+    (W.ports || []).concat((_RW && _RW.berths) || [], (_RW && _RW.extraPorts) || []).forEach((d, i) => {
         const c = C && C[d[0]];
         const p = c ? _rwPlacePort([d[0], d[1], d[2], d[3], d[4], Object.assign({}, d[5] || {}, { at: [c.lat, c.lon], bearing: c.sb })], i) : _rwPlacePort(d, i);
         if (p) { if (c) p._fw = c; out.push(p); } else console.warn('港を置けませんでした：' + d[0]);
@@ -1246,28 +1379,46 @@ function _rwPixels(g, meta, name) {
     if (nz < 5) throw new Error('地形の画素が空でした（メモリ不足）：' + name);
     return px;
 }
-async function _rwLoadGrid(url) {
-    const meta = await (await fetch(url + '.json')).json();
-    const blob = await (await fetch(url + '.png')).blob();
+// 高さの画像（PNG・可逆 WebP：高さ ＝ R×256 ＋ G − 32768）を Int16Array に
+async function _rwDecodeHeights(blob, cols, rows, name) {
     let bmp;
     try { bmp = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' }); }
     catch (e) { bmp = await createImageBitmap(blob); }
-    const cv = document.createElement('canvas'); cv.width = meta.cols; cv.height = meta.rows;
+    const cv = document.createElement('canvas'); cv.width = cols; cv.height = rows;
     const g = cv.getContext('2d', { willReadFrequently: true });
     g.drawImage(bmp, 0, 0);
-    const px = _rwPixels(g, meta, url);
-    const h = new Int16Array(meta.cols * meta.rows);
+    const px = _rwPixels(g, { cols, rows }, name);
+    const h = new Int16Array(cols * rows);
     for (let i = 0, j = 0; i < h.length; i++, j += 4) h[i] = px[j] * 256 + px[j + 1] - 32768;
     cv.width = cv.height = 1;
     if (bmp.close) bmp.close();
-    return { lat0: meta.lat0, lat1: meta.lat1, lon0: meta.lon0, lon1: meta.lon1, rows: meta.rows, cols: meta.cols, cell: meta.cell, h, blend: 0 };
+    return h;
+}
+async function _rwLoadGrid(url) {
+    const meta = await (await fetch(url + '.json')).json();
+    const blob = await (await fetch(url + '.' + (meta.ext || 'png'))).blob();
+    const h = await _rwDecodeHeights(blob, meta.cols, meta.rows, url);
+    return { lat0: meta.lat0, lat1: meta.lat1, lon0: meta.lon0, lon1: meta.lon1, rows: meta.rows, cols: meta.cols, cell: meta.cell, h, blend: 0, wrap: !!meta.wrap };
 }
 async function worldLoadReal(key) {
     key = _rwWorldKey(key);
     if (_rwCache[key]) return _rwCache[key];
     const W = REAL_WORLDS[key];
     const base = await _rwLoadGrid(W.url);
+    base.base = true;
     const rw = Object.assign({ key }, base);
+    // 世界全体：船の近くだけ読む区画の一覧と、世界の主な港・運河（全体図にも掘る：全体図の上の航路探し・地図に）
+    if (W.tiles) {
+        rw.tileIdx = await (await fetch(W.tiles + '/index.json')).json();
+        rw.tileHave = new Set(rw.tileIdx.have);
+        rw.tileUrl = W.tiles;
+        rw.tiles = {};
+        rw.carves = [];
+        for (const cn of RW_CANALS) _rwCarveCanal(cn, base);
+    }
+    if (W.portsUrl) { try { rw.extraPorts = await (await fetch(W.portsUrl)).json(); } catch (e) { console.warn('世界の港の一覧を読めませんでした', e); } }
+    // 世界全体の航路の点・区間（67-sea-lanes.js）
+    if (W.lanesUrl) { try { const L = await (await fetch(W.lanesUrl)).json(); if (typeof seaLaneSetWorld === 'function') seaLaneSetWorld(L); } catch (e) { console.warn('世界の航路を読めませんでした', e); } }
     // 地域の細かい格子を上に重ねる（縁の 0.12°（≒ 8〜13km）で土台となめらかにつなぐ）
     if (W.regions) {
         rw.grids = [];
@@ -1335,6 +1486,93 @@ async function worldEnsureHarbors(pts, rKm) {
     if (_RW !== R) return;
     _rwHarborsChanged();
 }
+// ── 世界全体の区画（10°×10°、1.5 分角）：船の近く・自動航行の行き先・地図で見ている所だけ読む ──
+// 多すぎたら（RW_TILE_MAX）、いちばん長く使っていない区画から捨てる。読んだ区画には運河と港の航路を掘る
+const RW_TILE_MAX = 90;
+const _rwTileLoading = new Map();
+// 範囲 { lat0, lat1, lon0, lon1 } に掛かる区画（データのある区画だけ。キー ＝ 緯度の帯×100＋経度の帯）
+function _rwTileKeysFor(box) {
+    const R = _RW, I = R && R.tileIdx, out = [];
+    if (!I) return out;
+    const span = I.cell * I.tile;
+    const ti0 = Math.max(0, Math.floor((box.lat0 - I.lat0) / span)), ti1 = Math.min(I.nLat - 1, Math.floor((box.lat1 - I.lat0) / span));
+    const tjA = Math.floor((box.lon0 - I.lon0) / span), tjB = Math.floor((box.lon0 + Math.min(359.9, box.lon1 - box.lon0) - I.lon0) / span);
+    for (let ti = ti0; ti <= ti1; ti++) for (let tj = tjA; tj <= tjB; tj++) {
+        const j = ((tj % I.nLon) + I.nLon) % I.nLon, k = ti * 100 + j;
+        if (R.tileHave.has(ti + '_' + j) && !out.includes(k)) out.push(k);
+    }
+    return out;
+}
+// 点のまわり rDeg（緯度の度。経度は緯度に合わせて広げる）の範囲
+function worldBoxAround(lat, lon, rDeg) {
+    const c = Math.max(0.1, Math.cos(lat * Math.PI / 180)), dl = Math.min(179, rDeg / c);
+    return { lat0: lat - rDeg, lat1: lat + rDeg, lon0: lon - dl, lon1: lon + dl };
+}
+window.worldBoxAround = worldBoxAround;
+async function _rwLoadTile(R, k) {
+    const I = R.tileIdx, ti = Math.floor(k / 100), tj = k % 100, span = I.cell * I.tile;
+    const rows = Math.min(I.tile + 1, I.rows - ti * I.tile), cols = I.tile + 1;
+    const nm = 't' + String(ti).padStart(2, '0') + '_' + String(tj).padStart(2, '0');
+    const r = await fetch(R.tileUrl + '/' + nm + '.' + (I.ext || 'png'));
+    if (!r.ok) throw new Error('HTTP ' + r.status + '：' + nm);
+    const h = await _rwDecodeHeights(await r.blob(), cols, rows, nm);
+    const lat0 = I.lat0 + ti * span, lon0 = I.lon0 + tj * span;
+    return { key: k, lat0, lat1: lat0 + (rows - 1) * I.cell, lon0, lon1: lon0 + (cols - 1) * I.cell, rows, cols, cell: I.cell, h, blend: 0, tile: true, wrap: true, used: 0 };
+}
+// 読んだ区画に、運河と、世界全体の区画の上の港の航路を掘る
+function _rwTileLoaded(R, t) {
+    for (const cn of RW_CANALS) if (_rwCanalHits(cn, t)) _rwCarveCanal(cn, t);
+    for (const fw of R.carves || []) if (_rwFwHits(fw, t)) _rwCarveGrid(fw, t);
+}
+// 範囲（いくつでも）に掛かる区画を読む。読んだら地形・ワーカー・地図を作り直す。返す値：新しく読んだ数
+async function worldEnsureTiles(boxes, opt) {
+    const R = _RW;
+    if (!R || !R.tiles) return 0;
+    const keys = [];
+    for (const b of boxes) if (b) for (const k of _rwTileKeysFor(b)) if (!keys.includes(k)) keys.push(k);
+    if (opt && opt.limit && keys.length > opt.limit) return 0;
+    const now = performance.now();
+    for (const k of keys) if (R.tiles[k]) R.tiles[k].used = now;
+    const need = keys.filter(k => !R.tiles[k]);
+    if (!need.length) return 0;
+    let n = 0;
+    await Promise.all(need.map(k => {
+        if (!_rwTileLoading.has(k)) _rwTileLoading.set(k, _rwLoadTile(R, k).then(t => {
+            if (_RW !== R || R.tiles[k]) return;
+            _rwTileLoaded(R, t); t.used = performance.now(); R.tiles[k] = t; n++;
+        }).catch(e => console.warn('地形の区画を読めませんでした：' + k, e)).finally(() => _rwTileLoading.delete(k)));
+        return _rwTileLoading.get(k);
+    }));
+    if (_RW !== R) return n;
+    const all = Object.keys(R.tiles);
+    if (all.length > RW_TILE_MAX && !R.keepAll) {
+        all.sort((a, b) => R.tiles[a].used - R.tiles[b].used);
+        for (const k of all.slice(0, all.length - RW_TILE_MAX)) if (!keys.includes(+k)) delete R.tiles[k];
+    }
+    _rwTilesChanged();
+    return n;
+}
+window.worldEnsureTiles = worldEnsureTiles;
+// 点のまわりの区画が読んであるか
+function worldTilesReady(lat, lon, rDeg) {
+    if (!_RW || !_RW.tiles) return true;
+    return _rwTileKeysFor(worldBoxAround(lat, lon, rDeg || 1.6)).every(k => _RW.tiles[k]);
+}
+window.worldTilesReady = worldTilesReady;
+function _rwTilesChanged() {
+    if (typeof terrain !== 'undefined' && terrain.worker) { worldWorkerSync(terrain.worker, terrain.rwWin = worldWorkerWindow()); terrain._dirty = true; }
+    if (_RW) _RW.apDirty = true;            // 自動航行のワーカーには、次に航路を探すときに渡す（49-autopilot.js）
+    if (typeof _wm !== 'undefined') { _wm.detailKey = ''; if (_wm.open && typeof worldMapRedraw === 'function') worldMapRedraw(); }
+}
+// ときどき：船のまわり（約 2.2°）と自動航行の行き先のまわりの区画を読む
+function worldTileTick() {
+    if (!_RW || !_RW.tiles || world.mode !== 'world') return;
+    const me = worldShipLatLon(), boxes = [worldBoxAround(me.lat, me.lon, 2.2)];
+    const d = (typeof autopilot !== 'undefined' && autopilot.dest) ? autopilot.dest : null;
+    if (d && Number.isFinite(d.lat)) boxes.push(worldBoxAround(d.lat, d.lon, 0.8));
+    worldEnsureTiles(boxes);
+}
+window.worldTileTick = worldTileTick;
 function _rwHarborsChanged() {
     if (typeof terrain !== 'undefined' && terrain.worker) { worldWorkerSync(terrain.worker, terrain.rwWin = worldWorkerWindow()); terrain._dirty = true; }
     if (typeof _apWorkerObj !== 'undefined') worldWorkerSync(_apWorkerObj);
@@ -1342,6 +1580,7 @@ function _rwHarborsChanged() {
 }
 // ときどき（44-world-terrain.js から）：船のまわり 150km の港を読み、600km より遠くの港は捨てる（自動航行の行き先は残す）
 function worldHarborTick() {
+    worldTileTick();
     if (!_RW || !_RW.hdMeta || world.mode !== 'world') return;
     const me = worldShipLatLon(), dest = (typeof autopilot !== 'undefined' && autopilot.dest && !autopilot.dest.point) ? autopilot.dest : null;
     worldEnsureHarbors([me, dest], 150);
@@ -1356,6 +1595,13 @@ window.worldHarborTick = worldHarborTick;
 async function worldBuildFairwayCache() {
     if (!_RW) return null;
     await worldEnsureHarbors(_RW.hdMeta.map(m => ({ lat: (m.lat0 + m.lat1) / 2, lon: (m.lon0 + m.lon1) / 2 })), 1);
+    // 世界全体：すべての港のまわりの区画を読んでおく（捨てない）
+    if (_RW.tiles) {
+        _RW.keepAll = true;
+        const W = REAL_WORLDS[world.realKey], defs = (W.ports || []).concat(_RW.berths || [], _RW.extraPorts || []);
+        await worldEnsureTiles(defs.map(d => worldBoxAround(d[2], d[3], 1.3)));
+        _RW.carves = [];
+    }
     const saved = _RW.fwCache; _RW.fwCache = null;
     world.ports = null;
     const ports = worldBuildPorts();
@@ -1407,9 +1653,10 @@ async function worldSetKind(kind, key) {
         const o = JSON.parse(localStorage.getItem('susuru_world') || 'null'), S = (o && o.ships) || {};
         saved = S[_worldKindKey()];
         // 北大西洋に初めて来たとき：前の版でブリテン諸島・アメリカ東海岸にいた所から
-        if (!saved && kind === 'real') saved = (region && S['real:' + region]) || S['real:britain'] || S['real:useast'] || null;
+        if (!saved && kind === 'real') saved = (region && S['real:' + region]) || S['real:natl'] || S['real:britain'] || S['real:useast'] || null;
     } catch (e) { /* ignore */ }
     if (saved && Number.isFinite(saved.lat) && (kind !== 'real' || _rwInside(saved.lat, saved.lon))) {
+        if (_RW && _RW.tiles) { try { await worldEnsureTiles([worldBoxAround(saved.lat, saved.lon, 1.6)]); } catch (e) { /* ignore */ } }
         world.mode = 'world';
         world.ref = { lat: saved.lat, lon: saved.lon }; _wFrameCache = null;
         physics.cgWorldX = 0; physics.cgWorldZ = 0; physics.heading = saved.hdg || 0;
@@ -1437,7 +1684,8 @@ async function worldRestoreReal() {
     catch (e) { world._pendingReal = null; _RW = null; WORLD_R = WORLD_R_GEN; world.kind = 'gen'; world.realKey = null; return; }
     world._pendingReal = null;
     _worldKindChanged();
-    // 船のいる所の作り込んだ港を、先に読む（読む前の粗い地形で、岸壁に着いている船を「座礁」と見ないように）
+    // 船のいる所の区画・作り込んだ港を、先に読む（読む前の粗い地形で、岸壁に着いている船を「座礁」と見ないように）
+    if (P.mode === 'world' && world.ref && _RW.tiles) { try { await worldEnsureTiles([worldBoxAround(world.ref.lat, world.ref.lon, 1.6)]); } catch (e) { /* ignore */ } }
     if (P.mode === 'world' && world.ref) { try { await worldEnsureHarbors([world.ref], 150); } catch (e) { /* ignore */ } }
     world.mode = P.mode;
     if (world._resumeHeading !== undefined && typeof physics !== 'undefined') physics.heading = world._resumeHeading;
@@ -1597,10 +1845,19 @@ function worldStartAtPortGo(id) {
 }
 window.worldStartAtPortAsk = worldStartAtPortAsk; window.worldStartAtPortGo = worldStartAtPortGo;
 function worldStartAtPort(port) {
+    // 地形を読んでから置く港が重なったら、最後に頼まれた港だけ（読み終わった順に置くと、前の港に戻ってしまう）
+    world._startReq = port;
+    // 世界全体の区画をまだ読んでいなければ、読んでから（粗い全体図の地形で船を置くと、陸の上や浅瀬に置いてしまう）
+    if (_RW && _RW.tiles && !port._tlTried && !worldTilesReady(port.lat, port.lon, 1.6)) {
+        port._tlTried = true;
+        const st = document.getElementById('wp-status'); if (st) st.textContent = 'その港のまわりの地形を読んでいます…';
+        worldEnsureTiles([worldBoxAround(port.lat, port.lon, 1.6)]).then(() => { if (st) st.textContent = ''; if (world._startReq === port) worldStartAtPort(port); port._tlTried = false; });
+        return;
+    }
     // 作り込んだ港で、細かい地形をまだ読んでいなければ、読んでから（船を置く所を本物の深さで決める）
     if (_RW && _RW.hdMeta && _rwDetailBoxOf(port.lat, port.lon) && !_rwDetailOf(port.lat, port.lon) && !port._hdTried) {
         port._hdTried = true;
-        worldEnsureHarbors([{ lat: port.lat, lon: port.lon }], 150).then(() => { worldStartAtPort(port); port._hdTried = false; });
+        worldEnsureHarbors([{ lat: port.lat, lon: port.lon }], 150).then(() => { if (world._startReq === port) worldStartAtPort(port); port._hdTried = false; });
         return;
     }
     const T = PORT_TYPES[port.type];
@@ -1666,8 +1923,10 @@ function worldStartAtPort(port) {
 window.worldStartAtPort = worldStartAtPort;
 // 地図の好きな所から出航：その所（陸・浅い所なら、近くの、この船に足りる深さの海）に、今の向きのまま止まって置く
 async function worldStartAtPoint(lat, lon) {
+    world._startReq = null;
     const st = document.getElementById('wp-status');
     if (st) st.textContent = 'その場所の地形を読んでいます…';
+    if (_RW && _RW.tiles) { try { await worldEnsureTiles([worldBoxAround(lat, lon, 1.6)]); } catch (e) { /* ignore */ } }
     if (_RW && _RW.hdMeta && typeof worldEnsureHarbors === 'function') { try { await worldEnsureHarbors([{ lat, lon }], 60); } catch (e) { /* ignore */ } }
     // 船の喫水＋1.5m の深さが、船の真ん中と、まわり（船の長さの 6 割の円：その場で向きを変えられる）にある所。
     // 近い順に 5km まで探す（港の中・川の中でも：自動航行の行き先のような浅瀬の少なさは問わない）
@@ -1874,7 +2133,7 @@ function _wmEnsureDom() {
             <span class="wp-modes">
                 <button id="wp-mode-ocean" onclick="worldSetMode('ocean')">🌊 海だけ</button>
                 <button id="wp-mode-world" onclick="worldSetMode('world')">🌍 世界を航海</button>
-                <button id="wp-mode-real" onclick="worldSetKind('real', 'natl')" title="実際の地形（NOAA ETOPO 2022・CRM・EMODnet）と実在の港。ブリテン諸島とアメリカ東海岸（サウサンプトン・リヴァプール・ベルファスト・グラスゴー・ニューヨーク・ボストン・フィラデルフィア・ボルティモア・ハンプトン・ローズは作り込み）と、その間の北大西洋">🌊 実在：北大西洋（ブリテン・アメリカ東海岸）</button>
+                <button id="wp-mode-real" onclick="worldSetKind('real', 'earth')" title="実際の地形（NOAA ETOPO 2022・CRM・EMODnet）と実在の港。世界全体（主な港はおおよその位置）。ブリテン諸島とアメリカ東海岸は細かい地形で、サウサンプトン・リヴァプール・ベルファスト・グラスゴー・ニューヨーク・ボストン・フィラデルフィア・ボルティモア・ハンプトン・ローズは作り込み">🌍 実在：世界（ブリテン・アメリカ東海岸は細かく）</button>
             </span>
             <button id="wp-chart" class="wp-chartbtn" onclick="worldMapSetChart(!_wm.chart)">📘 海図</button>
             <button id="wp-minimap" class="wp-chartbtn wp-mmbtn" onclick="minimapShow(!_mm.show)" title="右上の小さな地図">◉ ミニ地図</button>
@@ -2153,6 +2412,8 @@ function worldMapRedraw(quick) {
             const s = _wmToScreen(lat1, lon0, cv);
             g.drawImage(_wm.detail, s.x, s.y, (lon1 - lon0) / dpd, (lat1 - lat0) / dpd);
         } else if (!quick) {
+            // 世界全体：見ている所の区画を読む（多すぎるほど広く見ているときは全体図のまま）。読めたら描き直す
+            if (_RW && _RW.tiles && _wm.zoom >= 6) worldEnsureTiles([{ lat0, lat1, lon0, lon1 }], { limit: 16 });
             const oct = Math.min(16, WORLD_OCT_MAP + Math.round(Math.log2(_wm.zoom)));
             const rw = Math.min(480, Math.round(W / 2)), rh = Math.round(rw * H / W);
             _wm.detailKey = key; _wm.detail = null;
