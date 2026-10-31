@@ -631,6 +631,20 @@ function _apLineSafe(A, B, need, hw) {
     }
     return true;
 }
+// 船（q）が掘った航路（pts：0＝港・1＝泊地 … 最後＝沖の端）の線の上（線から tol[m] 以内）にいるか。
+// いれば、船より港側の、次に向かう点の番号 k（区間 k〜k＋1 の上）と、線からの距離 d を返す
+function _apOnFairway(pts, q, tol) {
+    const mLat = WORLD_R * _apRad, mLon = mLat * Math.cos(q.lat * _apRad);
+    const X = (p) => _apDLon(q.lon, p.lon) * mLon, Y = (p) => (p.lat - q.lat) * mLat;
+    let best = null;
+    for (let k = 1; k < pts.length - 1; k++) {
+        const ax = X(pts[k]), ay = Y(pts[k]), bx = X(pts[k + 1]), by = Y(pts[k + 1]);
+        const L2 = (bx - ax) ** 2 + (by - ay) ** 2 || 1, u = Math.max(0, Math.min(1, -(ax * (bx - ax) + ay * (by - ay)) / L2));
+        const d = Math.hypot(ax + u * (bx - ax), ay + u * (by - ay));
+        if (d < tol && (!best || d < best.d - 30)) best = { k, u, d };
+    }
+    return best;
+}
 function _apShipHalfBeam() {
     const hp = window.hullProfile;
     if (!hp || !hp.ready) return 15;
@@ -800,6 +814,28 @@ async function autopilotStart(port) {
             autopilot._newRoute = route;
         }
     }
+    // もう行き先の港の掘った航路の上（線から 350m・船幅の 4 倍の内）にいるなら、そこから航路をたどって泊地へ
+    //（航路の入口や 3km 沖まで戻ってから入り直さない。避航で止まって引き直すとき・航路の中から始めたときなど）
+    if (!isPt && !autopilot._newRoute && port.real && port.fairway && port.fairway.pts.length >= 2 && port.fairway.depth >= M.needTug) {
+        const on = _apOnFairway(port.fairway.pts, here, Math.max(350, _apShipHalfBeam() * 8));
+        if (on) {
+            const fw = port.fairway.pts, chDepth = port.fairway.depth, channelNarrow = chDepth < M.need;
+            const nearPort = (q) => rhumbCourse(q.lat, q.lon, port.lat, port.lon).dist < 4000 || _apInDetail(q);
+            let berthPlan = null, berthWhy = null;
+            if (autopilot.berth && typeof harborBerthPlan === 'function') { const bp = harborBerthPlan(port); if (bp.ok) berthPlan = bp; else berthWhy = bp.why; }
+            const route = [];
+            for (let k = on.k; k >= 2; k--) {
+                if (k === on.k && k > 1 && worldDistance(here.lat, here.lon, fw[k].lat, fw[k].lon) < 150) continue;     // 船のすぐそばの点は飛ばす
+                route.push({ lat: fw[k].lat, lon: fw[k].lon, label: `${port.name} 航路`, channel: true, narrow: channelNarrow || nearPort(fw[k]) });
+            }
+            route.push({ lat: fw[1].lat, lon: fw[1].lon, label: berthPlan ? `${port.name} 泊地` : `${port.name} 港口`, channel: true, final: true, narrow: true });
+            // 今いる所から最初の点まで、まっすぐ行っても浅い所にかからないときだけ（かかるなら、ふつうに探す）
+            if (_apLineSafe(here, route[0], M.needTug, _apShipHalfBeam())) {
+                autopilot.berthPlan = berthPlan; autopilot.berthWhy = berthWhy; autopilot.deepShip = false;
+                autopilot._newRoute = route;
+            }
+        }
+    }
     // （座礁から抜けたあと：まず水路の真ん中の深い所を通る広い帯で探し、無ければふつうに）
     // （cut：出る港の航路を、行き先から遠ざかり始める所で切り上げ、行き先の港の航路には途中から合流する。
     //  探せなければ、航路の端から端まで（cut なし）で探し直す）
@@ -939,6 +975,12 @@ async function autopilotStart(port) {
                 if (bp.ok) { berthPlan = bp; stopA = bp.aE; } else berthWhy = bp.why;
             }
             const from = route.length ? route[route.length - 1] : here;
+            // 航路の延長線の沖へ回るのは、沖の方（延長線から 60° の内）から来るときだけ
+            //（横や港の方から来るのに、いったん沖へ出てから戻って航路に乗らない）
+            if (far) {
+                const o = rhumbCourse(fw[fw.length - 2].lat, fw[fw.length - 2].lon, end.lat, end.lon).course, v = rhumbCourse(end.lat, end.lon, from.lat, from.lon);
+                if (v.dist > 300 && Math.abs(((v.course - o + 540) % 360) - 180) > 60) far = null;
+            }
             if (mode === 'tug') _apMsg(`${port.name} へは狭い所があるので、タグの補助を前提に航路を探しています…`);
             // 途中からの合流：行き先の港の航路の線のうち、ここからいちばん近い所（泊地から 600m・船の長さの 2 倍より沖）。
             // 航路の端（沖の入口）を回るより、まっすぐ行って合流するほうが 3km 以上近く、150km より近いとき
@@ -963,7 +1005,8 @@ async function autopilotStart(port) {
                     }
                     along += segL;
                 }
-                const viaEnd = worldDistance(from.lat, from.lon, end.lat, end.lon) + along;
+                // （航路の延長線の沖を回るなら、その分も）
+                const viaEnd = (far ? worldDistance(from.lat, from.lon, far.lat, far.lon) + worldDistance(far.lat, far.lon, end.lat, end.lon) : worldDistance(from.lat, from.lon, end.lat, end.lon)) + along;
                 cands.sort((p, q) => (p.d + p.inward) - (q.d + q.inward));
                 const seen = new Set();
                 for (const c of cands) {
@@ -1039,7 +1082,7 @@ async function autopilotStart(port) {
                 farA = a;
             }
         }
-        const far = farA > outerA + 300 ? portChannelPoint(port, farA) : null;
+        let far = farA > outerA + 300 ? portChannelPoint(port, farA) : null;
         const gate = portChannelPoint(port, T.basin + chLen - 200);        // 航路の入口
         let stopA = Math.min(Math.max(T.basin * 0.5, T.basin * 0.76 + halfLen + 100), T.basin + chLen - 400);
         // 港の航路の深さ：ふつうに足りる／タグの補助なら足りる（狭い）／足りない（沖で止まる）
@@ -1061,6 +1104,22 @@ async function autopilotStart(port) {
         }
         const stop = portChannelPoint(port, stopA);
         const from = route.length ? route[route.length - 1] : here;
+        {   // 港の軸（沖へまっすぐの航路）から見た、今いる所：a0 沖への距離・b0 横のずれ
+            const br = port.seaBearing * _apRad, sx = Math.sin(br), sz = Math.cos(br);
+            const dE = _apDLon(port.lon, from.lon) * _apRad * WORLD_R * Math.cos(port.lat * _apRad), dN = (from.lat - port.lat) * _apRad * WORLD_R;
+            const a0 = dE * sx + dN * sz, b0 = dE * sz - dN * sx;
+            // もう掘った航路・泊地の中にいるなら、線に沿ってそのまま泊地へ（航路の入口や沖まで戻らない）
+            if (!deepShip && !route.length && Math.abs(b0) < 80 + Math.max(0, a0 - T.basin) * 0.06 && a0 > Math.min(stopA, T.basin * 0.6) - 50 && a0 < T.basin + chLen - 100
+                && _apLineSafe(from, stop, M.needTug, _apShipHalfBeam())) {
+                route.push(Object.assign(stop, { label: berthPlan ? `${port.name} 泊地` : `${port.name} 港口`, channel: true, final: true, narrow: channelNarrow }));
+                autopilot.berthPlan = berthPlan; autopilot.berthWhy = berthWhy; autopilot.deepShip = deepShip;
+                autopilot._newRoute = route;
+                lastErr = null;
+                break;
+            }
+            // 航路の延長線の沖へ回るのは、沖の方（延長線から 60° の内）から来るときだけ
+            if (far && !(a0 > T.basin + chLen && Math.abs(b0) < a0 * Math.tan(60 * _apRad))) far = null;
+        }
         if (mode === 'tug') _apMsg(`${port.name} へは狭い所があるので、タグの補助を前提に航路を探しています…`);
         try {
             // 行き先の候補：航路の延長線の沖 → 航路の入口のすぐ沖 → 航路の中（入口の少し内側。浅瀬の間で沖側に

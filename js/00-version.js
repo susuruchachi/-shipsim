@@ -551,7 +551,11 @@
 //                 港の航路）を順番ではなく同時に取りに行く。細かい地域の格子（イギリス・アメリカ東岸・日本）は最初に全部読まず、
 //                 船のまわりの区画を読むとき（worldEnsureTiles）に、その地域にかかるものだけ読む（_rwEnsureRegions）。
 //                 読んだら港の航路・運河を掘り、自動航行の計算にも全部送り直す
-var APP_VERSION = '0.03.030.001';
+// 0.03.030.002 ・どの港でも、掘った航路の入口まで戻ってから入り直さない（49-autopilot.js の autopilotStart）：
+//                 もう行き先の航路の上（線から 350m・船幅の 4 倍の内）にいるなら、そこから航路をたどって泊地へ（_apOnFairway）。
+//                 航路の延長線の沖へ回るのは、沖の方（延長線から 60° の内）から来るときだけ（横から来るのに沖へ出て戻らない）。
+//                 作った世界の港も、航路・泊地の中にいるなら、そのまま泊地へ
+var APP_VERSION = '0.03.030.002';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
