@@ -59,7 +59,8 @@ HARBORS = {
 
 # アメリカの港の OpenStreetMap のまとめファイル（BBBike：<名前>.osm.pbf と <名前>.poly）を置いたフォルダ
 OSM_DIR = os.environ.get('SHIPSIM_OSM', os.path.join(HERE, 'cache', 'osm'))
-US = dict(region='useast', bathy='crm', pbf_dir=OSM_DIR)
+# （水深は NOAA BlueTopo の実測 → 無い所は CRM。浚渫区域は USACE NCF。measured：実測の深さのまま（昔の埠頭・ドック・決めたバースの前だけは掘る））
+US = dict(region='useast', bathy='bluetopo', ncf=True, measured=True, webp=True, pbf_dir=OSM_DIR)
 HARBORS.update({
     # ニューヨーク（上の湾・ハドソン川（ノース・リバー）・イースト・リバー・ニューアーク湾・キル・ヴァン・カル）
     #  昔の港の形：バッテリー・パーク・シティ（1970〜80 年代の埋め立て）を水に戻し、ウェスト通りの岸壁から昔の埠頭を出す。
@@ -184,6 +185,8 @@ HARBORS.update({
                                      ['Pier 16', 'フィラデルフィア港 ポート・リッチモンド（レディング鉄道の石炭埠頭）', 'cargo', 'L']],
                          # 昔の客船の埠頭（ワシントン通りの移民の埠頭：アメリカン・ライン、レッド・スター・ライン）と、今のターミナル
                          extra_auto=[['フィラデルフィア港 ワシントン通り埠頭（アメリカン・ライン／レッド・スター・ライン）', 'passenger', 39.9330, -75.1395, 90],
+                                     # （OSM の 'Pier 1' の名前が無くなったので、岸壁の前の水の上の点から）
+                                     ['フィラデルフィア港 クルーズ・ターミナル（海軍工廠 1番埠頭）', 'passenger', 39.8868, -75.1745, 92],
                                      ['フィラデルフィア港 ペンズ・ランディング（客船）', 'passenger', 39.9450, -75.1385, 90],
                                      ['フィラデルフィア港 パッカー通りマリン・ターミナル（コンテナ）', 'cargo', 39.9025, -75.1330, 110],
                                      ['フィラデルフィア港 タイオガ・マリン・ターミナル', 'cargo', 39.9775, -75.0900, 160],
@@ -216,7 +219,7 @@ HARBORS.update({
     # フォール・リヴァー（試験：港のまわりの細かい実測データ）：マウント・ホープ湾〜トーントン川
     #  水深：NOAA BlueTopo（4m おき・CC0）→ 無い所は CRM。浚渫区域（航路・回頭水域・泊地）：USACE NCF（<key>_channels.json に別に）
     #  measured=True：実測の水深の所は掘らない（岸壁の前・ドック・港の航路も、測った深さのまま）
-    'fallriver': dict(region='useast', bathy='bluetopo', ncf=True, measured=True, name='フォール・リヴァー',
+    'fallriver': dict(region='useast', bathy='bluetopo', ncf=True, measured=True, webp=True, name='フォール・リヴァー',
                       lat0=41.625, lat1=41.735, lon0=-71.250, lon1=-71.140, cell=10,
                       dock_depth=6.0, berth_depth=6.0, berth_reach=0, feat_near=350, feat_min_area=120),
     # ニューヨークの外の湾（ロワー・ベイ）：ナローズからアンブローズ水道・サンディ・フック水道まで（20m おき）
@@ -224,17 +227,28 @@ HARBORS.update({
                         dock_depth=12.5, berth_depth=13.0, berth_reach=150, feat_near=300, feat_min_area=150),
 })
 
+# アメリカのほかの港（us_auto.json：範囲は港のまわり 3.5km と港の航路の最初の 9km。data の README）
+#  OSM は API から。水深は BlueTopo（無い所は CRM・陸の高さは CRM か世界の区画）。浚渫区域は NCF
+def _us_region(a):
+    return 'useast' if 24.3 <= a['lat0'] and a['lat1'] <= 46.0 and -82.0 <= a['lon0'] and a['lon1'] <= -63.0 else 'world'
+
+
+for _a in json.load(open(os.path.join(HERE, 'us_auto.json'), encoding='utf-8')):
+    HARBORS.setdefault(_a['key'], dict(region=_us_region(_a), bathy='bluetopo', ncf=True, measured=True, webp=True, name=_a['name'],
+                                        lat0=_a['lat0'], lat1=_a['lat1'], lon0=_a['lon0'], lon1=_a['lon1'], cell=_a['cell'],
+                                        dock_depth=8.0, berth_depth=8.0, berth_reach=0, feat_near=300, feat_min_area=150, **_a.get('opt', {})))
+
 UA = 'shipsim-harbor-builder/0.1 (personal ship simulator; one-off download)'
 
 
-def curl(url, out, tries=4):
+def curl(url, out, tries=7):
     for k in range(tries):
         r = subprocess.run(['curl', '-sS', '-m', '300', '-A', UA, '-o', out, '-w', '%{http_code}', url], capture_output=True, text=True)
         code = r.stdout.strip()
         if r.returncode == 0 and code == '200' and os.path.getsize(out) > 100:
             return True
         print('  retry', k + 1, code, r.stderr.strip()[:120], flush=True)
-        time.sleep(3 * (k + 1))
+        time.sleep(6 * (k + 1))           # （NCEI の THREDDS はときどき続けて失敗する）
     return False
 
 
@@ -347,10 +361,14 @@ def fetch_emodnet(H, cache):
 # （名前, 南, 北, 西, 東）。格子の点は 1/3600° おきで、端から半升目内側
 CRM_VOLS = [('crm/cudem/crm_vol1_2023.nc', 39.0, 46.0, -77.0, -65.0),
             ('crm/cudem/crm_vol2_2023.nc', 32.0, 39.0, -83.0, -68.0),
-            ('crm/cudem/crm_vol3_2023.nc', 24.0, 32.0, -84.0, -76.0)]
+            ('crm/cudem/crm_vol3_2023.nc', 24.0, 32.0, -84.0, -76.0),
+            ('crm/cudem/crm_vol4_2023.nc', 24.0, 32.0, -92.0, -84.0),          # メキシコ湾の中部（ニューオーリンズ・モービル・ペンサコーラ）
+            ('crm/cudem/crm_vol5_2023.nc', 24.0, 32.0, -99.0, -92.0),          # メキシコ湾の西部（ガルヴェストン）
+            ('crm/cudem/crm_vol9_2023.nc', 17.0, 19.0, -68.0, -64.25),         # プエルトリコ・米領ヴァージン諸島
+            ('crm/cudem/crm_vol10_2023.nc', 18.0, 23.0, -161.0, -153.5)]       # ハワイ
 
 
-def fetch_crm(H, cache):
+def fetch_crm(H, cache, must=True):
     os.makedirs(cache, exist_ok=True)
     fn = os.path.join(cache, 'crm.npz')
     la0, la1, lo0, lo1 = H['lat0'] - 0.01, H['lat1'] + 0.01, H['lon0'] - 0.01, H['lon1'] + 0.01
@@ -361,6 +379,8 @@ def fetch_crm(H, cache):
             return d
     vol = next((v for v in CRM_VOLS if v[1] <= la0 and la1 <= v[2] and v[3] <= lo0 and lo1 <= v[4]), None)
     if not vol:
+        if not must:
+            return None
         raise SystemExit('CRM の範囲に入っていません')
     cs = 1 / 3600
     j0 = int(math.floor((la0 - (vol[1] + cs / 2)) / cs)); j1 = int(math.ceil((la1 - (vol[1] + cs / 2)) / cs))
@@ -369,20 +389,24 @@ def fetch_crm(H, cache):
     for a in range(j0, j1 + 1, 400):
         b = min(j1, a + 399)
         part = os.path.join(cache, f'crm_{a}_{b}_{i0}_{i1}.txt')
-        if not (os.path.exists(part) and os.path.getsize(part) > 1000):
-            url = f'https://www.ngdc.noaa.gov/thredds/dodsC/{vol[0]}.ascii?z%5B{a}:1:{b}%5D%5B{i0}:1:{i1}%5D'
-            if not curl(url, part):
-                raise SystemExit('CRM を取れませんでした')
-        got = []
-        with open(part) as f:
-            on = False
-            for line in f:
-                if line.startswith('z.z['):
-                    on = True; continue
-                if on:
-                    if not line.strip():
-                        break
-                    got.append([float(v) for v in line.split(',')[1:]])
+        for attempt in range(3):
+            if not (os.path.exists(part) and os.path.getsize(part) > 1000):
+                url = f'https://www.ngdc.noaa.gov/thredds/dodsC/{vol[0]}.ascii?z%5B{a}:1:{b}%5D%5B{i0}:1:{i1}%5D'
+                if not curl(url, part):
+                    raise SystemExit('CRM を取れませんでした')
+            got = []
+            with open(part) as f:
+                on = False
+                for line in f:
+                    if line.startswith('z.z['):
+                        on = True; continue
+                    if on:
+                        if not line.strip():
+                            break
+                        got.append([float(v) for v in line.split(',')[1:]])
+            if len(got) == b - a + 1:
+                break
+            os.remove(part)                 # （途中で切れたファイル：取り直す）
         assert len(got) == b - a + 1, (part, len(got))
         rows += got
         print('crm rows', a, b, flush=True)
@@ -399,7 +423,8 @@ def fetch_crm(H, cache):
 #   元の測量（RAT の license_name）が BT_OK_LICENSES のものだけ使う。ひとつでも違えば止める（採用前に確かめるため）
 #   BlueTopo の無い所は CRM（同じく NAVD88）で埋める。作った格子は 1/3 秒角（≒ 10m × 8m）おき
 BT_BUCKET = 'https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com'
-BT_OK_LICENSES = {'cc0-1.0'}
+# （CC BY 4.0：出典を示せば、加工・再配布・Web 公開ができる。使った測量の提供元を <key>.json の sources[].attribution に書く）
+BT_OK_LICENSES = {'cc0-1.0', 'cc-by-4.0'}
 
 
 def _gpkg_env(b):
@@ -484,8 +509,13 @@ def fetch_bluetopo(H, cache):
                 if np.isnan(c): continue
                 r = rat.get(int(c))
                 if r: used[(tile, int(c))] = r
-    bt = np.where(den > 0.5, acc / np.maximum(den, 1e-9), np.nan)
+    bt = np.where(den > 0.5, acc / np.maximum(den, 1e-9), np.nan) if tiles else np.full((nr, nc), np.nan)
     # 利用条件：使った元の測量がすべて BT_OK_LICENSES か
+    # （利用条件の欄が空でも、NOAA（Coast Survey）が取った測量は CC0：「All data acquired by Coast Survey is formally dedicated to
+    #  the public domain」https://nauticalcharts.noaa.gov/data/data-licensing.html 。ほかの提供元の空欄は止める）
+    for r in used.values():
+        if not (r.get('license_name') or '').strip() and 'NOAA' in (r.get('source_institution') or ''):
+            r['license_name'] = 'cc0-1.0'
     bad = sorted({(r.get('source_institution'), r.get('source_survey_id'), r.get('license_name')) for r in used.values() if (r.get('license_name') or '').strip().lower() not in BT_OK_LICENSES})
     if bad:
         raise SystemExit('BlueTopo：再配布の条件を確かめていない元の測量があります（採用前に確認）：' + repr(bad[:20]))
@@ -496,24 +526,37 @@ def fetch_bluetopo(H, cache):
             continue
         surveys[sid] = (r.get('source_institution'), r.get('survey_date_start', '')[:4], r.get('survey_date_end', '')[:4])
     years = [int(y) for _, a, b in surveys.values() for y in (a, b) if y.isdigit() and int(y) > 1800]
-    src = dict(name='NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)',
+    src = None if not used else dict(name='NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)',
                url='https://nauticalcharts.noaa.gov/data/bluetopo.html', license='CC0-1.0（元の測量もすべて CC0-1.0 を確認）',
                crs='NAD83 / UTM（タイルごと）→ WGS84 の緯度・経度に置き直し', vertical='NAVD88[m]', resolution=sorted({t[3] for t in tiles}),
                tiles=[t[0] for t in tiles], surveys=len(surveys), survey_years=[min(years), max(years)] if years else None,
-               institutions=sorted({v[0] for v in surveys.values() if v[0]}))
-    print('bluetopo coverage', round(float((~np.isnan(bt)).mean()), 3), 'surveys', len(surveys), src['survey_years'], flush=True)
-    # 無い所は CRM（陸の高さも）
-    E = fetch_crm(H, cache)
-    fyc = ((E['y0'] + (E['nr'] - 1) * E['cs']) - LATg) / E['cs']; fxc = (LONg - E['x0']) / E['cs']
-    x0i = np.clip(np.floor(fxc).astype(int), 0, E['nc'] - 2); y0i = np.clip(np.floor(fyc).astype(int), 0, E['nr'] - 2)
-    tx = np.clip(fxc - x0i, 0, 1); ty = np.clip(fyc - y0i, 0, 1)
-    a = E['a']
-    crm = a[y0i, x0i] * (1 - tx) * (1 - ty) + a[y0i, x0i + 1] * tx * (1 - ty) + a[y0i + 1, x0i] * (1 - tx) * ty + a[y0i + 1, x0i + 1] * tx * ty
+               institutions=sorted({v[0] for v in surveys.values() if v[0]}),
+               # CC0 でない元の測量（出典の表示が要る）
+               attribution=sorted({f"{r.get('source_institution')}：{(r.get('source_survey_id') or '').replace('.interpolated', '')}（{r.get('license_name')}）"
+                                   for r in used.values() if (r.get('license_name') or '').strip().lower() != 'cc0-1.0'}))
+    if src and src['attribution']:
+        src['license'] = 'CC0-1.0（一部の元の測量は CC BY 4.0：attribution に提供元）'
+    print('bluetopo coverage', round(float((~np.isnan(bt)).mean()), 3), 'surveys', len(surveys), src and src['survey_years'], flush=True)
+    # 無い所は CRM（陸の高さも）。CRM の無い所（西海岸・アラスカ）は、陸の高さだけ世界の区画（ETOPO）から（水深は BlueTopo だけ）
+    E = fetch_crm(H, cache, must=False)
+    if E is not None:
+        fyc = ((E['y0'] + (E['nr'] - 1) * E['cs']) - LATg) / E['cs']; fxc = (LONg - E['x0']) / E['cs']
+        x0i = np.clip(np.floor(fxc).astype(int), 0, E['nc'] - 2); y0i = np.clip(np.floor(fyc).astype(int), 0, E['nr'] - 2)
+        tx = np.clip(fxc - x0i, 0, 1); ty = np.clip(fyc - y0i, 0, 1)
+        a = E['a']
+        crm = a[y0i, x0i] * (1 - tx) * (1 - ty) + a[y0i, x0i + 1] * tx * (1 - ty) + a[y0i + 1, x0i] * (1 - tx) * ty + a[y0i + 1, x0i + 1] * tx * ty
+    else:
+        w = world_sampler()(LATg, LONg)
+        crm = np.where(w > 0, w, np.nan)            # （世界の区画の海は 2.8km おきで粗すぎるので使わない）
     # BlueTopo の縁（岸のそば）は 0m より上の値もある：陸の高さは CRM のほうを使う
     out = np.where(np.isnan(bt) | ((bt > 0) & (crm > bt)), crm, bt)
     d = dict(a=out, x0=lo0, y0=la0, cs=cs, nr=nr, nc=nc)
-    np.savez_compressed(fn, src=json.dumps(src, ensure_ascii=False), **d)
-    return d, src
+    crm_src = dict(name='NOAA NCEI Coastal Relief Model 2023（BlueTopo の無い所・陸の高さ）', url='https://www.ncei.noaa.gov/products/coastal-relief-model',
+                   license='米国政府の作成したデータ（パブリック・ドメイン）', vertical='NAVD88[m]（ハワイ・プエルトリコは各地の平均海面）', resolution='1 秒角') if E is not None else \
+        dict(name='NOAA NCEI ETOPO 2022（陸の高さだけ）', url='https://www.ncei.noaa.gov/products/etopo-global-relief-model', license='米国政府の作成したデータ（パブリック・ドメイン）', resolution='1.5 分角')
+    srcs = [x for x in (src, crm_src) if x]
+    np.savez_compressed(fn, src=json.dumps(srcs, ensure_ascii=False), **d)
+    return d, srcs
 
 
 # ── USACE National Channel Framework（連邦の航路・回頭水域・泊地の範囲と、その計画・維持水深。HARBORS の ncf=True）──
@@ -567,7 +610,43 @@ def export_ncf(H, key, cache):
 
 
 # ── 粗い地形（data/<region>.png：britain・useast）──
+def world_sampler():
+    # 世界全体の区画（data/world/tNN_NN.webp：10°×10°、401×401 点、高さ[m] ＝ R×256＋G−32768、上が北）
+    idx = json.load(open(os.path.join(HERE, '..', 'world', 'index.json')))
+    have = set(idx.get('have', []))
+    tiles = {}
+
+    def tile(ti, tj):
+        k = (ti, tj)
+        if k not in tiles:
+            fn = os.path.join(HERE, '..', 'world', f't{ti:02d}_{tj:02d}.webp')
+            if f'{ti}_{tj}' in have and os.path.exists(fn):
+                im = np.asarray(Image.open(fn).convert('RGB')).astype(np.int32)
+                tiles[k] = im[:, :, 0] * 256 + im[:, :, 1] - 32768
+            else:
+                tiles[k] = None
+        return tiles[k]
+
+    def at(lat, lon):
+        lat = np.asarray(lat, dtype=np.float64); lon = np.asarray(lon, dtype=np.float64)
+        out = np.full(lat.shape, -50.0)
+        ti = np.floor((lat + 90) / 10).astype(int); tj = np.floor((lon + 180) / 10).astype(int)
+        for a, b in set(zip(ti.ravel().tolist(), tj.ravel().tolist())):
+            h = tile(a, b)
+            if h is None: continue
+            m = (ti == a) & (tj == b)
+            n = h.shape[0] - 1
+            fy = ((a + 1) * 10 - 90 - lat[m]) / 10 * n; fx = (lon[m] - (b * 10 - 180)) / 10 * n
+            x0 = np.clip(np.floor(fx).astype(int), 0, n - 1); y0 = np.clip(np.floor(fy).astype(int), 0, n - 1)
+            tx = fx - x0; ty = fy - y0
+            out[m] = (h[y0, x0] * (1 - tx) + h[y0, x0 + 1] * tx) * (1 - ty) + (h[y0 + 1, x0] * (1 - tx) + h[y0 + 1, x0 + 1] * tx) * ty
+        return out
+    return at
+
+
 def coarse_sampler(region='britain'):
+    if region == 'world':
+        return world_sampler()
     meta = json.load(open(os.path.join(HERE, '..', region + '.json')))
     im = np.asarray(Image.open(os.path.join(HERE, '..', region + '.png')).convert('RGB')).astype(np.int32)
     h = im[:, :, 0] * 256 + im[:, :, 1] - 32768
@@ -996,6 +1075,7 @@ def dredge_berths(berths, depth, water, lat1, lon0, dLat, dLon, cell, want=14.0,
     """着岸の一覧に入れた埠頭の前（岸壁の長さ ×reach m）を掘る（今は浅くなった昔の埠頭の前も、大きな船が付けられるように）"""
     rows, cols = depth.shape
     mLat, mLon = cell / dLat, cell / dLon
+    allm = np.zeros(depth.shape, bool)
     for b in berths:
         opt = b[5]
         la, lo = opt['at']; brg = opt['bearing']; half = opt.get('quay', 300) / 2 + 20
@@ -1008,6 +1088,8 @@ def dredge_berths(berths, depth, water, lat1, lon0, dLat, dLon, cell, want=14.0,
         ImageDraw.Draw(img).polygon(pts, fill=255)
         m = (np.asarray(img) > 0) & water
         depth[m] = np.maximum(depth[m], want)
+        allm |= m
+    return allm
 
 
 def _side_north(brg, side):
@@ -1126,7 +1208,8 @@ def build(key, cache):
         A[outside] = 0
     unk = A == 0
     # CRM は陸の高さもある（水深 -1m より深い所を海に）。EMODnet は海の所だけ値がある
-    A[unk & (emod < (-0.5 if landz else -1))] = 2
+    # （water_below：海面より低い陸のある所（ニューオーリンズ：堤防の内側の市街は −1〜−2m）は、それより深い所だけを水にする）
+    A[unk & (emod < H.get('water_below', -0.5 if landz else -1))] = 2
     A[A == 0] = 3
     A[A == 1] = 3                       # 海岸線の上は陸（岸壁）
     kind = np.where(A == 2, 0, 1).astype(np.uint8)
@@ -1257,7 +1340,7 @@ def build(key, cache):
     depth = np.where(np.isnan(emod), np.nan, -emod)
     depth[~water] = np.nan
     # 実測の水深のある水の升目（measured の港では、ここは掘らない：測った深さのまま）
-    meas = water & ~np.isnan(depth) if H.get('measured') else np.zeros_like(water)
+    meas = water & (np.nan_to_num(depth, nan=-1) > 0.3) if H.get('measured') else np.zeros_like(water)
     # 水深の無い水の升目：EMODnet の縁（80m まで）はまわりの値で埋め、その先は浅い（2.5m）
     for it in range(8):
         miss = water & np.isnan(depth)
@@ -1346,7 +1429,12 @@ def build(key, cache):
     berths = None
     if H.get('berths') or H.get('osm_berths') or H.get('extra_berths') or H.get('extra_auto'):
         berths = export_berths(H, key, piers, osm_pier_boxes(nodes, ways), kind, lat1, lon0, dLat, dLon, cell)
-        dredge_berths(berths, depth, water, lat1, lon0, dLat, dLon, cell, H.get('berth_dredge', 14.0))
+        bm = dredge_berths(berths, depth, water, lat1, lon0, dLat, dLon, cell, H.get('berth_dredge', 14.0))
+        if H.get('measured') and bm.any():
+            # 実測の港でも、一覧に入れた埠頭（昔の客船の埠頭など）の前は、その時代に合わせて掘り、いちばん近い実測の深い所へつなぐ
+            #（今は浅くなった昔の埠頭：ニューヨークのチェルシー埠頭など。地形の中で掘った所はここと history・ドックだけ）
+            want = H.get('berth_dredge', 14.0)
+            connect_berths(depth, water, bm, meas & (np.nan_to_num(depth, nan=0) >= want - 1.5), cell, 250, want)
     depth[water] = np.maximum(depth[water], 1.0)
     # 陸：岸壁の高さ。離れた所は粗い地形（アメリカは CRM の陸の高さ）
     bs = coarse_sampler(H.get('region', 'britain'))
@@ -1359,25 +1447,34 @@ def build(key, cache):
     h = np.where(~water & ~near, land_h, h)
     hdm = np.clip(np.round(h * 10), -32000, 32000).astype(np.int32) + 32768
     rgb = np.stack([(hdm >> 8).astype(np.uint8), (hdm & 255).astype(np.uint8), kind.astype(np.uint8)], axis=2)
-    Image.fromarray(rgb, 'RGB').save(os.path.join(HERE, f'{key}.png'), optimize=True)
+    if H.get('webp'):
+        # 可逆の WebP（PNG の 6 割ほど。値はそのまま）。古い PNG は消す
+        Image.fromarray(rgb, 'RGB').save(os.path.join(HERE, f'{key}.webp'), 'WEBP', lossless=True, method=6)
+        if os.path.exists(os.path.join(HERE, f'{key}.png')):
+            os.remove(os.path.join(HERE, f'{key}.png'))
+    else:
+        Image.fromarray(rgb, 'RGB').save(os.path.join(HERE, f'{key}.png'), optimize=True)
     meta = dict(key=key, name=H['name'], lat0=lat1 - (rows - 1) * dLat, lat1=lat1, lon0=lon0, lon1=lon0 + (cols - 1) * dLon,
                 rows=rows, cols=cols, dLat=dLat, dLon=dLon, cell=cell, scale=0.1,
                 kinds={'0': 'sea', '1': 'land', '2': 'dock water', '3': 'pier', '4': 'port land'})
+    if H.get('webp'):
+        meta['img'] = 'webp'
     if H.get('measured'):
         # 実測の水深のまま（ゲームの側でも、港の航路をこの地形に掘らない：43-world.js の _rwCarveHD）
         meta['measured'] = True
         meta['measured_frac'] = round(float(meas.sum() / max(1, water.sum())), 3)
     if bsrc:
-        meta['sources'] = [bsrc, dict(name='NOAA NCEI Coastal Relief Model 2023（BlueTopo の無い所・陸の高さ）', url='https://www.ncei.noaa.gov/products/coastal-relief-model',
-                                      license='米国政府の作成したデータ（パブリック・ドメイン）', vertical='NAVD88[m]', resolution='1 秒角'),
-                           dict(name='OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）', url='https://www.openstreetmap.org/copyright', license='ODbL 1.0（© OpenStreetMap contributors）')]
+        meta['sources'] = (bsrc if isinstance(bsrc, list) else [bsrc]) + [
+            dict(name='OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）', url='https://www.openstreetmap.org/copyright', license='ODbL 1.0（© OpenStreetMap contributors）')]
     if H.get('ncf'):
         ncf = export_ncf(H, key, cache)
         meta['channels'] = True
         # 港の航路の深さの目安：浚渫してある航路（channel）の中の、実測の水深の 5% 点（浅い方から）
+        # （主な航路だけ：維持水深が、その港でいちばん深い航路の 3/4 以上のもの。沿岸内水路（12ft）などの浅い区域を混ぜない）
+        dmax = max([a['depth_maintained'] or 0 for a in ncf['areas'] if a['type'] == 'channel' and (a['depth_maintained'] or 0) <= 25] or [0])   # （25m より深い値は記録の誤り：ノーフォークに 304m）
         cimg = Image.new('L', (cols, rows), 0)
         for a in ncf['areas']:
-            if a['type'] == 'channel':
+            if a['type'] == 'channel' and (a['depth_maintained'] or 0) >= dmax * 0.75:
                 for r in a['rings']:
                     ImageDraw.Draw(cimg).polygon([px(la, lo) for la, lo in r], fill=255)
         cm = (np.asarray(cimg) > 0) & meas
@@ -1657,9 +1754,28 @@ def assemble_rings(mem, ways, nodes, px):
     return out
 
 
+def write_index():
+    # 作り込んだ港の一覧（43-world.js が最初に 1 回だけ読む：範囲・実測か・埠頭の一覧の有無・画像の形式）
+    out = []
+    for fn in sorted(os.listdir(HERE)):
+        if not fn.endswith('.json') or fn.endswith(('_feat.json', '_berths.json', '_channels.json', '_fairways.json')) or fn in ('index.json', 'us_auto.json'):
+            continue
+        m = json.load(open(os.path.join(HERE, fn), encoding='utf-8'))
+        if not isinstance(m, dict) or 'rows' not in m or 'key' not in m:
+            continue
+        k = m['key']
+        out.append(dict(key=k, name=m['name'], lat0=m['lat0'], lat1=m['lat1'], lon0=m['lon0'], lon1=m['lon1'],
+                        measured=bool(m.get('measured')), img=m.get('img', 'png'), berths=os.path.exists(os.path.join(HERE, f'{k}_berths.json'))))
+    json.dump(dict(v=1, harbors=out), open(os.path.join(HERE, 'index.json'), 'w'), ensure_ascii=False, indent=0)
+    print('index', len(out), flush=True)
+
+
 if __name__ == '__main__':
+    if sys.argv[1] == '--index':
+        write_index(); sys.exit(0)
     key = sys.argv[1]
     cache = os.path.join(HERE, 'cache', key)
     if '--cache' in sys.argv:
         cache = os.path.join(sys.argv[sys.argv.index('--cache') + 1], key)
     build(key, cache)
+    write_index()

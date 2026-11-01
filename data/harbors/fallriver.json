@@ -18,8 +18,9 @@
   "3": "pier",
   "4": "port land"
  },
+ "img": "webp",
  "measured": true,
- "measured_frac": 1.0,
+ "measured_frac": 0.966,
  "sources": [
   {
    "name": "NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)",
@@ -48,13 +49,14 @@
    "institutions": [
     "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
     "DOD/USACE -- US Army Corps of Engineers New England District"
-   ]
+   ],
+   "attribution": []
   },
   {
    "name": "NOAA NCEI Coastal Relief Model 2023（BlueTopo の無い所・陸の高さ）",
    "url": "https://www.ncei.noaa.gov/products/coastal-relief-model",
    "license": "米国政府の作成したデータ（パブリック・ドメイン）",
-   "vertical": "NAVD88[m]",
+   "vertical": "NAVD88[m]（ハワイ・プエルトリコは各地の平均海面）",
    "resolution": "1 秒角"
   },
   {

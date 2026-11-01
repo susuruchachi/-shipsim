@@ -1,0 +1,72 @@
+{
+ "key": "annapolis",
+ "name": "アナポリス",
+ "lat0": 38.91263853042761,
+ "lat1": 39.03,
+ "lon0": -76.5294,
+ "lon1": -76.42564020370719,
+ "rows": 1306,
+ "cols": 898,
+ "dLat": 8.993216059187306e-05,
+ "dLon": 0.00011567424335875969,
+ "cell": 10,
+ "scale": 0.1,
+ "kinds": {
+  "0": "sea",
+  "1": "land",
+  "2": "dock water",
+  "3": "pier",
+  "4": "port land"
+ },
+ "img": "webp",
+ "measured": true,
+ "measured_frac": 0.91,
+ "sources": [
+  {
+   "name": "NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)",
+   "url": "https://nauticalcharts.noaa.gov/data/bluetopo.html",
+   "license": "CC0-1.0（元の測量もすべて CC0-1.0 を確認）",
+   "crs": "NAD83 / UTM（タイルごと）→ WGS84 の緯度・経度に置き直し",
+   "vertical": "NAVD88[m]",
+   "resolution": [
+    "4m"
+   ],
+   "tiles": [
+    "BH4W55DN",
+    "BH4W65DN",
+    "BH4W75DN",
+    "BH4W55DP",
+    "BH4W65DP",
+    "BH4W75DP",
+    "BH4W55DQ",
+    "BH4W65DQ",
+    "BH4W75DQ"
+   ],
+   "surveys": 34,
+   "survey_years": [
+    1932,
+    2024
+   ],
+   "institutions": [
+    "DOC/NOAA/NMFS/OHC/CBO -- Chesapeake Bay Office",
+    "DOC/NOAA/NOS/NGS/RSD -- Remote Sensing Division",
+    "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+    "DOD/USACE -- US Army Corps of Engineers Baltimore District"
+   ],
+   "attribution": []
+  },
+  {
+   "name": "NOAA NCEI ETOPO 2022（陸の高さだけ）",
+   "url": "https://www.ncei.noaa.gov/products/etopo-global-relief-model",
+   "license": "米国政府の作成したデータ（パブリック・ドメイン）",
+   "resolution": "1.5 分角"
+  },
+  {
+   "name": "OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）",
+   "url": "https://www.openstreetmap.org/copyright",
+   "license": "ODbL 1.0（© OpenStreetMap contributors）"
+  }
+ ],
+ "channels": true,
+ "fairway_depth": 3.9
+}

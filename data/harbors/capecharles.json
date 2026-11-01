@@ -1,0 +1,73 @@
+{
+ "key": "capecharles",
+ "name": "ケープ・チャールズ",
+ "lat0": 37.217046346941146,
+ "lat1": 37.305,
+ "lon0": -76.0736,
+ "lon1": -75.97292021614244,
+ "rows": 979,
+ "cols": 892,
+ "dLat": 8.993216059187306e-05,
+ "dLon": 0.0001129963904125182,
+ "cell": 10,
+ "scale": 0.1,
+ "kinds": {
+  "0": "sea",
+  "1": "land",
+  "2": "dock water",
+  "3": "pier",
+  "4": "port land"
+ },
+ "img": "webp",
+ "measured": true,
+ "measured_frac": 0.958,
+ "sources": [
+  {
+   "name": "NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)",
+   "url": "https://nauticalcharts.noaa.gov/data/bluetopo.html",
+   "license": "CC0-1.0（一部の元の測量は CC BY 4.0：attribution に提供元）",
+   "crs": "NAD83 / UTM（タイルごと）→ WGS84 の緯度・経度に置き直し",
+   "vertical": "NAVD88[m]",
+   "resolution": [
+    "4m"
+   ],
+   "tiles": [
+    "BH4WC5CT",
+    "BH4WD5CT",
+    "BH4WF5CT",
+    "BH4WC5CV",
+    "BH4WD5CV",
+    "BH4WF5CV"
+   ],
+   "surveys": 38,
+   "survey_years": [
+    1949,
+    2026
+   ],
+   "institutions": [
+    "DOC/NOAA/NOS/NGS/RSD -- Remote Sensing Division",
+    "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+    "DOD/USACE -- US Army Corps of Engineers Norfolk District",
+    "Waterway Surveys & Engineering, Ltd."
+   ],
+   "attribution": [
+    "Waterway Surveys & Engineering, Ltd.：W00726_VB_4m_MLLW_1of1_interpolated（CC-BY-4.0）",
+    "Waterway Surveys & Engineering, Ltd.：W00726_VB_4m_MLLW_1of1（CC-BY-4.0）"
+   ]
+  },
+  {
+   "name": "NOAA NCEI Coastal Relief Model 2023（BlueTopo の無い所・陸の高さ）",
+   "url": "https://www.ncei.noaa.gov/products/coastal-relief-model",
+   "license": "米国政府の作成したデータ（パブリック・ドメイン）",
+   "vertical": "NAVD88[m]（ハワイ・プエルトリコは各地の平均海面）",
+   "resolution": "1 秒角"
+  },
+  {
+   "name": "OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）",
+   "url": "https://www.openstreetmap.org/copyright",
+   "license": "ODbL 1.0（© OpenStreetMap contributors）"
+  }
+ ],
+ "channels": true,
+ "fairway_depth": 4.3
+}

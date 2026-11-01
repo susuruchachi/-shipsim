@@ -565,7 +565,22 @@
 //                 分けて置き、地形には混ぜない。実測の港（measured）は港の航路・岸壁の前を掘らず、測った深さのまま（43-world.js の _rwCarveHD、
 //                 44-world-terrain.js の _portAdjust）。港の中の航路は浚渫区域の中を通りやすく、海図モードは浚渫区域を破線と維持水深で描く。
 //                 フォール・リヴァー港は州営埠頭に置き、航路はマウント・ホープ橋からナラガンセット湾の東水道へ
-var APP_VERSION = '0.03.031.000';
+// 0.03.032.000 ・アメリカの港をすべて実測の地形に（59 か所：東岸・メキシコ湾岸・西岸・ハワイ・アラスカのジュノー・プエルトリコ・
+//                 米領ヴァージン諸島）。水深は NOAA BlueTopo（CC0 と、出典を書く条件の CC BY 4.0 だけ使う。タイルごとの元の測量の
+//                 利用条件を確かめる）、無い所は CRM、陸の高さは CRM か世界の区画。浚渫区域は USACE National Channel Framework。
+//                 港の箱は data/harbors/us_auto.json、作り方は data/harbors/build_harbor.py。画像は WebP にして軽く（古い PNG は消す）
+//               ・作り込んだ港の一覧を data/harbors/index.json 1 つに（43-world.js の pHarbList）。港の地形は船の 50km 以内に
+//                 来たら読み、120km より遠くなったら捨てる。読んでおくのは近い順に 8 港まで（worldEnsureHarbors）
+//               ・実測の港：港の航路の深さは測った深さから（_rwFairway）。港の点は、岸壁の前が船の種類に足りる深さの所に置く（_rwPlacePort）。
+//                 地図の説明に出典（OpenStreetMap・NOAA・USACE・EMODnet）
+//               ・自動航行：実測の港の中では、もう港の外へ出られる所なら航路の入口まで戻らない（49-autopilot.js：チャールストンで
+//                 56km → 19.5km）。航路へ入る所は深い所に寄せ、近い入り口から試す
+//               ・港から始めたとき、長い船が桟橋の間の深い所に置かれて、船首・船尾が浅瀬に乗り上げていたのを直す（worldStartAtPort：
+//                 航路に沿った船首・船尾の所の深さも見る。サンフランシスコ港）
+//               ・開いた直後の重さ：水中用の両面の水面のシェーダーを、起動時に前もって作るのをやめる（23-underwater.js：
+//                 面の向きの切り替えはシェーダーを作り直さないで済むので、初めて潜ったときも止まらない）。
+//                 星・天の川・街の灯りのデータは、日が沈みかけてから読む（70-night-sky.js）。起動が 13〜15 秒 → 約 10 秒（試験環境）
+var APP_VERSION = '0.03.032.000';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

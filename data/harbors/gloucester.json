@@ -1,0 +1,70 @@
+{
+ "key": "gloucester",
+ "name": "グロスター",
+ "lat0": 42.55592960323274,
+ "lat1": 42.6482,
+ "lon0": -70.7174,
+ "lon1": -70.6122043655463,
+ "rows": 1027,
+ "cols": 862,
+ "dLat": 8.993216059187306e-05,
+ "dLon": 0.00012217843722844135,
+ "cell": 10,
+ "scale": 0.1,
+ "kinds": {
+  "0": "sea",
+  "1": "land",
+  "2": "dock water",
+  "3": "pier",
+  "4": "port land"
+ },
+ "img": "webp",
+ "measured": true,
+ "measured_frac": 0.96,
+ "sources": [
+  {
+   "name": "NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)",
+   "url": "https://nauticalcharts.noaa.gov/data/bluetopo.html",
+   "license": "CC0-1.0（元の測量もすべて CC0-1.0 を確認）",
+   "crs": "NAD83 / UTM（タイルごと）→ WGS84 の緯度・経度に置き直し",
+   "vertical": "NAVD88[m]",
+   "resolution": [
+    "4m"
+   ],
+   "tiles": [
+    "BH4ZX5GH",
+    "BH5225GH",
+    "BH4ZX5GJ",
+    "BH4ZZ5GJ",
+    "BH5225GJ",
+    "BH4ZZ5GH"
+   ],
+   "surveys": 88,
+   "survey_years": [
+    1967,
+    2025
+   ],
+   "institutions": [
+    "DOC/NOAA/NOS/NGS/RSD -- Remote Sensing Division",
+    "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+    "DOD/USACE -- US Army Corps of Engineers New England District",
+    "DOD/USACE/JALBTCX -- Joint Airborne Lidar Bathymetry Technical Center of Expertise"
+   ],
+   "attribution": []
+  },
+  {
+   "name": "NOAA NCEI Coastal Relief Model 2023（BlueTopo の無い所・陸の高さ）",
+   "url": "https://www.ncei.noaa.gov/products/coastal-relief-model",
+   "license": "米国政府の作成したデータ（パブリック・ドメイン）",
+   "vertical": "NAVD88[m]（ハワイ・プエルトリコは各地の平均海面）",
+   "resolution": "1 秒角"
+  },
+  {
+   "name": "OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）",
+   "url": "https://www.openstreetmap.org/copyright",
+   "license": "ODbL 1.0（© OpenStreetMap contributors）"
+  }
+ ],
+ "channels": true,
+ "fairway_depth": 6.6
+}

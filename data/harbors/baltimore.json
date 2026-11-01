@@ -17,5 +17,65 @@
   "2": "dock water",
   "3": "pier",
   "4": "port land"
- }
+ },
+ "img": "webp",
+ "measured": true,
+ "measured_frac": 0.983,
+ "sources": [
+  {
+   "name": "NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)",
+   "url": "https://nauticalcharts.noaa.gov/data/bluetopo.html",
+   "license": "CC0-1.0（元の測量もすべて CC0-1.0 を確認）",
+   "crs": "NAD83 / UTM（タイルごと）→ WGS84 の緯度・経度に置き直し",
+   "vertical": "NAVD88[m]",
+   "resolution": [
+    "4m"
+   ],
+   "tiles": [
+    "BH4W65DS",
+    "BH4W75DS",
+    "BH4W65DT",
+    "BH4W75DT",
+    "BH4W55DS",
+    "BH4W45DS",
+    "BH4W45DT",
+    "BH4W55DT",
+    "BH4W45DR",
+    "BH4W55DR",
+    "BH4W65DR",
+    "BH4W75DR"
+   ],
+   "surveys": 259,
+   "survey_years": [
+    1897,
+    2026
+   ],
+   "institutions": [
+    "CNX Marine Terminals, Inc.",
+    "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+    "DOD/USACE -- US Army Corps of Engineers Baltimore District",
+    "DOD/USACE -- US Army Corps of Engineers XXX District",
+    "Hess Corporation",
+    "Maryland Port Authority",
+    "Maryland Port Authority - Harbor Development Departmen",
+    "Private Company",
+    "Waterway Surveys & Engineering, Ltd."
+   ],
+   "attribution": []
+  },
+  {
+   "name": "NOAA NCEI Coastal Relief Model 2023（BlueTopo の無い所・陸の高さ）",
+   "url": "https://www.ncei.noaa.gov/products/coastal-relief-model",
+   "license": "米国政府の作成したデータ（パブリック・ドメイン）",
+   "vertical": "NAVD88[m]（ハワイ・プエルトリコは各地の平均海面）",
+   "resolution": "1 秒角"
+  },
+  {
+   "name": "OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）",
+   "url": "https://www.openstreetmap.org/copyright",
+   "license": "ODbL 1.0（© OpenStreetMap contributors）"
+  }
+ ],
+ "channels": true,
+ "fairway_depth": 12.8
 }

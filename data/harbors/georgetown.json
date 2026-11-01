@@ -1,0 +1,67 @@
+{
+ "key": "georgetown",
+ "name": "ジョージタウン",
+ "lat0": 33.286881515361564,
+ "lat1": 33.4082,
+ "lon0": -79.3216,
+ "lon1": -79.22879891177999,
+ "rows": 1350,
+ "cols": 863,
+ "dLat": 8.993216059187306e-05,
+ "dLon": 0.00010765787496522093,
+ "cell": 10,
+ "scale": 0.1,
+ "kinds": {
+  "0": "sea",
+  "1": "land",
+  "2": "dock water",
+  "3": "pier",
+  "4": "port land"
+ },
+ "img": "webp",
+ "measured": true,
+ "measured_frac": 0.975,
+ "sources": [
+  {
+   "name": "NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)",
+   "url": "https://nauticalcharts.noaa.gov/data/bluetopo.html",
+   "license": "CC0-1.0（元の測量もすべて CC0-1.0 を確認）",
+   "crs": "NAD83 / UTM（タイルごと）→ WGS84 の緯度・経度に置き直し",
+   "vertical": "NAVD88[m]",
+   "resolution": [
+    "4m"
+   ],
+   "tiles": [
+    "BH4TQ59V",
+    "BH4TR59X",
+    "BH4TR59V",
+    "BH4TR59W",
+    "BH4TQ59W"
+   ],
+   "surveys": 27,
+   "survey_years": [
+    1935,
+    2026
+   ],
+   "institutions": [
+    "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+    "DOD/USACE -- US Army Corps of Engineers Charleston District"
+   ],
+   "attribution": []
+  },
+  {
+   "name": "NOAA NCEI Coastal Relief Model 2023（BlueTopo の無い所・陸の高さ）",
+   "url": "https://www.ncei.noaa.gov/products/coastal-relief-model",
+   "license": "米国政府の作成したデータ（パブリック・ドメイン）",
+   "vertical": "NAVD88[m]（ハワイ・プエルトリコは各地の平均海面）",
+   "resolution": "1 秒角"
+  },
+  {
+   "name": "OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）",
+   "url": "https://www.openstreetmap.org/copyright",
+   "license": "ODbL 1.0（© OpenStreetMap contributors）"
+  }
+ ],
+ "channels": true,
+ "fairway_depth": 3.8
+}

@@ -82,7 +82,12 @@
   - southampton（サウサンプトン：西ドック・東ドック・オーシャン・ドック・テスト川・イッチェン川・サウサンプトン・ウォーター）
   - liverpool（リヴァプール：マージー川・ピア・ヘッドの浮き桟橋・ドック・クロスビー水道・クイーンズ水道）
 
-## 港のまわりの実測の水深・浚渫区域（harbors/fallriver：試験）
+## 港のまわりの実測の水深・浚渫区域（アメリカの港：harbors/fallriver ほか）
+
+- アメリカの港は全部この作り（`measured`）。範囲は `harbors/us_auto.json`（ほかの港）と `build_harbor.py` の HARBORS（ニューヨークなど）。
+  作り直し：`python3 harbors/build_harbor.py <key> --cache <作業フォルダ>`（作るたびに `harbors/index.json` も書き直す）
+- 画像は `<key>.webp`（可逆。中身は PNG と同じ：R × 256 ＋ G − 32768 ＝ 高さ[0.1m]、B ＝ 種類）。`<key>.json` の `img` に形式
+- `harbors/index.json`：作り込んだ港の一覧（範囲・実測か・画像の形式・埠頭の一覧の有無）。ゲームは最初にこれだけ読む
 
 - 調べたデータ源・利用条件・形式と容量・統合の方法は **`harbors/HARBOR_DATA.md`**
 - 水深：**NOAA BlueTopo**（4m、CC0-1.0。タイルごとに元の測量の利用条件を確かめ、CC0 以外があれば作るのを止める）→ 無い所は CRM

@@ -1,0 +1,75 @@
+{
+ "key": "sanfrancisco",
+ "name": "サンフランシスコ湾",
+ "lat0": 37.73419679421,
+ "lat1": 37.836,
+ "lon0": -122.4994,
+ "lon1": -122.2777314406793,
+ "rows": 1133,
+ "cols": 1949,
+ "dLat": 8.993216059187306e-05,
+ "dLon": 0.00011379289492848405,
+ "cell": 10,
+ "scale": 0.1,
+ "kinds": {
+  "0": "sea",
+  "1": "land",
+  "2": "dock water",
+  "3": "pier",
+  "4": "port land"
+ },
+ "img": "webp",
+ "measured": true,
+ "measured_frac": 0.986,
+ "sources": [
+  {
+   "name": "NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)",
+   "url": "https://nauticalcharts.noaa.gov/data/bluetopo.html",
+   "license": "CC0-1.0（元の測量もすべて CC0-1.0 を確認）",
+   "crs": "NAD83 / UTM（タイルごと）→ WGS84 の緯度・経度に置き直し",
+   "vertical": "NAVD88[m]",
+   "resolution": [
+    "4m"
+   ],
+   "tiles": [
+    "BH44J5D4",
+    "BH44F5D5",
+    "BH44G5D5",
+    "BH44H5D5",
+    "BH44J5D5",
+    "BH44F5D6",
+    "BH44G5D6",
+    "BH44H5D6",
+    "BH44J5D6",
+    "BH44F5D4",
+    "BH44H5D4"
+   ],
+   "surveys": 174,
+   "survey_years": [
+    1935,
+    2026
+   ],
+   "institutions": [
+    "DHS/USCG -- United States Coast Guard",
+    "DOC/NOAA/NOS/NGS/RSD -- Remote Sensing Division",
+    "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+    "DOD/USACE -- US Army Corps of Engineers San Francisco District",
+    "DOD/USACE/JALBTCX -- Joint Airborne Lidar Bathymetry Technical Center of Expertise",
+    "Port of San Francisco"
+   ]
+  },
+  {
+   "name": "NOAA NCEI ETOPO 2022（陸の高さだけ）",
+   "url": "https://www.ncei.noaa.gov/products/etopo-global-relief-model",
+   "license": "米国政府の作成したデータ（パブリック・ドメイン）",
+   "resolution": "1.5 分角"
+  },
+  {
+   "name": "OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）",
+   "url": "https://www.openstreetmap.org/copyright",
+   "license": "ODbL 1.0（© OpenStreetMap contributors）"
+  }
+ ],
+ "channels": true,
+ "fairway_depth": 11.8
+}

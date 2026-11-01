@@ -314,10 +314,13 @@ function _nsLoadStars() {
         scene.add(NS.stars);
     }).catch(e => console.warn('星表を読めませんでした（乱数の星は出ません）:', e));
 }
+function _nsLoadMoon() {
+    const U = skyMesh.material.uniforms;
+    new THREE.TextureLoader().load('data/sky/moon.jpg', (t) => { t.anisotropy = 4; U.moonTex.value = t; }, undefined, () => console.warn('月面の地図を読めませんでした'));
+}
 function _nsLoadTextures() {
     const U = skyMesh.material.uniforms;
     const L = new THREE.TextureLoader();
-    L.load('data/sky/moon.jpg', (t) => { t.anisotropy = 4; U.moonTex.value = t; }, undefined, () => console.warn('月面の地図を読めませんでした'));
     L.load('data/sky/milkyway.jpg', (t) => {
         t.generateMipmaps = false; t.minFilter = THREE.LinearFilter; t.magFilter = THREE.LinearFilter;
         t.wrapS = THREE.RepeatWrapping;
@@ -335,8 +338,13 @@ function initNightSky() {
     NS.lpTex.generateMipmaps = false; NS.lpTex.needsUpdate = true;
     U.lpTex.value = NS.lpTex;
     U.scene2eq.value = NS.scene2eq;
-    _nsLoadTextures();
-    _nsLoadStars();
+    _nsLoadMoon();              // （月は昼の空にも出るので、最初から。小さい）
+    // 天の川・星表・街明かりの地図は、日が沈むころ（太陽の高さ 3° より下）に初めて読む（updateNightSky）。
+    //（以前は昼でも起動したときに全部読んでいて、特に街明かりの地図（4500×2250 を展開：一時 40MB）が起動を重くしていた）
+}
+function _nsNightNear() {
+    const sd = skyMesh.material.uniforms.sunDirection.value;
+    return sd.y < Math.sin(3 * Math.PI / 180);
 }
 window.initNightSky = initNightSky;
 
@@ -419,7 +427,8 @@ function _nsUpdateLP(t) {
     const inWorld = window.world && world.mode === 'world' && typeof worldShipLatLon === 'function';
     if (!inWorld) { NS.lp.zenRaw = 0; NS.lp.maxRaw = 0; NS.lp.lat = NaN; }
     else {
-        _nsEnsureLightsData();
+        // （光害は夜だけ効くので、街明かりの地図は日が沈むころから）
+        if (NS.coarse || _nsNightNear()) _nsEnsureLightsData();
         const ll = worldShipLatLon(), mode = _nsRealWorld() ? (NS.coarse ? 'real' : 'wait') : 'gen';
         const moved = !Number.isFinite(NS.lp.lat) || Math.abs(ll.lat - NS.lp.lat) * 111.2 > 1.5 || Math.abs(ll.lon - NS.lp.lon) * 111.2 * Math.cos(ll.lat * Math.PI / 180) > 1.5;
         if (moved || mode !== NS.lp.mode || t - NS.lp.t > 20 || t < NS.lp.t) {
@@ -469,6 +478,7 @@ function updateNightSky(t) {
     U.earthshine.value = 0.010 * Math.pow(Math.max(0, (1 - cosPa) / 2), 2);
     // 空の明るさ（暗い夜空を 1）：薄明（太陽の高さ）＋ 月明かり
     const sunAlt = Math.asin(Math.max(-1, Math.min(1, sd.y))) * 180 / Math.PI;
+    if (sunAlt < 3 && !NS.assetsReq) { NS.assetsReq = true; _nsLoadTextures(); _nsLoadStars(); }
     const bmTw = sunAlt <= 0 ? 11 + 0.6 * (-sunAlt) : 11 - 2 * sunAlt;
     const bTw = Math.pow(10, 0.4 * (22 - bmTw)) * smoothstep(-19, -16, sunAlt);
     const bMoon = 19 * (window.skyMoonLightNow || 0);
@@ -733,6 +743,7 @@ function updateCityLights(t) {
             GU.k.value = 0.035 * night * Math.sqrt(nsLightYearFactor(NS.year));
         } else GU.k.value = 0;
     }
+    if (_nsRealWorld() && !(night > 0.001 || NS.coarse)) return;      // （昼は街明かりの地図を読まない）
     if (_nsRealWorld() && !_nsEnsureLightsData()) return;
     if (_nsRealWorld() && !NS.lightsMeta) return;
     C.genPorts = _nsGenPorts();

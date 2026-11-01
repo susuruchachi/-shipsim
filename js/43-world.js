@@ -714,15 +714,26 @@ function _rwPlacePort(def, idx) {
         const [la, lo] = opt.at;
         return { id: 'r' + idx, type, name, lat: la, lon: lo, u: worldLatLonToUnit(la, lo), real: true, via: via || null, seaBearing: opt.bearing, seed: seedOf(), fixed: true, quay: opt.quay || null, dock: opt.dock || null, group: opt.group || null, berth: opt.berth || null };
     }
-    const SR = 6000, STEP = 150;
+    // 実測の水深の港（細かい本物の岸）の中では：
+    //  ・決めた位置（実際の港）から離れるほど強く減点する（入り組んだ岸のどこでも「岸壁らしく」見えるので、遠くの広い入江を
+    //    選んでしまう：ニュー・ロンドンが対岸のグロトンになった）
+    //  ・泊地・岸壁を本物の水路の幅に合わせて小さく見て（220m・220m）、細かく（50m おき）探し、岸壁の前（40・80m）が本当に
+    //    深い所（漁港 4m・港町 6m・軍港 8m・ほか 9m）だけにする（タンパが浅瀬の岸に置かれ、港の中の航路を探せなかった）
+    const hb = typeof _rwDetailBoxOf === 'function' ? _rwDetailBoxOf(lat0, lon0) : null, meas = !!(hb && hb.measured);
+    const farK = meas ? 2.5 : 0.8, SR = meas ? 4000 : 6000, STEP = meas ? 50 : 150;
+    const bas = meas ? Math.min(basin, 220) : basin, hq = meas ? Math.min(half, 110) : half, gS = meas ? 80 : 400;
+    const minD0 = { fishing: 4, town: 6, naval: 8 }[type] || 9;
     let best = null;
+    // （見つからなければ、岸壁の前の深さの条件をゆるめて探し直す）
+    for (const minD of meas ? [minD0, minD0 * 0.6, 0] : [0]) {
+    if (best) break;
     for (let dy = -SR; dy <= SR; dy += STEP) for (let dx = -SR; dx <= SR; dx += STEP) {
         const dist = Math.hypot(dx, dy);
         if (dist > SR) continue;
         const lat = lat0 + dy / mLat, lon = lon0 + dx / mLon;
         const h0 = _rwSample(lat, lon);
         if (h0 >= 0 || h0 < -40) continue;                       // 岸に近い水面
-        const g = 400;
+        const g = gS;
         const gx = _rwSample(lat, lon + g / mLon) - _rwSample(lat, lon - g / mLon);
         const gy = _rwSample(lat + g / mLat, lon) - _rwSample(lat - g / mLat, lon);
         const gl = Math.hypot(gx, gy);
@@ -730,12 +741,23 @@ function _rwPlacePort(def, idx) {
         const se = -gx / gl, sn = -gy / gl;                      // 深くなる向き（東・北）
         const P = (a, b) => _rwSample(lat + (a * sn - b * se) / mLat, lon + (a * se + b * sn) / mLon);
         let water = 0, nW = 0, depth = 0, behind = 0, nB = 0;
-        for (const fa of [0.15, 0.4, 0.7, 1]) for (const fb of [-1, -0.5, 0, 0.5, 1]) { const h = P(fa * basin, fb * half); nW++; if (h < 0) { water++; depth += Math.min(20, -h); } }
-        for (const a of [-60, -160]) for (const fb of [-0.8, -0.3, 0.3, 0.8]) { nB++; if (P(a, fb * half) > 0) behind++; }
+        for (const fa of [0.15, 0.4, 0.7, 1]) for (const fb of [-1, -0.5, 0, 0.5, 1]) { const h = P(fa * bas, fb * hq); nW++; if (h < 0) { water++; depth += Math.min(20, -h); } }
+        for (const a of [-60, -160]) for (const fb of [-0.8, -0.3, 0.3, 0.8]) { nB++; if (P(a, fb * hq) > 0) behind++; }
         water /= nW; behind /= nB;
         if (water < 0.6 || behind < 0.4) continue;
-        const score = water * 2 + behind + depth / nW / 20 * 0.6 - dist / SR * 0.8;
+        let front = 0;
+        if (meas) {
+            // 岸（陸の方へたどって最初の陸）からの、岸壁の前（岸から 30・70m、岸沿い ±60m）の浅い方の深さ
+            let sh = -1;
+            for (let a = 0; a >= -250; a -= 10) if (P(a, 0) >= 0) { sh = a; break; }
+            if (sh < -240 || sh > 0) continue;
+            front = Infinity;
+            for (const a of [30, 70]) for (const b of [-60, 0, 60]) front = Math.min(front, -P(sh + a, b));
+            if (minD > 0 && !(front >= minD)) continue;
+        }
+        const score = water * 2 + behind + depth / nW / 20 * 0.6 + (meas ? Math.min(front, 15) / 15 * 1.5 : 0) - dist / SR * farK;
         if (!best || score > best.score) best = { score, lat, lon, se, sn };
+    }
     }
     if (!best) return null;
     // 岸の線まで陸の方へ寄せる
@@ -840,6 +862,8 @@ function _rwFairway(p) {
         // ドックの中の岸壁：ドックの入口の外（入口から DOCK_TURN_OUT m）から。航路の最初の点（自動航行が止まる所）もそこ
         const dk = _rwDockOut(p);
         const st = dk || { lat: p.lat + Math.cos(br) * 150 / mLat, lon: p.lon + Math.sin(br) * 150 / mLon };
+        // （実測の港：通る所（粗い地形に合わせて決めた点）が本物の航路から外れて浅いことがあるので、1.5km 以内のいちばん近い深い所へ寄せる）
+        if (tgt && Dt.measured) tgt = _rwSnapDeep(Dt, tgt, Math.min(12, Dt.fairDepth || 10), 1500);
         let r = _rwDetailRoute(Dt, st, tgt ? { lat: tgt[0], lon: tgt[1] } : null);
         if (r) { pre = dk ? [dk, ...r.pts] : r.pts; cur = cellOf(r.end.lat, r.end.lon); }
         // 次の通る所がとなりの作り込んだ港の中なら（ニューヨークの内の湾 → 外の湾など）、そこでも細かい地形で深い所をたどる
@@ -892,7 +916,23 @@ function _rwFairway(p) {
             }
         }
     }
-    if (cells.length < 2) return pre.length ? { depth: D, pts: _rwUnhook([{ lat: p.lat, lon: p.lon }, ...pre]) } : null;
+    // 実測の水深の港：港の航路の深さは、細かい地形でたどった道すじの実測の深さ（浅い方から 5%。岸壁の前の 300m は除く）
+    //（掘らないので、ここより深い船は港の沖で止まる。港全体の浚渫区域の深さ（fairDepth）より、その港の道すじに合う）
+    let Dm = D;
+    if (Dt && Dt.measured && pre.length >= 2) {
+        const dep = []; let along = 0;
+        for (let k = 1; k < pre.length; k++) {
+            const A = pre[k - 1], B = pre[k], L = Math.hypot((B.lat - A.lat) * mLat, (B.lon - A.lon) * mLon), n = Math.max(1, Math.ceil(L / 20));
+            for (let q = 0; q < n; q++, along += L / n) {
+                if (along < 300) continue;
+                const d = _rwDetailOf(A.lat + (B.lat - A.lat) * q / n, A.lon + (B.lon - A.lon) * q / n);
+                const h = d ? _rwDetailAt(d, A.lat + (B.lat - A.lat) * q / n, A.lon + (B.lon - A.lon) * q / n) : NaN;
+                if (Number.isFinite(h)) dep.push(-h);
+            }
+        }
+        if (dep.length >= 10) { dep.sort((a, b) => a - b); Dm = Math.max(3, Math.floor(dep[Math.floor(dep.length * 0.05)] * 10) / 10); }
+    }
+    if (cells.length < 2) return pre.length ? { depth: Dm, pts: _rwUnhook([{ lat: p.lat, lon: p.lon }, ...pre]) } : null;
     // まっすぐにできる所はまっすぐに（途中がずっと水の上の範囲で。低い陸を横切ると、掘ったときに
     // ありもしない運河ができてしまう。道すじそのものが通る低い陸（狭い口）は、そのまま残る）
     // （線の両側 200m に高い陸がある所も、まっすぐにしない：掘った航路の端に陸が残る）
@@ -917,7 +957,7 @@ function _rwFairway(p) {
         for (let c = cells.length - 1; c > a + 1; c--) if (clear(cells[a], cells[c])) { b = c; break; }
         simp.push(cells[b]); a = b;
     }
-    return { depth: D, pts: _rwUnhook([{ lat: p.lat, lon: p.lon }, ...pre, ...simp.map(([i, j]) => llOf(i, j))]) };
+    return { depth: Dm, pts: _rwUnhook([{ lat: p.lat, lon: p.lon }, ...pre, ...simp.map(([i, j]) => llOf(i, j))]) };
 }
 // その所のまわり（±1.1°）の土台（区画・全体図）を、区画と同じ 1.5 分角の 1 つの格子にする（港の航路を探すときだけ）
 function _rwPatch(lat, lon) {
@@ -950,6 +990,18 @@ function _rwUnhook(pts) {
         }
     }
     return pts;
+}
+// 作り込んだ港 d の中で、点 q（[緯度, 経度]）から radius[m] 以内の、深さ minDepth 以上のいちばん近い所（無ければ q のまま）
+function _rwSnapDeep(d, q, minDepth, radius) {
+    if (-_rwDetailAt(d, q[0], q[1]) >= minDepth) return q;
+    const step = Math.max(20, d.cell * 2), mLat = 111195, mLon = mLat * Math.cos(q[0] * Math.PI / 180);
+    let best = null, bd = Infinity;
+    for (let y = -radius; y <= radius; y += step) for (let x = -radius; x <= radius; x += step) {
+        const e = x * x + y * y; if (e > radius * radius || e >= bd) continue;
+        const la = q[0] + y / mLat, lo = q[1] + x / mLon;
+        if (-_rwDetailAt(d, la, lo) >= minDepth) { bd = e; best = [la, lo]; }
+    }
+    return best || q;
 }
 // 浚渫区域（航路・回頭水域。泊地は除く）の多角形を、港の中の航路を探す升目（f 升ずつまとめた nx × ny）に塗る
 function _rwChannelMask(d, f, nx, ny) {
@@ -1470,7 +1522,15 @@ async function worldLoadReal(key) {
     const pPorts = W.portsUrl ? soft(json(W.portsUrl)) : null;
     const pLanes = W.lanesUrl ? soft(json(W.lanesUrl)) : null;
     const pRegMeta = (W.regions || []).map(r => soft(json(REAL_WORLDS[r].url + '.json')));
-    const pHarb = (W.harbors || []).map(hk => [soft(json('data/harbors/' + hk + '.json')), soft(fetch('data/harbors/' + hk + '_berths.json').then(r => r.ok ? r.json() : null))]);
+    // 作り込んだ港：一覧（data/harbors/index.json：範囲・実測か・画像の形式・埠頭の一覧の有無）を 1 つ読み、埠頭の一覧はある港だけ。
+    // 世界全体では一覧の港を全部（読むのは近づいたときだけ）。一覧が無ければ、W.harbors の港ごとのファイルから（以前のやり方）
+    const pHarbList = soft(json('data/harbors/index.json')).then(r => {
+        if (!r.e && r.v && r.v.harbors) {
+            const list = W.tiles ? r.v.harbors : r.v.harbors.filter(h => (W.harbors || []).includes(h.key));
+            return list.map(h => ({ key: h.key, m: Promise.resolve({ v: h }), b: h.berths ? soft(json('data/harbors/' + h.key + '_berths.json')) : Promise.resolve({ v: null }) }));
+        }
+        return (W.harbors || []).map(hk => ({ key: hk, m: soft(json('data/harbors/' + hk + '.json')), b: soft(fetch('data/harbors/' + hk + '_berths.json').then(r2 => r2.ok ? r2.json() : null)) }));
+    });
     const pFw = soft(fetch(W.url + '_fairways.json').then(r => r.ok ? r.json() : null));
     const base = await _rwLoadGrid(W.url);
     base.base = true;
@@ -1514,11 +1574,11 @@ async function worldLoadReal(key) {
     rw.hd = [];
     rw.hdMeta = [];
     rw.berths = [];
-    for (let i = 0; i < (W.harbors || []).length; i++) {
-        const hk = W.harbors[i], [pm, pb] = pHarb[i];
-        const m = await pm;
+    for (const it of await pHarbList) {
+        const hk = it.key, pb = it.b;
+        const m = await it.m;
         if (m.e) { console.warn('作り込んだ港の範囲を読めませんでした：' + hk, m.e); continue; }
-        rw.hdMeta.push({ key: hk, name: m.v.name, lat0: m.v.lat0, lat1: m.v.lat1, lon0: m.v.lon0, lon1: m.v.lon1, measured: !!m.v.measured });
+        rw.hdMeta.push({ key: hk, name: m.v.name, lat0: m.v.lat0, lat1: m.v.lat1, lon0: m.v.lon0, lon1: m.v.lon1, measured: !!m.v.measured, img: m.v.img || 'png' });
         // その港の埠頭（作るときに書き出したもの：[名前, 種類, 緯度, 経度, 通る所, { at, bearing, quay, dock, group, berth }]）
         const b = await pb;
         if (!b.e && b.v) rw.berths.push(...b.v);
@@ -1532,7 +1592,7 @@ async function worldLoadReal(key) {
 // 作り込んだ港の地形（PNG：R×256＋G − 32768 ＝ 高さ[0.1m]、B ＝ 種類 0 海・1 陸・2 ドックの水・3 桟橋・4 港の敷地）
 async function _rwLoadHarbor(hk) {
     const meta = await (await fetch('data/harbors/' + hk + '.json')).json();
-    const blob = await (await fetch('data/harbors/' + hk + '.png')).blob();
+    const blob = await (await fetch('data/harbors/' + hk + '.' + (meta.img || 'png'))).blob();
     let bmp;
     try { bmp = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' }); }
     catch (e) { bmp = await createImageBitmap(blob); }
@@ -1577,8 +1637,18 @@ async function worldEnsureHarbors(pts, rKm) {
         return _rwHdLoading.get(m.key);
     }));
     if (_RW !== R) return;
+    // 読んだ港が多くなったら（RW_HD_MAX）、いま要る所（pts の rKm 以内）から遠いものから外す（メモリ：港 1 つで 5〜10MB）
+    if (R.hd.length > RW_HD_MAX) {
+        const dist = (m) => Math.min(...pts.filter(Boolean).map(q => {
+            const dLat = Math.max(0, m.lat0 - q.lat, q.lat - m.lat1) * mLat, dLon = Math.max(0, m.lon0 - q.lon, q.lon - m.lon1) * mLat * Math.cos(q.lat * Math.PI / 180);
+            return Math.hypot(dLat, dLon);
+        }));
+        const keep = R.hd.slice().sort((a, b) => dist(a) - dist(b)).filter((d, i) => i < RW_HD_MAX || dist(d) < (rKm || 150));
+        if (keep.length < R.hd.length) R.hd = R.hd.filter(d => keep.includes(d));
+    }
     _rwHarborsChanged();
 }
+const RW_HD_MAX = 8;
 // ── 世界全体の区画（10°×10°、1.5 分角）：船の近く・自動航行の行き先・地図で見ている所だけ読む ──
 // 多すぎたら（RW_TILE_MAX）、いちばん長く使っていない区画から捨てる。読んだ区画には運河と港の航路を掘る
 const RW_TILE_MAX = 90;
@@ -1673,13 +1743,14 @@ function _rwHarborsChanged() {
     if (typeof _apWorkerObj !== 'undefined') worldWorkerSync(_apWorkerObj);
     if (typeof _wm !== 'undefined') { _wm.detail = null; _wm.detailKey = ''; }
 }
-// ときどき（44-world-terrain.js から）：船のまわり 150km の港を読み、600km より遠くの港は捨てる（自動航行の行き先は残す）
+// ときどき（44-world-terrain.js から）：船のまわり 50km の港を読み、120km より遠くの港は捨てる（自動航行の行き先は残す）
+//（作り込んだ港が 60 ほどになったので、広く読むと、東海岸ではいくつも同時に読んでメモリを食う。読むのは 1 秒ほどなので、近づいてからで間に合う）
 function worldHarborTick() {
     worldTileTick();
     if (!_RW || !_RW.hdMeta || world.mode !== 'world') return;
     const me = worldShipLatLon(), dest = (typeof autopilot !== 'undefined' && autopilot.dest && !autopilot.dest.point) ? autopilot.dest : null;
-    worldEnsureHarbors([me, dest], 150);
-    const far = (d, q) => !q || Math.hypot((Math.max(d.lat0, Math.min(d.lat1, q.lat)) - q.lat) * 111.2, (Math.max(d.lon0, Math.min(d.lon1, q.lon)) - q.lon) * 111.2 * Math.cos(q.lat * Math.PI / 180)) > 600;
+    worldEnsureHarbors([me, dest], 50);
+    const far = (d, q) => !q || Math.hypot((Math.max(d.lat0, Math.min(d.lat1, q.lat)) - q.lat) * 111.2, (Math.max(d.lon0, Math.min(d.lon1, q.lon)) - q.lon) * 111.2 * Math.cos(q.lat * Math.PI / 180)) > 120;
     const before = _RW.hd.length;
     _RW.hd = _RW.hd.filter(d => !(far(d, me) && far(d, dest)));
     if (_RW.hd.length !== before) _rwHarborsChanged();
@@ -1781,7 +1852,7 @@ async function worldRestoreReal() {
     _worldKindChanged();
     // 船のいる所の区画・作り込んだ港を、先に読む（読む前の粗い地形で、岸壁に着いている船を「座礁」と見ないように）
     if (P.mode === 'world' && world.ref && _RW.tiles) { try { await worldEnsureTiles([worldBoxAround(world.ref.lat, world.ref.lon, 1.6)]); } catch (e) { /* ignore */ } }
-    if (P.mode === 'world' && world.ref) { try { await worldEnsureHarbors([world.ref], 150); } catch (e) { /* ignore */ } }
+    if (P.mode === 'world' && world.ref) { try { await worldEnsureHarbors([world.ref], 50); } catch (e) { /* ignore */ } }
     world.mode = P.mode;
     if (world._resumeHeading !== undefined && typeof physics !== 'undefined') physics.heading = world._resumeHeading;
     _worldRestoreDest(ap);
@@ -1952,7 +2023,7 @@ function worldStartAtPort(port) {
     // 作り込んだ港で、細かい地形をまだ読んでいなければ、読んでから（船を置く所を本物の深さで決める）
     if (_RW && _RW.hdMeta && _rwDetailBoxOf(port.lat, port.lon) && !_rwDetailOf(port.lat, port.lon) && !port._hdTried) {
         port._hdTried = true;
-        worldEnsureHarbors([{ lat: port.lat, lon: port.lon }], 150).then(() => { if (world._startReq === port) worldStartAtPort(port); port._hdTried = false; });
+        worldEnsureHarbors([{ lat: port.lat, lon: port.lon }], 50).then(() => { if (world._startReq === port) worldStartAtPort(port); port._hdTried = false; });
         return;
     }
     const T = PORT_TYPES[port.type];
@@ -1985,7 +2056,19 @@ function worldStartAtPort(port) {
     const fw = port.real && port.fairway ? port.fairway.pts : null;
     if (fw && (need > T.depth + 1 || off - halfLen < T.pier || off + halfLen > mouth)) {
         const deepOK = (q) => -worldHeightAt(...Object.values(worldLatLonToUnit(q.lat, q.lon)), 16) > need;
-        let k = fw.findIndex((q, i) => i >= 1 && deepOK(q));
+        // 船の真ん中だけでなく、航路に沿った船首・船尾の所も深いこと（長い船が、桟橋の間の深い所に置かれて
+        // 端が浅瀬・岸に乗り上げないように）。そういう所が無ければ、前のとおり真ん中だけで選ぶ
+        const hullOK = (i) => {
+            const q = fw[i], nx = fw[Math.min(fw.length - 1, i + 1)], pv = fw[Math.max(0, i - 1)];
+            const cl = Math.max(0.05, Math.cos(q.lat * Math.PI / 180));
+            const dE = (nx.lon - pv.lon) * cl, dN = nx.lat - pv.lat, L = Math.hypot(dE, dN);
+            if (L < 1e-9) return deepOK(q);
+            const r = halfLen / WORLD_R * 180 / Math.PI;
+            for (const s of [-1, -0.5, 0, 0.5, 1]) if (!deepOK({ lat: q.lat + dN / L * r * s, lon: q.lon + dE / L * r * s / cl })) return false;
+            return true;
+        };
+        let k = fw.findIndex((q, i) => i >= 1 && hullOK(i));
+        if (k < 0) k = fw.findIndex((q, i) => i >= 1 && deepOK(q));
         if (k < 0) k = fw.length - 1;
         const nx = fw[Math.min(fw.length - 1, k + 1)], pv = fw[Math.max(0, k - 1)];
         ll = { lat: fw[k].lat, lon: fw[k].lon };
@@ -2012,7 +2095,7 @@ function worldStartAtPort(port) {
     _worldSave();
     if (typeof worldTerrainModeChanged === 'function') worldTerrainModeChanged(true);
     // 着いた港の作り込んだ地形を読む（読み終えたら地形を作り直す）
-    if (_RW && _RW.hdMeta) worldEnsureHarbors([{ lat: port.lat, lon: port.lon }], 150);
+    if (_RW && _RW.hdMeta) worldEnsureHarbors([{ lat: port.lat, lon: port.lon }], 50);
     worldMapRedraw();
 }
 window.worldStartAtPort = worldStartAtPort;
@@ -2705,8 +2788,10 @@ function worldMapRedraw(quick) {
     else if (st && _wm.base) {
         // 地図の真ん中が実測の水深の港（measured）なら、その出典（掘っていない）を出す
         const dm = world.kind === 'real' && _wm.zoom >= 24 && _RW && _RW.hd ? _RW.hd.find(d => d.measured && _wm.cy > d.lat0 && _wm.cy < d.lat1 && _wm.cx > d.lon0 && _wm.cx < d.lon1) : null;
-        st.textContent = world.kind !== 'real' ? '' : dm ? `実在：${dm.name}　水深：NOAA BlueTopo（実測。掘っていません）・浚渫区域：USACE NCF（破線・維持水深）`
-            : `実在：${REAL_WORLDS[world.realKey].name}　地形：NOAA ETOPO 2022（航路は港ごとに掘ってあります）`;
+        // 出典（OpenStreetMap は ODbL、BlueTopo の一部の測量・EMODnet は CC BY 4.0：使う人に見える所に出す。詳しくは data/harbors/HARBOR_DATA.md）
+        const cred = '　出典：© OpenStreetMap contributors（ODbL）・NOAA・USACE・EMODnet（CC BY 4.0）ほか';
+        st.textContent = world.kind !== 'real' ? '' : (dm ? `実在：${dm.name}　水深：NOAA BlueTopo（実測。掘っていません）・浚渫区域：USACE NCF（破線・維持水深）`
+            : `実在：${REAL_WORLDS[world.realKey].name}　地形：NOAA ETOPO 2022（航路は港ごとに掘ってあります）`) + cred;
     }
 }
 window.worldMapRedraw = worldMapRedraw;

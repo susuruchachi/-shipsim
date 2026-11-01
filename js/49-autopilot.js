@@ -870,7 +870,8 @@ async function autopilotStart(port) {
             const F = fwOut.pts, k0 = Math.max(1, onFw + 1);
             // （港のすぐ外（800m）から離れてよい：港の航路が行き先と反対へ出ていく所（門司港の航路は関門海峡を西へ抜ける。
             //  東の広島へ行くなら、港を出たらすぐ東へ）。離れた所から先は地形を見て引くので、通れなければ航路をたどる探し方に戻る）
-            const outOfHarbor = (q) => worldDistance(q.lat, q.lon, np.port.lat, np.port.lon) >= 800 && !_apInDetail(q);
+            // （実測の水深の港（measured）の中は、離れてから先も細かい本物の地形で引くので、港の中でも離れてよい）
+            const outOfHarbor = (q) => worldDistance(q.lat, q.lon, np.port.lat, np.port.lon) >= 800 && !(_apInDetail(q) && !_rwDetailBoxOf(q.lat, q.lon).measured);
             // 行き先までの見込み：行き先の港の航路があれば、その航路の点（港から 3km より沖）までのまっすぐの距離 ＋ そこから泊地までの航路の道のり
             const dRefs = [];
             if (port.real && port.fairway && port.fairway.pts.length >= 3) {
@@ -903,6 +904,8 @@ async function autopilotStart(port) {
                 }
                 along += segL;
             }
+            // 今いる所ですぐ離れる（港から離れて航路の上にいて、行き先が航路の内側（後ろ）にあるとき：沖の入口まで出て戻らない）
+            if (outOfHarbor(here) && cost(here, 0) < best.c - 300) best = { c: cost(here, 0), k: onFw, P: null };
             kOutEnd = best.k; outLeave = best.P;
         }
         const outCut = kOutEnd < (fwOut ? fwOut.pts.length - 1 : -1);
@@ -1008,6 +1011,9 @@ async function autopilotStart(port) {
                 // （航路の延長線の沖を回るなら、その分も）
                 const viaEnd = (far ? worldDistance(from.lat, from.lon, far.lat, far.lon) + worldDistance(far.lat, far.lon, end.lat, end.lon) : worldDistance(from.lat, from.lon, end.lat, end.lon)) + along;
                 cands.sort((p, q) => (p.d + p.inward) - (q.d + q.inward));
+                // （いちばん近い合流点も先に試す：遠くの港の奥の合流点ほど、そこまでの道が探せないことがある。チャールストンの湾口の外から）
+                const nearC = cands.filter(c => c.d < 150000).sort((p, q) => p.d - q.d)[0];
+                if (nearC) cands.unshift(nearC);
                 const seen = new Set();
                 for (const c of cands) {
                     if (joins.length >= 3) break;
@@ -1022,7 +1028,10 @@ async function autopilotStart(port) {
             try {
                 let pts = null, viaFar = !!far, join = null, err = null;
                 for (const tgt of [...joins, far, end].filter(Boolean)) {
-                    try { pts = await worldPlanRoute(from, tgt, { tug: mode === 'tug', wide: mode === 'wide' }); viaFar = tgt === far; join = joins.includes(tgt) ? tgt : null; break; }
+                    // （合流点が航路の線の上でも浅いことがある（粗い地形の直線の航路と、本物の曲がった水路のずれ）：近くの深い所へ寄せて探す）
+                    let goal = tgt;
+                    if (joins.includes(tgt)) { const s2 = apSeaTarget(tgt.lat, tgt.lon, need); if (s2 && s2.moved && s2.moved <= 600) goal = { lat: s2.lat, lon: s2.lon }; }
+                    try { pts = await worldPlanRoute(from, goal, { tug: mode === 'tug', wide: mode === 'wide' }); viaFar = tgt === far; join = joins.includes(tgt) ? tgt : null; break; }
                     catch (e) { err = e; if (/ocean/.test(e.message) || autopilot.dest !== port || !autopilot.planning) break; }
                 }
                 const viaJoin = !!join;

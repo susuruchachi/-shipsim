@@ -17,5 +17,75 @@
   "2": "dock water",
   "3": "pier",
   "4": "port land"
- }
+ },
+ "img": "webp",
+ "measured": true,
+ "measured_frac": 0.992,
+ "sources": [
+  {
+   "name": "NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)",
+   "url": "https://nauticalcharts.noaa.gov/data/bluetopo.html",
+   "license": "CC0-1.0（一部の元の測量は CC BY 4.0：attribution に提供元）",
+   "crs": "NAD83 / UTM（タイルごと）→ WGS84 の緯度・経度に置き直し",
+   "vertical": "NAVD88[m]",
+   "resolution": [
+    "4m",
+    "8m"
+   ],
+   "tiles": [
+    "BF2J62M5",
+    "BH4XG5FJ",
+    "BH4XH5FJ",
+    "BH4XB5FG",
+    "BH4XD5FG",
+    "BH4XH5FG",
+    "BH4XD5FH",
+    "BH4XF5FH",
+    "BH4XG5FH",
+    "BH4XB5FJ",
+    "BH4XC5FJ",
+    "BH4XD5FJ",
+    "BH4XB5FH",
+    "BH4XC5FH",
+    "BH4XH5FH",
+    "BH4XF5FJ",
+    "BH4XC5FG",
+    "BH4XF5FG",
+    "BH4XG5FG"
+   ],
+   "surveys": 268,
+   "survey_years": [
+    1927,
+    2026
+   ],
+   "institutions": [
+    "DOC/NOAA/NOS/NGS -- National Geodetic Survey",
+    "DOC/NOAA/NOS/NGS/RSD -- Remote Sensing Division",
+    "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+    "DOD/USACE -- US Army Corps of Engineers New York District",
+    "DOD/USACE/JALBTCX -- Joint Airborne Lidar Bathymetry Technical Center of Expertise",
+    "DOI/USGS -- United States Geological Survey ",
+    "DOI/USGS – United States Geological Survey",
+    "NJ DOT"
+   ],
+   "attribution": [
+    "DOI/USGS – United States Geological Survey：E00998_MB_2m_MLLW_interp_1of1（cc-by-4.0）",
+    "DOI/USGS – United States Geological Survey：E00998_MB_MLLW_1of1（cc-by-4.0）"
+   ]
+  },
+  {
+   "name": "NOAA NCEI Coastal Relief Model 2023（BlueTopo の無い所・陸の高さ）",
+   "url": "https://www.ncei.noaa.gov/products/coastal-relief-model",
+   "license": "米国政府の作成したデータ（パブリック・ドメイン）",
+   "vertical": "NAVD88[m]（ハワイ・プエルトリコは各地の平均海面）",
+   "resolution": "1 秒角"
+  },
+  {
+   "name": "OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）",
+   "url": "https://www.openstreetmap.org/copyright",
+   "license": "ODbL 1.0（© OpenStreetMap contributors）"
+  }
+ ],
+ "channels": true,
+ "fairway_depth": 17.2
 }
