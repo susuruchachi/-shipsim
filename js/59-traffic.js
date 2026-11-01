@@ -3946,7 +3946,11 @@ function _tfHullOf(S) {
 function _tfHullOfPlayer() {
     if (typeof shipGroup === 'undefined' || !shipGroup || typeof _tugShipCtx !== 'function') return null;
     const C = _tugShipCtx();
-    return { x: C.sp.x, z: C.sp.z, fx: C.F.fx, fz: C.F.fz, sx: C.F.sx, sz: C.F.sz, HL: C.HL, hw: a => _tugHalfWidth(a / C.sc) * C.sc, player: true };
+    // 船体の前後の範囲の真ん中から（44-world-terrain.js の _trHullExtent）。模型の原点から ±半長だと、船体が原点から
+    // 前後にずれている船（ロマニック）では、外形が船首の先まで出て、船首の前の何も無い所で他の船と当たっていた
+    const E = typeof _trHullExtent === 'function' ? _trHullExtent(window.hullProfile) : null;
+    const zc = E ? E.zc * C.sc : 0, HL = E ? E.hz * C.sc : C.HL;
+    return { x: C.sp.x + C.F.fx * zc, z: C.sp.z + C.F.fz * zc, fx: C.F.fx, fz: C.F.fz, sx: C.F.sx, sz: C.F.sz, HL, hw: a => _tugHalfWidth((a + zc) / C.sc) * C.sc, player: true };
 }
 // A の外形の点が B の中に入っている一番深い所：{ pen, nx, nz（A を押す向き）, px, pz }
 function _tfHullInto(A, B, best, flip) {

@@ -1365,29 +1365,46 @@ window.worldWaveShelter = worldWaveShelter;
 // 船体の当たりを見る点（船の中の座標[m]：a＝前後、s＝横（+x 側）、d＝その点の喫水）
 //  前後 9 か所 × （キール・左右の舷）＋ 船首・船尾の先。舷は喫水の 7 割（丸い船底の分）で見る。
 let _trHullCache = null;
+// 船体の前後の範囲（模型の座標・船首が＋）：真ん中 zc と半分の長さ hz。輪切りが無ければ原点から ±半長。
+// （船首が模型の -z を向く船（bowSign -1）は、前のとおり原点から ±半長のまま）
+function _trHullExtent(hp) {
+    const hl = (hp && hp.ready) ? hp.halfLen : 6;
+    const sl = hp && hp.ready && hp.slices;
+    if (!sl || sl.length < 2 || (hp.bowSign || 1) !== 1) return { zc: 0, hz: hl };
+    const w = hl / sl.length;      // 輪切りの幅の半分（全長 2hl を本数で割った半分）
+    let lo = Infinity, hi = -Infinity;
+    for (const s of sl) { const z = s.alongNorm * hl; if (z < lo) lo = z; if (z > hi) hi = z; }
+    if (!(hi > lo)) return { zc: 0, hz: hl };
+    lo -= w; hi += w;
+    return { zc: (lo + hi) / 2, hz: (hi - lo) / 2 };
+}
 function _trHullPoints() {
     const hp = window.hullProfile;
     const key = hp && hp.ready ? [hp.halfLen, physics.scale, physics.draftOverride || 0, Math.round(worldShipDraftLever() * 20), (typeof shipGroup !== 'undefined' && shipGroup) ? shipGroup.scale.y : 1].join(',') : 'none';
-    if (_trHullCache && _trHullCache.key === key) return _trHullCache.pts;
+    // 船体の前後の端は、模型の原点から左右対称とは限らない（ロマニック：船尾 -6.8・船首 +5.2）。
+    // 輪切り（hullProfile.slices）の範囲の真ん中 zc から並べる。以前は原点から ±半長で並べていたので、
+    // 点が船首より先（ロマニックで約 13m）に出て、岸壁に高速で当たると、その点の所（船首の先）に穴があいていた
+    const ext = _trHullExtent(hp);
+    if (_trHullCache && _trHullCache.key === key + ',' + ext.zc.toFixed(4)) return _trHullCache.pts;
     const sc = physics.scale || 1;
-    const hl = (hp && hp.ready) ? hp.halfLen : 6;
+    const hl = ext.hz, zc = ext.zc;
     const pts = [];
     for (const k of [-0.93, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 0.93]) {
-        const H = worldHullAt(k * hl);
-        pts.push({ a: k * hl * sc, s: 0, d: H.d, k });
+        const z = zc + k * hl, H = worldHullAt(z);
+        pts.push({ a: z * sc, s: 0, d: H.d, k });
         // 舷は 0.4m 外（防舷材の分）で見る：船体そのものは岸壁の手前で止まる
-        pts.push({ a: k * hl * sc, s: H.hw + 0.4, d: H.d * 0.7, k });
-        pts.push({ a: k * hl * sc, s: -H.hw - 0.4, d: H.d * 0.7, k });
+        pts.push({ a: z * sc, s: H.hw + 0.4, d: H.d * 0.7, k });
+        pts.push({ a: z * sc, s: -H.hw - 0.4, d: H.d * 0.7, k });
     }
-    for (const k of [-1, 1]) pts.push({ a: k * (hl * sc + 0.4), s: 0, d: worldHullAt(k * hl * 0.98).d * 0.8, k, tip: true });
-    // 岸壁の角などが点の間に入り込まないように、舷の線を 6m おきに（施設だけ見る）
+    for (const k of [-1, 1]) pts.push({ a: zc * sc + k * (hl * sc + 0.4), s: 0, d: worldHullAt(zc + k * hl * 0.98).d * 0.8, k, tip: true });
+    // 岸壁の角などが点の間に入り込まないように、舷の線を 6m おきに（施設だけ見る。dense：座礁の穴の位置には使わない）
     const dense = [];
     const L = hl * sc, n = Math.max(4, Math.ceil(2 * L / 6));
     for (let i = 0; i <= n; i++) {
-        const a = -L + 2 * L * i / n, H = worldHullAt(a / sc);
-        dense.push({ a, s: H.hw + 0.4 }, { a, s: -H.hw - 0.4 });
+        const a = zc * sc - L + 2 * L * i / n, H = worldHullAt(a / sc);
+        dense.push({ a, s: H.hw + 0.4, dense: true }, { a, s: -H.hw - 0.4, dense: true });
     }
-    _trHullCache = { key, pts, dense };
+    _trHullCache = { key: key + ',' + zc.toFixed(4), pts, dense };
     return pts;
 }
 // その姿勢（重心の位置 x,z と向き h）で、船体がどれだけ底・岸壁に入っているか（0 なら当たっていない）。

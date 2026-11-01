@@ -584,7 +584,16 @@
 //                 UKHO の水深は OGL＋「航海用の製品に使わない」の条件で、船のシミュレーターが当たるかを問い合わせるまで保留。
 //                 海しる（API v3）は規約は使える形だが等深線が 20m より深い所だけで港には粗い。国土数値情報の港湾は再配布不可。
 //                 JODC は条件を確かめられない。どちらも今のまま（英国 EMODnet、日本 ETOPO）
-var APP_VERSION = '0.03.032.001';
+// 0.03.032.002 ・舵の部品の親が鏡写し（拡大率が負）や縦横で違う拡大率のとき、軸の印（ギズモ）の所を中心に回らず、
+//                 ずれた所を中心に小さく回って形も縮んでいたのを直す（12-bloom-and-deck-lighting-fx.js の _apRudderExact：
+//                 元の置き場所を、世界の軸のまわりに軸の印を中心に回した行列を部品に直接入れる。回る向きは前と同じ。ロマニック）。
+//                 そうでない船の舵は前のまま
+//               ・高速で岸壁・陸に当たったとき、船首より先に穴があくことがあったのを直す：岸壁など施設との当たりを見る舷の点を、
+//                 模型の原点から ±半長ではなく、船体の本当の前後の範囲に並べる（44-world-terrain.js の _trHullExtent・_trHullPoints。
+//                 ロマニックは船体が原点から後ろへずれていて、点が船首の 13m 先まで出ていた）。施設だけに当たったときは、
+//                 衝突と同じく喫水線の近くの舷に穴をあける。座礁・衝突の穴は船体の前後の端の内に収める（64-damage.js）。
+//                 他の船との当たりに使う自分の船の外形も、船体の本当の範囲に（59-traffic.js の _tfHullOfPlayer）
+var APP_VERSION = '0.03.032.002';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });

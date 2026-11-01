@@ -175,6 +175,8 @@ function damageCollision(c, SA, SB, vn, mA, mB) {
     const sc = physics.scale || 1, T = (D.yWL - D.yBot) * sc;
     const wl = Number.isFinite(window._physicsWaveY) ? window._physicsWaveY : 0;
     const h = _dmToHull(c.px, wl, c.pz); if (!h) return;
+    // 前後は船体の端の内に（船首・船尾の先の空中・水中に穴をあけない）
+    { const m = (D.aB - D.aS) * 0.005; h.a = Math.max(D.aS + m, Math.min(D.aB - m, h.a)); }
     const nm = SB ? SB.name : '';
     // 船首で当てた（自分の船首の 8％ の所）
     const bow = h.a > D.aB - (D.aB - D.aS) * 0.08;
@@ -207,18 +209,35 @@ function damageGround(hits, v) {
     if (!hits || !hits.length || !(v > 1.0) || damageInvincible('ground')) return;
     const now = damage.gt || 0;                      // 物理の時間（早送りでも、8 秒に一度まで）
     if (now - damage.lastGround < 8) return;
-    let best = null;
-    for (const p of hits) if (!p.dense && (!best || (p.c || 0) > (best.c || 0))) best = p;
-    if (!best) return;
+    // best：船底・舷の点（海底に当たった）。wall：岸壁・桟橋など施設に当たった舷の点（dense）
+    let best = null, wall = null;
+    for (const p of hits) {
+        if (p.dense) { if (!wall) wall = p; continue; }
+        if (!best || (p.c || 0) > (best.c || 0)) best = p;
+    }
+    if (!best && !wall) return;
     damage.lastGround = now;
     const D = typeof wtDims === 'function' ? wtDims() : null;
     if (!D || typeof shipGroup === 'undefined') return;
     const sc = physics.scale || 1;
-    // 船の中の座標（shipGroup）→ 世界 → 船体の座標
+    const kn = v / 0.514444;
+    // 船の中の座標（shipGroup）→ 世界 → 船体の座標。前後は船体の端の内に収める（船首・船尾の先の空中・水中に穴をあけない）
     shipGroup.updateMatrixWorld();
+    const clampA = (h) => { const m = (D.aB - D.aS) * 0.005; h.a = Math.max(D.aS + m, Math.min(D.aB - m, h.a)); return h; };
+    if (!best) {
+        // 施設の壁にだけ当たった：衝突と同じく、喫水線の近くの舷（船首なら船首）に穴
+        const w = new THREE.Vector3(wall.s / sc, D.yWL, wall.a / sc).applyMatrix4(shipGroup.matrixWorld);
+        const h = _dmToHull(w.x, w.y, w.z); if (!h) return;
+        clampA(h);
+        const T = (D.yWL - D.yBot) * sc, bow = h.a > D.aB - (D.aB - D.aS) * 0.08;
+        const area = Math.min(12, 0.3 + 0.9 * (v - 1)) * (bow ? 0.6 : 1);
+        damageHole(h.a, h.p, D.yWL - Math.min(1.5, 0.15 * T) / sc, area, 'ground', false);
+        _dmMsg(`岸壁に衝突（${kn.toFixed(1)} kn）！ ${bow ? '船首' : '舷側'}に穴があき（${area.toFixed(1)} m²）、浸水しています`);
+        return;
+    }
     const w = new THREE.Vector3(best.s / sc, D.yBot + 0.1 / sc, best.a / sc).applyMatrix4(shipGroup.matrixWorld);
     const h = _dmToHull(w.x, w.y, w.z); if (!h) return;
-    const kn = v / 0.514444;
+    clampA(h);
     const db = (typeof shipWT !== 'undefined' && shipWT.db > 0);
     const yB = D.yBot + 0.15 / sc;
     // 当たった所の、実際の船底の外板（船首・船尾の先で船底が上がっている所でも、空中に穴をあけない）
@@ -230,10 +249,10 @@ function damageGround(hits, v) {
         damageDecalAt(qB.a, qB.p, qB.y, area, 'hole', 'bottom');
         _dmMsg(db ? `座礁（${kn.toFixed(1)} kn）：船底の外板が破れましたが、二重底で止まっています` : `座礁（${kn.toFixed(1)} kn）：船底に穴があき、浸水しています（二重底なし）`);
     } else {
-        // 内底板まで破れる。当たった所から後ろへ裂ける
+        // 内底板まで破れる。当たった所から、進んでいた向きと逆へ裂ける（後進で当たったら前へ）。船体の端の内で
         const area = Math.min(12, 0.8 + 1.2 * (v - 2.5));
-        const along = Math.min((D.aB - D.aS) * 0.15, (8 + 6 * (v - 2.5)) / sc);
-        const qB2 = _dmOnHull(h.a - along, h.p, yB, 'bottom');
+        const along = Math.min((D.aB - D.aS) * 0.15, (8 + 6 * (v - 2.5)) / sc) * ((physics.speed || 0) < 0 ? -1 : 1);
+        const qB2 = _dmOnHull(clampA({ a: h.a - along }).a, h.p, yB, 'bottom');
         if (typeof floodAddHole === 'function') { floodAddHole(qB.a, qB.p, Math.max(yB, qB.y + 0.1 / sc), area, 'ground', true); floodAddHole(qB2.a, qB2.p, Math.max(yB, qB2.y + 0.1 / sc), area * 0.6, 'ground', true); }
         damageDecalAt(qB.a, qB.p, qB.y, area, 'hole', 'bottom'); damageDecalAt(qB2.a, qB2.p, qB2.y, area * 0.6, 'hole', 'bottom');
         _dmMsg(`座礁（${kn.toFixed(1)} kn）！ 船底が裂けて内底板まで破れ、浸水しています`);

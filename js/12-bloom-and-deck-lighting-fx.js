@@ -819,6 +819,48 @@ function animateSmoke(t, dt) {
 }
 
 const _apSpinQ = new THREE.Quaternion();
+// 舵の部品の親（模型の中の入れ物）が鏡写し（行列式が負）や、縦横で違う拡大率のとき、
+// 「軸のまわりを回る位置」は世界の回転で、「部品の向き」は親の向きの四元数で回していたため、二つが食い違って
+// 軸の印（ギズモ）からずれた所を中心に回り、形も縮んでいた（ロマニック）。
+// その場合だけ、元の置き場所（世界）を、世界の軸（親の軸の向き）のまわりに、軸の印の所を中心に回した行列を、
+// 部品の行列に直接入れる（縮み・ずれなし）。回る向きは、前に見えていた部品の向きの回り方と同じにする：
+// 親の四元数（three.js の分解は、鏡写しを x の軸を裏返して扱う）で回すと、鏡写しの親では y・z の軸のまわりは逆に回り、
+// x の軸のまわりはそのまま。以前の向きに合わせて「逆向き」を付けた船（チュートニック）が、逆に回るようにならないように
+const _apRdM = { P: new THREE.Matrix4(), Pi: new THREE.Matrix4(), B: new THREE.Matrix4(), R: new THREE.Matrix4(), T: new THREE.Matrix4(), q: new THREE.Quaternion(), w: new THREE.Vector3(), c: new THREE.Vector3(), one: new THREE.Vector3(1, 1, 1) };
+function _apRudderExact(part, obj, pv, ang) {
+    const parent = obj.parent;
+    parent.updateMatrixWorld(true);
+    const P = _apRdM.P.copy(parent.matrixWorld), e = P.elements;
+    const det = P.determinant();
+    const sx = Math.hypot(e[0], e[1], e[2]), sy = Math.hypot(e[4], e[5], e[6]), sz = Math.hypot(e[8], e[9], e[10]);
+    const smax = Math.max(sx, sy, sz), smin = Math.min(sx, sy, sz);
+    if (!(smin > 0) || (det > 0 && smax / smin < 1.001)) { if (part._mtx) _apRudderRelease(part, obj); return false; }
+    const axis = part.spinAxis || 'x';
+    if (axis !== 'x' && axis !== 'y' && axis !== 'z') { if (part._mtx) _apRudderRelease(part, obj); return false; }
+    // 世界の軸の向き（親の軸）と、世界の回転の中心（親の座標の basePos + pivotOffset）
+    const w = _apRdM.w.set(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0).transformDirection(P);
+    const c = _apRdM.c.copy(part.basePos).add(pv).applyMatrix4(P);
+    const R = _apRdM.R.makeRotationAxis(w, ang * (det < 0 && axis !== 'x' ? -1 : 1));
+    // 元の置き場所（親の中の基準の位置・向き・大きさ）
+    const B = _apRdM.B.compose(part.basePos, _apRdM.q.setFromEuler(part.baseRot), part.baseScale || obj.scale || _apRdM.one);
+    // 部品の行列 = 親⁻¹ × （中心へ移す × 回す × 中心から戻す）× 親 × 元の置き場所
+    const M = _apRdM.T.makeTranslation(c.x, c.y, c.z).multiply(R);
+    M.multiply(_apRdM.Pi.makeTranslation(-c.x, -c.y, -c.z)).multiply(P).multiply(B);
+    obj.matrix.copy(_apRdM.Pi.copy(P).invert().multiply(M));
+    if (!part._mtx) {
+        part.baseScale = part.baseScale || obj.scale.clone();
+        obj.position.copy(part.basePos); obj.rotation.copy(part.baseRot);
+        obj.matrixAutoUpdate = false; part._mtx = true;
+    }
+    obj.matrixWorldNeedsUpdate = true;
+    return true;
+}
+function _apRudderRelease(part, obj) {
+    part._mtx = false;
+    obj.matrixAutoUpdate = true;
+    obj.position.copy(part.basePos); obj.rotation.copy(part.baseRot);
+    obj.updateMatrix(); obj.matrixWorldNeedsUpdate = true;
+}
 function animatePropellers(t, dt) {
     // スクリューの回転の速さは、船の速度ではなく機関の回転数から決める
     // （32-engine-propeller.js）。以前は組み込みの推進器だけ「1フレームあたり」で
@@ -838,9 +880,11 @@ function animatePropellers(t, dt) {
     // 読み込んだGLB/OBJモデル内の "Screw"(スクリュー) / "Rudder"(舵) を自動で動かす
     if (glbMovableParts && glbMovableParts.length > 0) {
         glbMovableParts.forEach((part) => {
-            if (part.disabled) return;
             const obj = part.object;
             if (!obj) return;
+            // 行列で直接置いていた舵（_apRudderExact）を、使わなくなったら元の位置・向きの扱いへ戻す
+            if (part._mtx && (part.disabled || part.key !== 'rudder')) _apRudderRelease(part, obj);
+            if (part.disabled) return;
             const invert = part.invert ? -1 : 1;
             const axis = part.spinAxis || 'x';
             // pivotOffset は親（shipGroup）ローカル座標系でのオフセット
@@ -880,7 +924,9 @@ function animatePropellers(t, dt) {
             } else if (part.key === 'rudder') {
                 const rudderRad = THREE.MathUtils.degToRad(physics.rudderAngle) * invert;
 
-                if (pv.lengthSq() < 0.0001) {
+                if (pv.lengthSq() >= 0.0001 && obj.parent && _apRudderExact(part, obj, pv, rudderRad)) {
+                    // 親が鏡写し・縦横で違う拡大率のとき（下の計算では、部品の向きと、軸のまわりを回る位置が食い違う）
+                } else if (pv.lengthSq() < 0.0001) {
                     // pivotOffsetが未設定(ゼロ)なら従来通り原点回転
                     obj.rotation.copy(part.baseRot);
                     obj.rotation[axis] = part.baseRot[axis] + rudderRad;
