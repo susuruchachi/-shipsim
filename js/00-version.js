@@ -580,7 +580,11 @@
 //               ・開いた直後の重さ：水中用の両面の水面のシェーダーを、起動時に前もって作るのをやめる（23-underwater.js：
 //                 面の向きの切り替えはシェーダーを作り直さないで済むので、初めて潜ったときも止まらない）。
 //                 星・天の川・街の灯りのデータは、日が沈みかけてから読む（70-night-sky.js）。起動が 13〜15 秒 → 約 10 秒（試験環境）
-var APP_VERSION = '0.03.032.000';
+// 0.03.032.001 ・英国・日本の港の水深データの利用条件を調べ直した結果を data/harbors/HARBOR_DATA.md の 8 章に（アプリの動きは変えない）：
+//                 UKHO の水深は OGL＋「航海用の製品に使わない」の条件で、船のシミュレーターが当たるかを問い合わせるまで保留。
+//                 海しる（API v3）は規約は使える形だが等深線が 20m より深い所だけで港には粗い。国土数値情報の港湾は再配布不可。
+//                 JODC は条件を確かめられない。どちらも今のまま（英国 EMODnet、日本 ETOPO）
+var APP_VERSION = '0.03.032.001';
 if (typeof self !== 'undefined') self.APP_VERSION = APP_VERSION;
 // 設定パネルの見出しに出す
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => { const el = document.getElementById('app-version'); if (el) el.textContent = 'v' + APP_VERSION; });
