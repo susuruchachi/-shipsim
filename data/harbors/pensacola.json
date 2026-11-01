@@ -1,0 +1,73 @@
+{
+ "key": "pensacola",
+ "name": "ペンサコーラ",
+ "lat0": 30.287485369582427,
+ "lat1": 30.3874,
+ "lon0": -87.3133,
+ "lon1": -87.20711934317814,
+ "rows": 1112,
+ "cols": 1020,
+ "dLat": 8.993216059187306e-05,
+ "dLon": 0.00010420084084578909,
+ "cell": 10,
+ "scale": 0.1,
+ "kinds": {
+  "0": "sea",
+  "1": "land",
+  "2": "dock water",
+  "3": "pier",
+  "4": "port land"
+ },
+ "img": "webp",
+ "measured": true,
+ "measured_frac": 0.929,
+ "sources": [
+  {
+   "name": "NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)",
+   "url": "https://nauticalcharts.noaa.gov/data/bluetopo.html",
+   "license": "CC0-1.0（元の測量もすべて CC0-1.0 を確認）",
+   "crs": "NAD83 / UTM（タイルごと）→ WGS84 の緯度・経度に置き直し",
+   "vertical": "NAVD88[m]",
+   "resolution": [
+    "4m"
+   ],
+   "tiles": [
+    "BH4PR58G",
+    "BH4PS58F",
+    "BH4PR58F",
+    "BH4PT58F",
+    "BH4PS58G",
+    "BH4PR58H",
+    "BH4PS58H",
+    "BH4PT58H",
+    "BH4PT58G"
+   ],
+   "surveys": 232,
+   "survey_years": [
+    1935,
+    2026
+   ],
+   "institutions": [
+    "DOC/NOAA/NOS/NGS/RSD -- Remote Sensing Division",
+    "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+    "DOD/USACE -- US Army Corps of Engineers Mobile District",
+    "DOD/USACE/JALBTCX -- Joint Airborne Lidar Bathymetry Technical Center of Expertise"
+   ],
+   "attribution": []
+  },
+  {
+   "name": "NOAA NCEI Coastal Relief Model 2023（BlueTopo の無い所・陸の高さ）",
+   "url": "https://www.ncei.noaa.gov/products/coastal-relief-model",
+   "license": "米国政府の作成したデータ（パブリック・ドメイン）",
+   "vertical": "NAVD88[m]（ハワイ・プエルトリコは各地の平均海面）",
+   "resolution": "1 秒角"
+  },
+  {
+   "name": "OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）",
+   "url": "https://www.openstreetmap.org/copyright",
+   "license": "ODbL 1.0（© OpenStreetMap contributors）"
+  }
+ ],
+ "channels": true,
+ "fairway_depth": 9.7
+}

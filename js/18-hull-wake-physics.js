@@ -43,6 +43,9 @@ window.hullProfile = {
     // 実は船尾で座標を反転済み)。modelOffset.ryから scanHullProfile() が判定する。
     // _wakeAxisRad()のaxisCorr計算で参照する。
     bowSign    : 1,
+    // v166: 高さレベル別の喫水線輪郭（js/22-hull-shape.js の buildHullShape が生成）。
+    // 船首尾の形状はすべてここから引く。
+    shape      : null,
     // 排水量自動計算用の追加リファレンス（scanHullProfile内で設定）
     designWaterlineY : 0.0, // スキャン時に推定した喫水線のローカルY
     keelY            : 0.0, // スキャン時に推定したキール（船底）のローカルY
@@ -592,6 +595,17 @@ function scanHullProfile() {
                 for (let b = 0; b < HULL_TOP_BINS; b++) {
                     if (binCount[b] >= densityThresh && binWidth[b] >= widthThresh) hullTopBin = b;
                 }
+                // 上端が全高の 75% より上（マストの高さ）になったときは、下から続いている所までにする（条件に合わない段が
+                // 3 つ続いたら、そこで終わり）。細長い船体の上の、離れて高い所にあるマストのヤード（横の桁）が幅の条件に合い、
+                // 船体の上端をマストの高さまで取っていた（大田：甲板の高さ・浸水の区画の天井が水面の 48m 上になっていた）
+                if (hullTopBin >= 0 && (hullTopBin + 1) / HULL_TOP_BINS > 0.75) {
+                    let top = -1, miss = 0;
+                    for (let b = 0; b < HULL_TOP_BINS; b++) {
+                        if (binCount[b] >= densityThresh && binWidth[b] >= widthThresh) { top = b; miss = 0; }
+                        else if (top >= 0 && ++miss >= 3) break;
+                    }
+                    if (top >= 0 && top < hullTopBin) hullTopBin = top;
+                }
                 if (hullTopBin >= 0) {
                     const hullTopY = minY + (hullTopBin + 1) * edgeStep;
                     const candidateHeight = hullTopY - minY;
@@ -602,11 +616,21 @@ function scanHullProfile() {
     }
 
     const wlFrac = 0.30;   // 船体本体高さの下から30%を「喫水線付近」とみなす
-    const wlY    = minY + hullHeight * wlFrac;   // この高さ以下の頂点が対象
+    let   wlY    = minY + hullHeight * wlFrac;   // この高さ以下の頂点が対象
     const keelY  = minY + hullHeight * 0.05;
+    // 推した喫水線が、船が実際に浮く水面（設定の喫水線 physics.waterlineOffsetY）よりはっきり上（喫水の 3 割より上）なら、
+    // 実際の水面を使う。細長い船体に幅の広い砲塔・マストのヤードが載った模型（大田）では、上の「船体の上端」が
+    // マストの高さまで行き、喫水線を甲板の近く（実際の水面の 8.7m 上）としていた：喫水を 16.8m（本当は 8m）、
+    // 喫水線の輪郭・引き波の端を甲板の高さの船体の形で測る など
+    {
+        const wlUser = +physics.waterlineOffsetY;
+        if (Number.isFinite(wlUser) && wlUser > keelY + hullHeight * 0.02 && wlY - wlUser > (wlUser - keelY) * 0.3) wlY = wlUser;
+    }
     // 排水量自動計算（estimateDisplacementTons）で使うため保存しておく
     hp.designWaterlineY = wlY;
     hp.keelY = keelY;
+    hp.deckY = minY + hullHeight;            // 船体本体の上（主甲板のあたり）。水面がこれより上なら、喫水線は甲板の上（04 の喫水線の輪郭を縮める）
+    hp.hullHeight = hullHeight;
 
     // ─── v19: 高さ方向インデックス付き断面プロファイル ───
     // 「静止喫水線での幅を1つ求め、そこからの深度比でテーパーさせる」という
@@ -850,117 +874,11 @@ function scanHullProfile() {
     }
     const bowEdgeAlong   = scanTipAlong(true);
     const sternEdgeAlong = scanTipAlong(false);
+    // v166: scanTipAlongAtBand() を削除した。高さ帯ごとに頂点密度から先端の
+    // along位置を推定する関数で、唯一の利用者だった scanTipAlongProfile()
+    // （旧ウォーターラインポリゴン用）と一緒に不要になった。
+    // 高さによる先端位置の変化は hp.shape が実測の断面交線から直接持つ。
 
-    // v130: 先端along位置の高さ別プロファイル（沈み込みでタイポイントが
-    // 前後に伸びる問題の修正）。
-    // scanTipAlong()はwlY一点基準の密度スキャンで先端along位置を1個の
-    // スカラーとして求めていた。幅(hwEff)はheightProfileで没水深に応じて
-    // 動的にテーパー/頭打ちされるのに対し、along位置はこの1個のスカラー
-    // （hp.bowTipAlongNorm/sternTipAlongNorm）に完全に固定されたままで、
-    // 実行時に一切動かなかった。
-    // ラウンドしたバウやオーバーハングした船尾のように、高さによって先端の
-    // along位置自体が前後する船型では、設計喫水より深く沈み込むほど本来は
-    // 実際の水面と船体の交線（喫水線）がこの固定along位置より前後に張り出す
-    // はずだが、従来の実装では幅が頭打ちになるだけでalong位置が動かせず、
-    // 「沈み込んだときに喫水線長より長くなる場合をカバーできていない」
-    // 不具合の直接原因になっていた（浮き上がる側はhwEffが0に向けてテーパー
-    // ＋NEARLY_VANISHED_FRACでの点除外があるため、こちらは既に正しく動いている）。
-    // 対策として、scanTipAlong()と同じ密度ベースの先端検出を、hwRawの
-    // heightProfileと全く同じ高さグリッド(heightProfMinY/heightProfStep/
-    // HEIGHT_LEVELS)の高さ帯ごとに分けて適用し、「高さ→along位置」の
-    // プロファイルを作る。サンプル不足の帯はscanTipWidthAndProfileと同じ
-    // パターンで前後の実測帯から補間・延長する。
-    // v130-fix: 当初は各高さレベルを排他的な狭い帯([yLo,yHi))だけで密度
-    // スキャンしていたが、scanTipAlong()のコメント(v116-fix)で既に判明して
-    // いた通り、カウンタースターン系の丸みを帯びた船尾（船尾上部が大きく
-    // 張り出し、水面付近で急に細くなる形状）では、1レベル分の狭い帯だけだと
-    // 外板頂点の密度が全然足りず、ほとんどのレベルでサンプル不足→null判定
-    // となり、実際には形状が変化しているはずの高い位置でも変化を拾えず、
-    // 補間で下の疎らな実測値のまま延ばされてしまっていた（実測で報告された、
-    // 船尾の張り出しに追従できない不具合の直接原因）。
-    // 対策：scanTipAlong()の「capFracを段階的に緩めて再試行」と同じ考え方で、
-    // 各レベルを「船体最下部からそのレベルの上端まで累積」した点集合で
-    // スキャンする（排他帯→累積帯）。レベルが上がるほど点集合は単調に
-    // 増えるため、上のレベルほど必ずサンプルが揃い、丸みを帯びた船尾でも
-    // 上部まで正しく検出できる。
-    function scanTipAlongAtBand(isBowSide, capY) {
-        const win  = Math.max(szAlong * 0.06, sliceW * 1.5);
-        const edge = isBowSide ? (alongMin + szAlong) : alongMin;
-        const BINS = 30;
-        const binW = win / BINS;
-        const srcPts = hullCandidatePts.length > 0 ? hullCandidatePts : verts;
-
-        const counts = new Array(BINS).fill(0);
-        for (const v of srcPts) {
-            if (v.y > capY) continue;
-            const valAlong = xIsForward ? v.x : v.z;
-            const d = isBowSide ? (edge - valAlong) : (valAlong - edge);
-            if (d < 0 || d >= win) continue;
-            let bi = Math.floor(d / binW);
-            if (bi < 0) bi = 0; if (bi >= BINS) bi = BINS - 1;
-            counts[bi]++;
-        }
-        const totalInWin = counts.reduce((a, b) => a + b, 0);
-        if (totalInWin < 5) return null; // 船体最下部からここまで累積しても足りない→呼び出し側で補間
-
-        const densityThresh = Math.max(3, totalInWin / BINS * 0.5);
-        let firstDenseBin = -1;
-        for (let b = 0; b < BINS; b++) {
-            if (counts[b] >= densityThresh) { firstDenseBin = b; break; }
-        }
-        if (firstDenseBin < 0) return null;
-
-        const dAtTip = firstDenseBin * binW;
-        return isBowSide ? (edge - dAtTip) : (edge + dAtTip);
-    }
-    function scanTipAlongProfile(isBowSide) {
-        const raw = new Array(HEIGHT_LEVELS);
-        const validMask = new Array(HEIGHT_LEVELS).fill(false);
-        for (let lv = 0; lv < HEIGHT_LEVELS; lv++) {
-            const yTop = heightProfMinY + (lv + 1) * heightProfStep;
-            const along = scanTipAlongAtBand(isBowSide, yTop);
-            if (along !== null) { raw[lv] = along; validMask[lv] = true; }
-            else raw[lv] = 0;
-        }
-        const validLv = [];
-        for (let lv = 0; lv < HEIGHT_LEVELS; lv++) if (validMask[lv]) validLv.push(lv);
-        const fallbackEdge = isBowSide ? bowEdgeAlong : sternEdgeAlong;
-        if (validLv.length === 0) {
-            for (let lv = 0; lv < HEIGHT_LEVELS; lv++) raw[lv] = fallbackEdge;
-        } else if (validLv.length < HEIGHT_LEVELS) {
-            for (let lv = 0; lv < HEIGHT_LEVELS; lv++) {
-                if (validMask[lv]) continue;
-                let loLv = -1, hiLv = -1;
-                for (let k = 0; k < validLv.length; k++) {
-                    if (validLv[k] < lv) loLv = validLv[k];
-                    if (validLv[k] > lv && hiLv < 0) hiLv = validLv[k];
-                }
-                if (loLv < 0) raw[lv] = raw[hiLv];
-                else if (hiLv < 0) raw[lv] = raw[loLv];
-                else {
-                    const t = (lv - loLv) / (hiLv - loLv);
-                    raw[lv] = raw[loLv] + (raw[hiLv] - raw[loLv]) * t;
-                }
-            }
-        }
-
-        // 単発ノイズ平滑化（隣接3レベル中央値、幅プロファイルと同じ手法）
-        const rawCopy = raw.slice();
-        const smoothed = new Array(HEIGHT_LEVELS);
-        for (let lv = 0; lv < HEIGHT_LEVELS; lv++) {
-            const lo = Math.max(0, lv - 1), hi = Math.min(HEIGHT_LEVELS - 1, lv + 1);
-            const win3 = rawCopy.slice(lo, hi + 1).sort((a, b) => a - b);
-            const mid = win3.length >> 1;
-            smoothed[lv] = (win3.length % 2 === 1) ? win3[mid] : (win3[mid - 1] + win3[mid]) / 2;
-        }
-
-        const profile = [];
-        for (let lv = 0; lv < HEIGHT_LEVELS; lv++) {
-            const y = heightProfMinY + (lv + 0.5) * heightProfStep;
-            profile.push({ y, along: smoothed[lv] });
-        }
-        return profile;
-    }
 
     // v113-fix: computeWidthAtPositions()が返すreliableMask（そのalong位置に
     // 実際の断面線分が掛かっていたか）を使い、「不確実な区間」を有効な隣接値
@@ -1219,7 +1137,9 @@ function scanHullProfile() {
             halfWidth  : hw,
             draft      : draftVal,
             flareAngle : THREE.MathUtils.clamp(flareAngle, 0, 70),
-            heightProfile,   // v19: ビジュアル喫水線専用。物理(浮力等)はhalfWidth/draftを継続使用
+            // v166: heightProfile はスライスに保存しなくなった。唯一の読み手だった
+            // 旧ウォーターラインポリゴンが hp.shape に置き換わったため。
+            // （上の hw フォールバック計算にはローカル変数として引き続き使う）
             worldX: 0, worldZ: 0,
         });
     }
@@ -1439,36 +1359,16 @@ function scanHullProfile() {
     const sternTipResult = scanTipWidthAndProfile(false, sternEdgeAlong);
     hp.bowTipWidth   = bowTipResult.width;
     hp.sternTipWidth = sternTipResult.width;
-    hp.bowTipHeightProfile   = bowTipResult.heightProfile;
-    hp.sternTipHeightProfile = sternTipResult.heightProfile;
-    // v130: 先端along位置の高さ別プロファイル（沈み込みで先端が前後に伸びる問題の修正、上のscanTipAlongProfile参照）
-    hp.bowTipAlongProfile   = scanTipAlongProfile(true);
-    hp.sternTipAlongProfile = scanTipAlongProfile(false);
+    // v166: bowTipHeightProfile / sternTipHeightProfile / bowTipAlongProfile /
+    // sternTipAlongProfile / bowFinePoints / sternFinePoints の生成を削除した。
+    // いずれも旧ウォーターラインポリゴン専用のデータで、船首尾の形状を
+    // 「24等分スライス＋先端の特別扱い」で近似するための足場だった。
+    // hp.shape（js/22-hull-shape.js）が高さレベル別の実測輪郭をそのまま持つ
+    // ようになったため、参照元が無くなっている。
+    // 先端幅(bowTipWidth/sternTipWidth)と先端along(bowTipAlongNorm/
+    // sternTipAlongNorm)だけは、hp.shapeを構築できなかった場合のフォールバック
+    // 経路（_hullHalfWidthAtNorm・GPUの船体マスク）がまだ使うので残す。
 
-    // v130: 通常24スライス（HULL_SLICES、均等間隔）の最後尾スライスから実際の
-    // 先端(bowEdgeAlong/sternEdgeAlong)までの区間は、これまで先端タイポイント
-    // 1点だけでカバーしていた。バルバスバウ／カウンタースターン／アトランティック
-    // バウのようにこの区間自体が長く、かつ断面形状が急に変化する船型では解像度が
-    // 足りず、喫水線の見た目の精度が落ちる（ユーザー報告）。
-    // 対策として、この区間だけ追加でTIP_FINE_POINTS点を等分してscanTipWidth
-    // AndProfile()を追加実行し、区間内の断面を細かく取得する。
-    // HULL_SLICES自体（sliceCenters・sliceWidthベースの浮力/慣性モーメント積分
-    // 等、物理計算が前提にしている一様間隔）には一切手を入れない。あくまで
-    // 喫水線ポリゴン（見た目）専用の追加データとして hp.bowFinePoints /
-    // hp.sternFinePoints に保存する。
-    const TIP_FINE_POINTS = 2;
-    function scanFinePoints(isBowSide, lastRegularAlong, edgeAlong) {
-        const pts = [];
-        for (let i = 1; i <= TIP_FINE_POINTS; i++) {
-            const t = i / (TIP_FINE_POINTS + 1); // 例: 2点なら 1/3, 2/3
-            const along = lastRegularAlong + (edgeAlong - lastRegularAlong) * t;
-            const res = scanTipWidthAndProfile(isBowSide, along);
-            pts.push({ alongNorm: along / hp.halfLen, width: res.width, heightProfile: res.heightProfile });
-        }
-        return pts; // 通常スライス側 → 先端側の順
-    }
-    hp.bowFinePoints   = scanFinePoints(true,  sliceCenters[HULL_SLICES - 1], bowEdgeAlong);
-    hp.sternFinePoints = scanFinePoints(false, sliceCenters[0],               sternEdgeAlong);
 
     {
         // regular sliceのalongNorm修正と同じ理由で、AABB中心(alongCenter)を
@@ -1528,6 +1428,30 @@ function scanHullProfile() {
         }
     }
 
+    // ─── v166: 船首・船尾形状の再構築（js/22-hull-shape.js）───
+    // 従来の「along固定格子 × 半幅」テーブルは、喫水線の前端・後端そのものが
+    // 高さの関数である船（レーキした船首材・カウンタースターン）を原理的に
+    // 表現できず、bowTip*/sternTip*/finePoints等8種の場当たり的な補助データで
+    // 埋め合わせていた。ここで作る hp.shape は、高さレベルごとに
+    // 「その高さ自身の前後端で正規化した半幅プロファイル」を持つため、
+    // レーキも張り出しも補間だけで自然に再現できる。
+    // 水面シェーダーの泡帯・パーティクル・船体回避は全てこちらを参照する。
+    if (typeof buildHullShape === 'function') {
+        try {
+            hp.shape = buildHullShape(
+                [hullTriVerts, lenientTriVerts],
+                xIsForward, heightProfMinY, heightProfMaxY, wlY
+            );
+            // 前後の位置ごとの甲板（舷側の外板の上の縁）の高さ（62-watertight.js の隔壁を甲板で切る）
+            if (hp.shape && typeof hullShapeComputeSheer === 'function') hullShapeComputeSheer(hp.shape, hullTriVerts, xIsForward);
+        } catch (err) {
+            console.warn('[HullScan] buildHullShape失敗、従来データへフォールバック', err);
+            hp.shape = null;
+        }
+    } else {
+        hp.shape = null;
+    }
+
     hp.ready = true;
     updateHullSlicePositions();
 
@@ -1539,6 +1463,8 @@ function scanHullProfile() {
     // applyDisplacementToMass: 計算値→UIスライダー・physics.mass へ一括反映
     if (typeof applyDisplacementToMass === 'function') applyDisplacementToMass();
     else if (typeof updateDisplacementReadout === 'function') updateDisplacementReadout();
+    // 自動にした重心・復元力を、測り直した船体から計算し直す
+    reapplyAutoBalance();
 
     console.log(
         `[HullScan] v12 | slices=${hp.slices.length}` +
@@ -1549,7 +1475,14 @@ function scanHullProfile() {
         ` bowSign=${hp.bowSign}${hp.bowSign === -1 ? '(反転: 元+along側=船尾だったため座標反転済み)' : ''}` +
         ` wlY=${wlY.toFixed(2)} (minY=${minY.toFixed(2)} maxY=${maxY.toFixed(2)})` +
         ` bowTip=${hp.bowTipWidth.toFixed(2)} sternTip=${hp.sternTipWidth.toFixed(2)}` +
-        ` bowTipAlongNorm=${hp.bowTipAlongNorm.toFixed(3)} sternTipAlongNorm=${hp.sternTipAlongNorm.toFixed(3)}`
+        ` bowTipAlongNorm=${hp.bowTipAlongNorm.toFixed(3)} sternTipAlongNorm=${hp.sternTipAlongNorm.toFixed(3)}` +
+        (hp.shape
+            ? ` | shape: ${hp.shape.nStations}station x ${hp.shape.nLevels}level` +
+              ` bowAlong=${hp.shape.bowAlong[hp.shape.wlLevel].toFixed(2)}` +
+              `(${hp.shape.bowAlong[0].toFixed(2)}〜${hp.shape.bowAlong[hp.shape.nLevels-1].toFixed(2)})` +
+              ` sternAlong=${hp.shape.sternAlong[hp.shape.wlLevel].toFixed(2)}` +
+              `(${hp.shape.sternAlong[0].toFixed(2)}〜${hp.shape.sternAlong[hp.shape.nLevels-1].toFixed(2)})`
+            : ' | shape: なし')
     );
 }
 
@@ -1650,26 +1583,23 @@ const MASS_TONS_PER_UNIT = 1000;
 
 // 排水量を自動計算し、physics.massおよびUIスライダーへ反映する。
 // 戻り値: 計算できた排水量(トン)。計算不可の場合はnull。
+// 以前は計算した値をスライダーの範囲（50〜50万トン）に切り詰めて使っていたため、全長 10m ほどの船（数トン）は
+// 50 トンにされて沈み、とても大きな船は 50 万トンにされて浮き上がっていた。物理には計算したままの値を使い、
+// スライダーの位置だけ範囲内に収める
 function applyDisplacementToMass() {
     const tons = estimateDisplacementTons();
     if (tons === null || !(tons > 0)) return null;
     const massSlider = $('mass-slider'), massNum = $('mass-num');
-    let massVal = tons / MASS_TONS_PER_UNIT;
-    if (massSlider) {
-        const sliderMax = parseFloat(massSlider.max);
-        const clamped = THREE.MathUtils.clamp(massVal, parseFloat(massSlider.min), sliderMax);
-        if (clamped !== massVal) {
-            console.warn(`[ShipConfig] 排水量${tons.toFixed(0)}トンがmassスライダーの上限` +
-                `(${(sliderMax * MASS_TONS_PER_UNIT).toFixed(0)}トン相当)を超えたため切り詰められました。` +
-                `喫水より浮き上がる場合はmass-sliderのmax属性を引き上げてください。`);
-        }
-        massVal = clamped;
-    }
+    const massVal = tons / MASS_TONS_PER_UNIT;
     physics.mass = massVal;
-    if (massSlider) massSlider.value = massVal;
-    if (massNum) massNum.value = massVal.toFixed(2);
+    if (massSlider) massSlider.value = THREE.MathUtils.clamp(massVal, parseFloat(massSlider.min), parseFloat(massSlider.max));
+    if (massNum) massNum.value = formatShipMass(massVal);
     updateDisplacementReadout(tons);
     return tons;
+}
+// 排水量（千トン）の表示：小さな船でも 0 にならないよう、有効数字 3 桁は残す
+function formatShipMass(v) {
+    return v >= 1 ? v.toFixed(2) : String(+v.toPrecision(3));
 }
 
 // 排水量の読み取り専用表示を更新する（自動計算ボタン・各種スライダー変更時に呼ばれる）。
@@ -1910,11 +1840,14 @@ function computeHullBuoyancyPhysics(cgWorldX, cgWorldZ, rotY, pitchAngle, shipY,
         // 要望に基づき、ここだけ引き波を含めた水面高さを使うようにする。
         // これにより、船首が持ち上げた波が(伝播して)船体を押し上げ／沈める形で
         // ピッチにフィードバックされ、双方向の関係になる。
+        // （船が自分で立てている船首の山・その後ろの谷も入っている：02-utils-and-wave-physics.js の selfWaveAt。速く走る小さな船は船首が持ち上がる）
         const waveY = getWaveHeight(px, pz, t, false);
 
         const baseKeelY = shipY - waterlineYScaled + (hp.designWaterlineY - sl.draft) * physScale;
         const keelY = baseKeelY - alongDistW * Math.sin(pitchAngle);
-        const depthLocal = (waveY - keelY) / physScale;
+        let depthLocal = (waveY - keelY) / physScale;
+        // 浸水しているときは、主甲板より上の船体は浮力にならない（予備浮力を超えれば沈む：63-flooding.js）
+        if (window._wtDeckCap && Number.isFinite(hp.deckY)) depthLocal = Math.min(depthLocal, hp.deckY - (hp.designWaterlineY - sl.draft));
 
         const areaCurrent = _segSubmergedAreaLocal(sl.halfWidth, sl.draft, Math.max(0, depthLocal));
         const areaCurrentWorld = areaCurrent * physScale * physScale; // m²（実断面積）
@@ -2028,8 +1961,28 @@ function _hullOriginWorld(cgWX, cgWZ, rotRad, physScale) {
 // hp.bowTipWidth、hp.sternTipAlongNorm/hp.sternTipWidth)を持っているので、
 // 最後の通常スライスからそのタイポイントへ向けて線形に減衰させ、
 // タイポイントより外側は0を返す。
+// 実測形状での設計喫水の半幅は、船の形が変わらない限り同じなので、前後の位置ごとの表にして引く
+//（泡の粒子・引き波の履歴ごとに毎回、断面の探索をしていて、早送りでは 1 フレームの 1 割近くを使っていた）
+const _HW_TAB_N = 2048, _HW_TAB_LO = -1.15, _HW_TAB_HI = 1.15;
+const _hwTab = { shape: null, halfLen: 0, v: null };
 function _hullHalfWidthAtNorm(alongNorm) {
     const hp = window.hullProfile;
+    // v166: 実測形状(hp.shape)があればそちらを使う。船首尾の先細りが実際の
+    // メッシュ断面そのものになるので、下のタイポイント外挿（実測できなかった
+    // 時代の近似）は不要になる。shapeが無い場合だけ従来経路へ落ちる。
+    if (hp.shape && hp.shape.ready && typeof hullShapeHalfWidthAtNorm === 'function') {
+        const T = _hwTab;
+        if (T.shape !== hp.shape || T.halfLen !== hp.halfLen || T.wl !== hp.shape.designWaterlineY) {
+            T.shape = hp.shape; T.halfLen = hp.halfLen; T.wl = hp.shape.designWaterlineY;
+            T.v = new Float32Array(_HW_TAB_N + 1);
+            for (let i = 0; i <= _HW_TAB_N; i++) T.v[i] = hullShapeHalfWidthAtNorm(hp.shape, _HW_TAB_LO + (_HW_TAB_HI - _HW_TAB_LO) * i / _HW_TAB_N, hp.halfLen);
+        }
+        const f = (alongNorm - _HW_TAB_LO) / (_HW_TAB_HI - _HW_TAB_LO) * _HW_TAB_N;
+        if (!(f > 0)) return T.v[0];
+        if (f >= _HW_TAB_N) return T.v[_HW_TAB_N];
+        const i = f | 0, tt = f - i;
+        return T.v[i] + (T.v[i + 1] - T.v[i]) * tt;
+    }
     if (!hp.ready || hp.slices.length === 0) return hp.halfBeam || 1.5;
     const slices = hp.slices;
     const first = slices[0], last = slices[slices.length - 1];
@@ -2059,6 +2012,52 @@ function _hullHalfWidthAtNorm(alongNorm) {
     }
     return hp.halfBeam;
 }
+
+// ───────────────────────────────────────
+//  _hullWetHalfWidthAtNorm(alongNorm, side)
+//
+//  v165: 「今この瞬間の」喫水線の半幅（ローカル単位、physics.scale適用前）と
+//  その場所の濡れ具合(0〜1)を返す。
+//
+//  _hullHalfWidthAtNorm() が返すのは静的な設計喫水での半幅で、ロール・ピッチ・
+//  ヒーブ・波による喫水線の変化を一切含まない。一方、水面シェーダーの泡帯は
+//  updateHullWaterlinePolygon()（04-scene-and-water-init.js）が毎フレーム計算する
+//  実喫水線の輪郭を使う。両者が別の輪郭を指していたため、船が傾いたり波に
+//  乗ったりすると喫水線の泡パーティクルだけが実際の喫水線から外へはみ出したり、
+//  内側へ入り込んだりしていた（ユーザー報告の症状）。
+//  ここで同じテーブル(window._hullWaterlineDyn)を参照し、両者の輪郭を一致させる。
+//
+//  テーブルが未生成（モデル未ロード、スキャン直後の1フレーム目など）の場合は
+//  従来どおり静的な設計喫水値へフォールバックする。
+// ───────────────────────────────────────
+// （結果の入れ物は使い回す：呼び出し側はすぐ読むだけ。区間は二分探索で）
+const _wetHwRes = { hw: 0, wet: 1 };
+function _hullWetHalfWidthAtNorm(alongNorm, side) {
+    const staticHw = _hullHalfWidthAtNorm(alongNorm);
+    const R = _wetHwRes;
+    const d = window._hullWaterlineDyn;
+    if (!d || !d.ready || d.n < 2) { R.hw = staticHw; R.wet = 1; return R; }
+
+    const aArr = d.alongNorm;
+    const hwArr  = (side >= 0) ? d.hwStbd  : d.hwPort;
+    const wetArr = (side >= 0) ? d.wetStbd : d.wetPort;
+    const N = d.n;
+
+    // alongNormは昇順（船尾→船首）。範囲外は両端でクランプするが、
+    // 先端より外側は _hullHalfWidthAtNorm と同じく「幅0へ収束する」扱いに
+    // したいので、静的な値との小さい方を採る。
+    if (alongNorm <= aArr[0])      { R.hw = Math.min(staticHw, hwArr[0]); R.wet = wetArr[0]; return R; }
+    if (alongNorm >= aArr[N - 1])  { R.hw = Math.min(staticHw, hwArr[N - 1]); R.wet = wetArr[N - 1]; return R; }
+    if (!(alongNorm === alongNorm)) { R.hw = staticHw; R.wet = 1; return R; }
+    let lo = 0, hi = N - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (aArr[mid] <= alongNorm) lo = mid; else hi = mid; }
+    const span = aArr[hi] - aArr[lo];
+    const tt = span > 1e-9 ? (alongNorm - aArr[lo]) / span : 0;
+    R.hw  = hwArr[lo]  + (hwArr[hi]  - hwArr[lo])  * tt;
+    R.wet = wetArr[lo] + (wetArr[hi] - wetArr[lo]) * tt;
+    return R;
+}
+window._hullWetHalfWidthAtNorm = _hullWetHalfWidthAtNorm;
 
 // ─────────────────────────────────────────
 //  _hullFlareAngleAtNorm(alongNorm)
@@ -2103,29 +2102,47 @@ function _hullFlareAngleAtNorm(alongNorm) {
 //  しまう可能性がある。呼び出し側で「水面付近にあるエフェクトにだけ適用する」
 //  といった高さ方向のガードを別途行うこと。
 // ─────────────────────────────────────────
+// （結果の入れ物は使い回す：呼び出し側はすぐ読むだけ。泡の粒子ごとに毎フレーム呼ばれ、
+//   そのたびに入れ物と船の向き・原点を作り直していた。向き・原点は船が動いたときだけ求め直す）
+const _pohRes = { x: 0, z: 0, pushed: false };
+const _pohF = { h: NaN, cx: NaN, cz: NaN, ws: NaN, sinT: 0, cosT: 1, cx0: 0, cz0: 0 };
 function pushOutsideHull(px, pz, marginWorld) {
+    const R = _pohRes;
+    R.x = px; R.z = pz; R.pushed = false;
     const hp = window.hullProfile;
-    if (!hp || !hp.ready || !hp.slices.length) return { x: px, z: pz, pushed: false };
+    if (!hp || !hp.ready || !hp.slices.length) return R;
     const WS = (physics && physics.scale) ? physics.scale : 1;
     const halfLenW = hp.halfLen * WS;
-    if (halfLenW < 1e-6) return { x: px, z: pz, pushed: false };
-    const headingRad = (physics.heading * Math.PI) / 180;
-    const totalRad   = _wakeAxisRad(headingRad);
-    const sinT = Math.sin(totalRad), cosT = Math.cos(totalRad);
-    const _origin = _hullOriginWorld(physics.cgWorldX, physics.cgWorldZ, totalRad, WS);
-    const cx0 = _origin.x, cz0 = _origin.z;
+    if (halfLenW < 1e-6) return R;
+    const F = _pohF;
+    const ox = physics.cgOffset.x || 0, oz = physics.cgOffset.z || 0;
+    if (F.h !== physics.heading || F.cx !== physics.cgWorldX || F.cz !== physics.cgWorldZ || F.ws !== WS || F.ox !== ox || F.oz !== oz) {
+        F.h = physics.heading; F.cx = physics.cgWorldX; F.cz = physics.cgWorldZ; F.ws = WS; F.ox = ox; F.oz = oz;
+        const totalRad = _wakeAxisRad((physics.heading * Math.PI) / 180);
+        F.sinT = Math.sin(totalRad); F.cosT = Math.cos(totalRad);
+        const o = _hullOriginWorld(physics.cgWorldX, physics.cgWorldZ, totalRad, WS);
+        F.cx0 = o.x; F.cz0 = o.z;
+    }
+    const sinT = F.sinT, cosT = F.cosT, cx0 = F.cx0, cz0 = F.cz0;
     const dx = px - cx0, dz = pz - cz0;
     const along = sinT * dx + cosT * dz;
     const perp  = cosT * dx - sinT * dz;
-    if (Math.abs(along) > halfLenW * 1.02) return { x: px, z: pz, pushed: false };
+    if (Math.abs(along) > halfLenW * 1.02) return R;
     const alongNorm = THREE.MathUtils.clamp(along / halfLenW, -1, 1);
-    const hwLocal = _hullHalfWidthAtNorm(alongNorm) * WS;
+    // v165: 押し出しの基準も「今この瞬間の実喫水線」に揃える。設計喫水の
+    // 静的な半幅で押し出していたため、船が傾いて片舷が浮き上がっている
+    // ときに、実際の喫水線よりずっと外側まで泡が押し出されてしまい、
+    // 船体から浮いた位置に泡の列が残っていた。
+    const sideSign = perp >= 0 ? 1 : -1;
+    const hwLocal = ((typeof _hullWetHalfWidthAtNorm === 'function')
+        ? _hullWetHalfWidthAtNorm(alongNorm, sideSign).hw
+        : _hullHalfWidthAtNorm(alongNorm)) * WS;
     const limit = hwLocal + (marginWorld || 0);
-    if (Math.abs(perp) >= limit) return { x: px, z: pz, pushed: false };
-    const sign = perp >= 0 ? 1 : -1;
-    const newX = cx0 + sinT * along + cosT * sign * limit;
-    const newZ = cz0 + cosT * along - sinT * sign * limit;
-    return { x: newX, z: newZ, pushed: true };
+    if (Math.abs(perp) >= limit) return R;
+    R.x = cx0 + sinT * along + cosT * sideSign * limit;
+    R.z = cz0 + cosT * along - sinT * sideSign * limit;
+    R.pushed = true;
+    return R;
 }
 window.pushOutsideHull = pushOutsideHull;
 
@@ -2275,7 +2292,7 @@ function getWakeHeightVisual(wx, wz, t) {
     // ※ hullDisp は「その瞬間の海面（波の高さ）を基準にした押しのけ量」にする。
     //   呼び出し元 updateWater() が waveData.height + wake.y を posAttr.setY するため、
     //   ここでは { y: hullDisp, foam:0 } を返すと
-    //   頂点Y = getWaveCrestAndHeight().height + hullDisp になる（波に乗った凹み）。
+    //   頂点Y = getOceanHeight() + hullDisp になる（波に乗った凹み）。
     const hullDisp = _getHullDisplacement(wx, wz);
     if (hullDisp < -0.005) {
         return { y: hullDisp, foam: 0 };
@@ -2505,6 +2522,9 @@ let _wakeEmitAccumGreen = 0;
 // 「船が動き出した瞬間に画面が完全にフリーズする」という重大な不具合の原因になっていた。
 let _wakeEmitAccumCut   = 0;
 
+// v166: 設計喫水での輪郭前後端を引くための共有スクラッチ
+const _emitWlEnds = { k0:0, k1:0, f:0, sternAlong:0, bowAlong:0 };
+
 function emitHullWakeParticles(t, dt) {
     if (!wakeParticleGeo || shipHistory.length < 2) return;
     const spd = Math.abs(physics.speed);
@@ -2532,7 +2552,9 @@ function emitHullWakeParticles(t, dt) {
 
     const scaleRatio = halfLen / 6.0;
     // 細かく見せるためにサイズを抑制 (0.55 を掛けて小さく)
-    const sizeScale  = THREE.MathUtils.clamp(scaleRatio * 0.38, 0.10, 2.0);
+    // 船の実際の大きさ（全長 269m で今までと同じ）に比例させる。以前はモデルの中の長さ（いつも 12 ほど）だけで決めていて、
+    // 全長 10m の船でも 270m の船と同じ大きさのしぶき・泡が出ていた
+    const sizeScale  = THREE.MathUtils.clamp(scaleRatio * 0.38 * WS / 22.42, 0.006, 2.0);
     const spdFactor  = Math.min(spd / 6.0, 1.0);
 
     // 船体境界に沿わせるための統一オフセット（≒パーティクル半径分、外側へ）。
@@ -2558,23 +2580,47 @@ function emitHullWakeParticles(t, dt) {
     // 見える」原因になっていた。その場所の実際のフレア角度(_hullFlareAngleAtNorm)から、
     // 想定乾舷高さ分だけ外側に張り出しているとみなした追加オフセットを加えることで、
     // フレアの外側（＝実際に視界を遮られない位置）から放出されるようにする。
-    function flareOutwardBonus(alongNorm) {
+    // v165-fix【喫水線の泡が船体からはみ出す不具合】
+    // 以前この関数は引数を取らず、常に assumedFreeboard = sizeScale * 3.0
+    // （＝喫水線からデッキまでの高さ）でフレアの張り出しを計算し、それを
+    // hullEdgePoint()内で全パーティクルに無条件で加算していた。
+    // ところが実際の放出高さは、喫水線泡で水面+0.7*sizeScale程度、水しぶきでも
+    // せいぜい+1.6*sizeScale程度しかない。つまりデッキの高さぶんのフレア
+    // 張り出しを、水面すれすれの泡にまで足していたことになる。フレア角が
+    // きつい船（tan(60°)≒1.7、上限82°なら約7.1）では船体から数メートル外へ
+    // ずれて放出され、これが「泡が喫水線から外にはりでる」症状の主因だった。
+    // 逆に、これを見越して外向きオフセットを控えめにしていた放出タイプでは
+    // 泡が船体の内側へ食い込んで見えていた。
+    // 対策: 張り出しを求める高さを呼び出し側が明示する。各放出点は自分が
+    // 実際に発生する高さ(freeboard)を渡し、その高さでのフレア張り出しだけを
+    // 受け取る。
+    function flareOutwardBonus(alongNorm, freeboard) {
         if (typeof _hullFlareAngleAtNorm !== 'function') return 0;
+        if (!(freeboard > 0)) return 0;
         const flareDeg = _hullFlareAngleAtNorm(alongNorm);
         const flareRad = THREE.MathUtils.clamp(flareDeg, 0, 82) * Math.PI / 180;
-        const assumedFreeboard = sizeScale * 3.0; // 喫水線からデッキまでの見た目の高さの目安
-        return Math.tan(flareRad) * assumedFreeboard;
+        return Math.tan(flareRad) * freeboard;
     }
 
-    function hullEdgePoint(alongNorm, side, extraOut) {
-        const hwLocal = _hullHalfWidthAtNorm(alongNorm);
-        const hwOut   = hwLocal * WS + huggingRadius + flareOutwardBonus(alongNorm) + (extraOut || 0);
+    // alongNorm/side の位置における「今この瞬間の喫水線の外縁 + 余白」を返す。
+    // freeboard は、そのパーティクルが水面から何メートル上で発生するか
+    // （フレアに沿って外へ張り出す量の計算に使う。0なら喫水線ぴったり）。
+    // 戻り値の wet は、その場所が今どれだけ水に浸かっているか(0〜1)。
+    // v165: 半幅を静的な設計喫水値(_hullHalfWidthAtNorm)から、水面シェーダーの
+    // 泡帯と共有する実喫水値(_hullWetHalfWidthAtNorm)に変更。これで
+    // パーティクルとシェーダーの泡帯が必ず同じ輪郭に乗る。
+    function hullEdgePoint(alongNorm, side, extraOut, freeboard) {
+        const wl      = _hullWetHalfWidthAtNorm(alongNorm, side);
+        const hwOut   = wl.hw * WS + huggingRadius
+                      + flareOutwardBonus(alongNorm, freeboard)
+                      + (extraOut || 0);
         const d       = alongNorm * halfLenW;
         const baseX   = cx + sinT * d;
         const baseZ   = cz + cosT * d;
         return {
             x: baseX + cosT * side * hwOut,
-            z: baseZ - sinT * side * hwOut
+            z: baseZ - sinT * side * hwOut,
+            wet: wl.wet
         };
     }
 
@@ -2587,8 +2633,20 @@ function emitHullWakeParticles(t, dt) {
             if (sl.alongNorm < minA) { minA = sl.alongNorm; sternTipSl = sl; }
         }
     }
-    const bowTipAlong = bowTipSl   ? bowTipSl.alongNorm   :  1.0;
-    const sternAlong  = sternTipSl ? sternTipSl.alongNorm : -1.0;
+    // v166: 船首尾の先端位置は、実測輪郭(hp.shape)の設計喫水での前後端を使う。
+    // 従来は24等分スライスのalongNorm最大/最小＝モデルAABBベースの値だったため、
+    // レーキした船首では「実際の喫水線より前」から船首波・スプレーが出ていた
+    // （旧コードのコメントが繰り返し問題にしていた症状）。喫水線の実測前端なら
+    // 定義上そこが水と接する最前部なので、そのズレが原理的に起きない。
+    let bowTipAlong, sternAlong;
+    if (hp.shape && hp.shape.ready && hp.halfLen > 1e-6 && typeof hullShapeEndsAtY === 'function') {
+        const de = hullShapeEndsAtY(hp.shape, hp.shape.designWaterlineY, _emitWlEnds);
+        bowTipAlong = de.bowAlong   / hp.halfLen;
+        sternAlong  = de.sternAlong / hp.halfLen;
+    } else {
+        bowTipAlong = bowTipSl   ? bowTipSl.alongNorm   :  1.0;
+        sternAlong  = sternTipSl ? sternTipSl.alongNorm : -1.0;
+    }
     const bowFlare    = bowTipSl   ? (bowTipSl.flareAngle   || 0) : 0;
 
     // ── 放出数 ──
@@ -2609,14 +2667,17 @@ function emitHullWakeParticles(t, dt) {
         // along方向（境界に沿った方向）のみの微小ジッター。外向き距離は変えない。
         const alongJitter = (Math.random() - 0.5) * 0.05;
 
+        // v165: 発生高さ(freeboard)を明示して、その高さぶんのフレア張り出しだけを
+        // 受け取る（下のposAttr.array[ii*3+1]に入れる値と一致させること）。
+        const tipFreeboard = isBowSplash ? sizeScale * 0.08 : 0.0;
         let srcX, srcZ;
         if (!isStern) {
             const alongN = THREE.MathUtils.clamp(bowTipAlong - Math.abs(alongJitter), -1, bowTipAlong);
-            const ep = hullEdgePoint(alongN, side, 0);
+            const ep = hullEdgePoint(alongN, side, 0, tipFreeboard);
             srcX = ep.x; srcZ = ep.z;
         } else {
             const alongN = THREE.MathUtils.clamp(sternAlong + Math.abs(alongJitter), sternAlong, 1);
-            const ep = hullEdgePoint(alongN, side, 0);
+            const ep = hullEdgePoint(alongN, side, 0, tipFreeboard);
             srcX = ep.x; srcZ = ep.z;
         }
 
@@ -2697,7 +2758,7 @@ function emitHullWakeParticles(t, dt) {
         const tipNear = Math.random();           // 0=帯の後端、1=船首先端付近
         const alongN  = bowTipAlong - (1.0 - tipNear) * bowCurlBand;
         const side    = Math.random() < 0.5 ? -1 : 1;
-        const ep = hullEdgePoint(alongN, side, sizeScale * 0.05 * Math.random());
+        const ep = hullEdgePoint(alongN, side, sizeScale * 0.05 * Math.random(), sizeScale * 0.05);
         const srcX = ep.x, srcZ = ep.z;
 
         const surfaceY = (typeof getWaveHeight === 'function')
@@ -2829,9 +2890,13 @@ function emitHullWakeParticles(t, dt) {
         const climbT          = Math.pow(Math.random(), 1.6); // 喫水線付近に偏らせる
         const climbFreeboard  = sizeScale * 1.6; // 這い上がりを許容する高さの目安
         const climbYOffset    = climbT * climbFreeboard;
-        const climbOutBonus   = climbT * Math.tan(flareRad) * climbFreeboard;
 
-        const ep = hullEdgePoint(alongN, side, sizeScale * 0.06 * Math.random() + climbOutBonus);
+        // v165: 這い上がった高さぶんのフレア張り出しは hullEdgePoint に
+        // freeboard として渡す（以前はここで climbOutBonus として自前に加算した
+        // 上に、hullEdgePoint内でもデッキ高さぶんの張り出しが無条件に加算されて
+        // いて二重取りになっていた）。
+        const ep = hullEdgePoint(alongN, side, sizeScale * 0.06 * Math.random(),
+                                 sizeScale * 0.05 + climbYOffset);
         const srcX = ep.x, srcZ = ep.z;
 
         const surfaceY = (typeof getWaveHeight === 'function')
@@ -2910,7 +2975,7 @@ function emitHullWakeParticles(t, dt) {
             const side   = Math.random() < 0.5 ? -1 : 1;
             // 外側への初期オフセットにも幅を持たせ、舷から離れた位置からも湧くようにする
             const lateralOffset = sizeScale * (0.2 + Math.random() * 1.6);
-            const ep = hullEdgePoint(alongN, side, lateralOffset);
+            const ep = hullEdgePoint(alongN, side, lateralOffset, sizeScale * 0.30);
             const srcX = ep.x, srcZ = ep.z;
 
             const surfaceY = (typeof getWaveHeight === 'function')
@@ -2988,7 +3053,7 @@ function emitHullWakeParticles(t, dt) {
                 const alongN = THREE.MathUtils.clamp(bowTipAlong - Math.random() * bowCurlBand, -1, bowTipAlong);
                 const sideSign = Math.random() < 0.5 ? -1 : 1;
                 const spreadOut = sizeScale * 0.35 * Math.random(); // 中心〜舷外まで幅広く散らす
-                const ep = hullEdgePoint(alongN, sideSign, spreadOut);
+                const ep = hullEdgePoint(alongN, sideSign, spreadOut, sizeScale * 0.30);
                 const srcX = ep.x, srcZ = ep.z;
 
                 const surfaceY = (typeof getWaveHeight === 'function')
@@ -3053,15 +3118,28 @@ function emitHullWakeParticles(t, dt) {
         // 以前は全パーティクルが喫水線ぴったりの高さから発生していて、垂直方向の
         // 立体感（船体の丸みに沿っている感じ）が無かった。喫水線泡は波切りスプレー
         // よりずっと薄く控えめな演出なので、這い上がる高さも控えめにしている。
-        const wlFlareDeg    = _hullFlareAngleAtNorm(sl.alongNorm);
-        const wlFlareRad    = THREE.MathUtils.clamp(wlFlareDeg, 0, 90) * Math.PI / 180;
         const wlClimbT         = Math.pow(Math.random(), 2.0); // 喫水線付近により強く偏らせる
         const wlClimbFreeboard = sizeScale * 0.7;
         const wlClimbYOffset   = wlClimbT * wlClimbFreeboard;
-        const wlClimbOutBonus  = wlClimbT * Math.tan(wlFlareRad) * wlClimbFreeboard;
 
-        const ep = hullEdgePoint(sl.alongNorm, side, wlClimbOutBonus);
+        // v165-fix【喫水線の泡が船体に沿わない不具合】
+        //  ・這い上がり高さぶんのフレア張り出しは hullEdgePoint に freeboard として
+        //    渡す。以前はここで wlClimbOutBonus として自前に足した上、hullEdgePoint
+        //    内でも「デッキ高さ(sizeScale*3.0)ぶん」の張り出しが無条件に加算されて
+        //    いた。喫水線の泡は水面から高々 sizeScale*0.7 の高さにしかいないのに、
+        //    その4倍以上の高さのフレア張り出しを受けていたことになる。
+        //    フレアのきつい船ほど泡が舷側から大きく外へ流れ出て見えていた。
+        //  ・外縁も静的な設計喫水ではなく実喫水(hullEdgePoint内で
+        //    _hullWetHalfWidthAtNorm)を見るようになったので、傾いて片舷が
+        //    浮き上がったときに泡だけ船体の外へ取り残されることがなくなる。
+        const ep = hullEdgePoint(sl.alongNorm, side, 0, wlClimbYOffset);
         const srcX = ep.x, srcZ = ep.z;
+
+        // v165: そのステーションのその舷が今まさに離水しているなら泡は出さない。
+        //   （水面シェーダーの泡帯も同じ wet で消えるので、両者の見た目が揃う）
+        // wetが中間の値のときは確率的に間引いて、水線が上下する境目でも
+        // パーティクルの量が滑らかに増減するようにする。
+        if (ep.wet < 0.05 || Math.random() > ep.wet) continue;
 
         const surfaceY = (typeof getWaveHeight === 'function')
             ? getWaveHeight(srcX, srcZ, t, false) : 0.0;
@@ -3109,6 +3187,108 @@ function emitHullWakeParticles(t, dt) {
 }
 
 window.getWakeHeightVisual = getWakeHeightVisual;
+
+// ─────────────────────────────────────────
+//  emitTrafficWakeParticles(t, dt)
+//  他の船（59-traffic.js）にも、自分の船と同じ喫水線からの泡・船首のしぶきを出す（他の船の引き波の代わり）。
+//  ・喫水線全体の泡（船体に沿って後ろへ流れる）・船首の先の泡と水しぶき・船首が海面をめくり上げるしぶき・
+//    船尾から後ろへ広がる白い泡（スクリューでかき回された水：引き波の筋になる）
+//  ・粒は自分の船と同じもの（03-particle-systems.js のリング）。カメラに近い、動いている船を 3 隻まで。
+//    遠いほど少なく（粒を自分の船から奪いすぎないように）
+//  ・船体の形は他の船の簡単な形（_tfShapeHW：長さ・幅から）
+// ─────────────────────────────────────────
+const _tfwAcc = new WeakMap();
+function emitTrafficWakeParticles(t, dt) {
+    if (!wakeParticleGeo || !(dt > 0) || typeof traffic === 'undefined' || !traffic.on || !traffic.ships || typeof _tfHullOf !== 'function') return;
+    if (typeof camera === 'undefined' || !camera) return;
+    const cand = [];
+    for (const S of traffic.ships) {
+        if (!S.mesh || !S.mesh.visible || S.st === 'gone' || S.st === 'off' || S.st === 'damaged') continue;
+        if (!(Math.abs(S.v || 0) > 0.35)) continue;
+        const d = Math.hypot(S.mesh.position.x - camera.position.x, S.mesh.position.z - camera.position.z);
+        if (d > 1800 + S.L) continue;
+        cand.push([d, S]);
+    }
+    if (!cand.length) return;
+    cand.sort((a, b) => a[0] - b[0]);
+    const posAttr = wakeParticleGeo.attributes.position, ageAttr = wakeParticleGeo.attributes.age;
+    const typeAttr = wakeParticleGeo.attributes.ptype, velAttr = wakeParticleGeo.attributes.velocity;
+    const spawn = (x, z, yOff, type, vx, vy, vz, sz) => {
+        const ii = wakeParticleIdx;
+        const y = (typeof getWaveHeight === 'function') ? getWaveHeight(x, z, t, false) : 0;
+        posAttr.array[ii * 3] = x; posAttr.array[ii * 3 + 1] = y + yOff; posAttr.array[ii * 3 + 2] = z;
+        ageAttr.array[ii] = 0; typeAttr.array[ii] = type;
+        const D = wakeParticleData[ii];
+        D.vx = vx; D.vy = vy; D.vz = vz;
+        velAttr.array[ii * 3] = vx; velAttr.array[ii * 3 + 1] = vy; velAttr.array[ii * 3 + 2] = vz;
+        D.rand = Math.random(); D.type = type; D.wakeBonus = undefined; D.spawnTime = t; D.sizeScale = sz;
+        wakeParticleIdx = (wakeParticleIdx + 1) % MAX_WAKE_PARTICLES;
+    };
+    let any = false;
+    for (let k = 0; k < Math.min(3, cand.length); k++) {
+        const [dist, S] = cand[k];
+        const H = _tfHullOf(S); if (!H) continue;
+        const v = S.v || 0, dir = v >= 0 ? 1 : -1, kn = Math.abs(v) / 0.514444;
+        const L = S.L;
+        // 喫水線の前後の端（保存した船はモデルの喫水線の形から：59-traffic.js の _tfWaterlineProfile）
+        const bowA = H.bowA !== undefined ? H.bowA : L / 2, sternEnd = H.sternA !== undefined ? H.sternA : -L / 2;
+        const HL = (bowA - sternEnd) / 2, midA = (bowA + sternEnd) / 2;
+        // 粒の大きさの基準（自分の船の sizeScale と同じくらい。船の長さで少しだけ変える）
+        const sz = Math.max(0.15, Math.min(0.8, 0.38 * Math.sqrt(L / 150)));
+        const hug = sz * 0.10;
+        const spdF = Math.min(kn / 12, 1);
+        // 遠いほど少なく（300m までは全部、1800m で 2 割）
+        const f = Math.max(0.2, Math.min(1, 1 - (dist - 300) / 1500 * 0.8)) * (k === 0 ? 1 : 0.7);
+        const A = _tfwAcc.get(S) || { wl: 0, tip: 0, curl: 0, st: 0 };
+        A.wl += kn * 6.0 * f * dt; A.tip += kn * 5.0 * f * dt; A.curl += (kn > 4 ? kn * kn * 0.22 : 0) * f * dt; A.st += kn * 4.0 * f * dt;
+        const ex = (a, side, out) => { const w = H.hw(a) + hug + (out || 0); return [H.x + H.fx * a + H.sx * side * w, H.z + H.fz * a + H.sz * side * w]; };
+        const vShipX = H.fx * v, vShipZ = H.fz * v;
+        const tipA = midA + HL * 0.97 * dir, sternA = midA - HL * 0.97 * dir;        // （後進のときは前後を入れ替える）
+        // 喫水線全体の泡：船体に沿って後ろへ流れる
+        let n = Math.floor(A.wl); A.wl -= n;
+        for (; n > 0; n--) {
+            const a = midA + (Math.random() * 1.9 - 0.95) * HL, side = Math.random() < 0.5 ? -1 : 1;
+            const [x, z] = ex(a, side);
+            const back = (0.12 + 0.28 * spdF) * sz * (0.3 + 0.7 * Math.min(1, ((a - midA) * dir / HL + 1) * 0.5 + 0.3));
+            const out = (0.02 + 0.04 * spdF) * sz;
+            spawn(x, z, Math.pow(Math.random(), 2) * sz * 0.7, 0, -H.fx * back * dir + H.sx * side * out, 0.005 * sz, -H.fz * back * dir + H.sz * side * out, sz);
+        }
+        // 船首の先：泡と水しぶき
+        n = Math.floor(A.tip); A.tip -= n;
+        for (; n > 0; n--) {
+            const side = Math.random() < 0.5 ? -1 : 1, spray = Math.random() < 0.3;
+            const a = tipA - dir * Math.random() * HL * 0.04;
+            const [x, z] = ex(a, side);
+            const out = (0.10 + 0.22 * spdF) * sz;
+            if (spray) spawn(x, z, sz * 0.08, 1, vShipX * 0.05 + H.sx * side * out * 1.2, (0.35 + Math.random()) * sz * spdF, vShipZ * 0.05 + H.sz * side * out * 1.2, sz);
+            else spawn(x, z, 0, 0, vShipX * 0.06 + H.sx * side * out * 0.55, 0.015 * sz, vShipZ * 0.06 + H.sz * side * out * 0.55, sz);
+        }
+        // 船首が海面をめくり上げるしぶき（速いときほど多く・高く）
+        n = Math.floor(A.curl); A.curl -= n;
+        for (; n > 0; n--) {
+            const tipNear = Math.random(), side = Math.random() < 0.5 ? -1 : 1;
+            const a = tipA - dir * (1 - tipNear) * HL * 0.45;
+            const [x, z] = ex(a, side, sz * 0.05 * Math.random());
+            const p = (0.5 + tipNear * 1.3) * spdF;
+            spawn(x, z, sz * 0.05, 1,
+                vShipX * 0.08 + H.sx * side * (0.5 + 0.5 * spdF) * sz * p + H.fx * dir * 0.15 * sz * p,
+                (0.5 + Math.random() * 1.3) * sz * p,
+                vShipZ * 0.08 + H.sz * side * (0.5 + 0.5 * spdF) * sz * p + H.fz * dir * 0.15 * sz * p, sz);
+        }
+        // 船尾：スクリューでかき回された白い泡が、船の幅ほどに広がって後ろに残る（引き波の筋）
+        n = Math.floor(A.st); A.st -= n;
+        for (; n > 0; n--) {
+            const lat = (Math.random() - 0.5) * (H.B || S.B) * 0.9, a = sternA - dir * Math.random() * L * 0.03;
+            const x = H.x + H.fx * a + H.sx * lat, z = H.z + H.fz * a + H.sz * lat;
+            const spread = (Math.random() - 0.5) * 0.2 * sz;
+            spawn(x, z, 0, 0, vShipX * 0.15 + H.sx * spread, 0.008 * sz, vShipZ * 0.15 + H.sz * spread, sz);
+        }
+        _tfwAcc.set(S, A);
+        any = true;
+    }
+    if (any) { posAttr.needsUpdate = true; ageAttr.needsUpdate = true; typeAttr.needsUpdate = true; velAttr.needsUpdate = true; }
+}
+window.emitTrafficWakeParticles = emitTrafficWakeParticles;
 
 // ============================================================
 //  幾何的GM（メタセンタ高さ）自動計算
@@ -3222,6 +3402,18 @@ function computeHullGM() {
 //    physics側:  h_pend = (waterlineOffsetY - cgOffset.y) × physScale
 //    → waterlineOffsetY = cgOffset.y + h_pend_geom / physScale
 // ============================================================
+// 復元力ベース（buoyancy 逆算、横揺れBMベース）。ボタンと、船を開いたときの計算し直しで共用
+function _autoRestorationBase(gm) {
+    const hp = window.hullProfile;
+    const physScale   = Math.max(0.25, physics.scale || 1);
+    const wid         = hp.halfBeam * 2 * physScale;
+    const g_eff       = 9.81;
+    // 17-main-loop.js と同じジャイロ半径
+    const k_gyro_roll = wid * 0.35;
+    const restoringBase_new = gm.BM_roll * g_eff / (k_gyro_roll * k_gyro_roll);
+    return THREE.MathUtils.clamp((restoringBase_new - 1.0) / 1.8, 1.0, 50.0);
+}
+
 function autoTuneRestoration() {
     const hp = window.hullProfile;
     if (!hp || !hp.ready) {
@@ -3236,19 +3428,9 @@ function autoTuneRestoration() {
     }
 
     const physScale        = Math.max(0.25, physics.scale || 1);
-    const len              = hp.halfLen  * 2 * physScale;
-    const wid              = hp.halfBeam * 2 * physScale;
-    const g_eff            = 9.81;
-
-    // 17-main-loop.js と同じジャイロ半径
-    const k_gyro_roll  = wid * 0.35;
-
-    // buoyancy 逆算（横揺れBMベース）
-    const restoringBase_new = gm.BM_roll * g_eff / (k_gyro_roll * k_gyro_roll);
-    const buoyancyNew = THREE.MathUtils.clamp(
-        (restoringBase_new - 1.0) / 1.8,
-        1.0, 50.0
-    );
+    const buoyancyNew = _autoRestorationBase(gm);
+    // 船を開くたびに計算し直す（reapplyAutoBalance）
+    physics.restoreAuto = true;
 
     // 参考値のみ計算（waterlineY は変更しない — 喫水が勝手に変わる問題を防ぐ）
     const h_pend_geom  = gm.KB - gm.KG;
@@ -3285,7 +3467,8 @@ function autoTuneRestoration() {
             `排水量 = ${Math.round(gm.V_m3 * 1.025).toLocaleString()} t<br>` +
             `→ 復元力ベース = <b>${buoyancyNew.toFixed(1)}</b>（GM倍率で微調整可）<br>` +
             `<span style="color:#aaa">参考: 喫水線基準点 推奨値 = ${waterlineYRef.toFixed(2)}` +
-            ` （現在: ${physics.waterlineOffsetY.toFixed(2)}）</span>`;
+            ` （現在: ${physics.waterlineOffsetY.toFixed(2)}）</span><br>` +
+            `<span style="color:#aaa">復元力ベースは、船を開くたびに船体から計算し直します</span>`;
     }
 
     console.log(
@@ -3323,19 +3506,11 @@ function autoTuneCG() {
         return;
     }
 
-    const cgZNew = THREE.MathUtils.clamp(gm.LCB_local, -10.0, 10.0);
+    const cgZNew = _autoCgZ(gm);
     const cgXNew = 0.0; // 船体形状は左右対称スキャンのためTCB=0
-
-    const syncAndFire = (slId, numId, val, dec) => {
-        const sl = document.getElementById(slId);
-        const nm = document.getElementById(numId);
-        if (!sl) return;
-        sl.value = val;
-        sl.dispatchEvent(new Event('input')); // → setter(v) → physics.cgOffset.x/z 更新
-        if (nm) nm.value = val.toFixed(dec ?? 2);
-    };
-    syncAndFire('cgz-slider', 'cgz-num', cgZNew, 2);
-    syncAndFire('cgx-slider', 'cgx-num', cgXNew, 2);
+    _setCgXZPrecise(cgXNew, cgZNew);
+    // 船を開くたびに計算し直す（reapplyAutoBalance）。前後・左右の重心を手で動かすとやめる（09-ui-setup-and-import.js）
+    physics.cgAuto = true;
 
     const el = document.getElementById('gm-readout');
     if (el) {
@@ -3344,11 +3519,65 @@ function autoTuneCG() {
             `<b>重心バランス自動設定（前後・左右）</b><br>` +
             `LCB（浮力中心・前後） = ${gm.LCB_local.toFixed(2)} → CG Z に設定<br>` +
             `TCB（浮力中心・左右） = 0.00（左右対称）→ CG X に設定<br>` +
-            `<span style="color:#aaa">CG Y（高さ）は変更していません（現在: ${physics.cgOffset.y.toFixed(2)}）</span>`;
+            `<span style="color:#aaa">CG Y（高さ）は変更していません（現在: ${physics.cgOffset.y.toFixed(2)}）</span><br>` +
+            `<span style="color:#aaa">船を開くたびに船体から計算し直します（前後・左右の重心を手で動かすと止まります）</span>`;
     }
 
     console.log(`[AutoTuneCG] LCB_local=${gm.LCB_local.toFixed(3)} → cgOffset.z=${cgZNew.toFixed(3)}, cgOffset.x=${cgXNew.toFixed(3)}`);
 }
 
 window.autoTuneCG = autoTuneCG;
+
+// 前後の重心の自動の値（浮力中心 LCB）
+function _autoCgZ(gm) { return THREE.MathUtils.clamp(gm.LCB_local, -10.0, 10.0); }
+// 前後・左右の重心を、目盛り（0.05 刻み）に丸めずに入れる。数字の欄の change から入れると
+// 丸めずに physics.cgOffset へ入る（スライダーから入れると目盛りに丸められ、表示・保存の 2 桁の値とずれていた）
+function _setCgXZPrecise(x, z) {
+    for (const [numId, v] of [['cgx-num', x], ['cgz-num', z]]) {
+        const nm = document.getElementById(numId);
+        if (!nm) continue;
+        nm.value = String(v);
+        nm.dispatchEvent(new Event('change'));   // → setter(v) → physics.cgOffset.x/z 更新
+        nm.value = v.toFixed(2);                 // 表示は 2 桁
+    }
+}
+
+// ============================================================
+//  自動設定の計算し直し（船を開いたとき・船体を測り直したとき）
+// ============================================================
+//  保存する重心の値は 2 桁に丸められ、自動バランスでは目盛り（0.05）にも丸められていたので、
+//  開くたびに少しずれていた。自動にした重心（前後・左右）と復元力ベースは、保存した数字を使わず、
+//  船体を測り直すたびに（船を開くと必ず測り直す：scanHullProfile）計算し直す。
+//  以前の保存（自動にしたかの印が無い：'guess'）は、保存した値が計算した値とほぼ同じなら
+//  自動にしたものとみなす（重心は目盛りと 2 桁の丸めの分まで、復元力ベースは 2% まで）。
+function reapplyAutoBalance() {
+    const cgOn = physics.cgAuto === true || physics.cgAuto === 'guess';
+    const rsOn = physics.restoreAuto === true || physics.restoreAuto === 'guess';
+    if (!cgOn && !rsOn) return;
+    const hp = window.hullProfile;
+    if (!hp || !hp.ready) return;
+    const gm = computeHullGM();
+    if (!gm) return;
+    if (physics.cgAuto === 'guess') {
+        physics.cgAuto = Math.abs(physics.cgOffset.x) < 1e-3 && Math.abs(physics.cgOffset.z - _autoCgZ(gm)) <= 0.035;
+    }
+    if (physics.restoreAuto === 'guess') {
+        const b = _autoRestorationBase(gm);
+        physics.restoreAuto = Math.abs((physics.buoyancyBase || 12.0) - b) <= Math.max(0.02, b * 0.02);
+    }
+    if (physics.cgAuto === true) {
+        const z = _autoCgZ(gm);
+        if (physics.cgOffset.x !== 0 || physics.cgOffset.z !== z) _setCgXZPrecise(0, z);
+    }
+    if (physics.restoreAuto === true) {
+        physics.buoyancyBase = _autoRestorationBase(gm);
+        // GM倍率（スライダー）はそのまま、ベースだけ入れ替える
+        const sl = document.getElementById('buoyancy-slider');
+        if (sl) sl.dispatchEvent(new Event('input'));
+        else physics.buoyancy = physics.buoyancyBase;
+    }
+    console.log(`[AutoBalance] 計算し直し: 重心 ${physics.cgAuto === true ? 'Z=' + physics.cgOffset.z.toFixed(4) : '手動'}` +
+        ` / 復元力ベース ${physics.restoreAuto === true ? physics.buoyancyBase.toFixed(3) : '手動'}`);
+}
+window.reapplyAutoBalance = reapplyAutoBalance;
 

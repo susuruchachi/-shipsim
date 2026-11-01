@@ -1,0 +1,39 @@
+{
+ "key": "hilo",
+ "name": "ヒロ",
+ "lat0": 19.693988083158754,
+ "lat1": 19.7975,
+ "lon0": -155.1171,
+ "lon1": -155.023078384346,
+ "rows": 1152,
+ "cols": 985,
+ "dLat": 8.993216059187306e-05,
+ "dLon": 9.555042241259624e-05,
+ "cell": 10,
+ "scale": 0.1,
+ "kinds": {
+  "0": "sea",
+  "1": "land",
+  "2": "dock water",
+  "3": "pier",
+  "4": "port land"
+ },
+ "img": "webp",
+ "measured": true,
+ "measured_frac": 0.993,
+ "sources": [
+  {
+   "name": "NOAA NCEI Coastal Relief Model 2023（BlueTopo の無い所・陸の高さ）",
+   "url": "https://www.ncei.noaa.gov/products/coastal-relief-model",
+   "license": "米国政府の作成したデータ（パブリック・ドメイン）",
+   "vertical": "NAVD88[m]（ハワイ・プエルトリコは各地の平均海面）",
+   "resolution": "1 秒角"
+  },
+  {
+   "name": "OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）",
+   "url": "https://www.openstreetmap.org/copyright",
+   "license": "ODbL 1.0（© OpenStreetMap contributors）"
+  }
+ ],
+ "channels": true
+}

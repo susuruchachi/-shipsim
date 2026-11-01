@@ -1,0 +1,71 @@
+{
+ "key": "palmbeach",
+ "name": "パーム・ビーチ",
+ "lat0": 26.72645834189099,
+ "lat1": 26.8038,
+ "lon0": -80.0958,
+ "lon1": -80.00091826610799,
+ "rows": 861,
+ "cols": 943,
+ "dLat": 8.993216059187306e-05,
+ "dLon": 0.00010072370901487116,
+ "cell": 10,
+ "scale": 0.1,
+ "kinds": {
+  "0": "sea",
+  "1": "land",
+  "2": "dock water",
+  "3": "pier",
+  "4": "port land"
+ },
+ "img": "webp",
+ "measured": true,
+ "measured_frac": 0.958,
+ "sources": [
+  {
+   "name": "NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)",
+   "url": "https://nauticalcharts.noaa.gov/data/bluetopo.html",
+   "license": "CC0-1.0（一部の元の測量は CC BY 4.0：attribution に提供元）",
+   "crs": "NAD83 / UTM（タイルごと）→ WGS84 の緯度・経度に置き直し",
+   "vertical": "NAVD88[m]",
+   "resolution": [
+    "4m"
+   ],
+   "tiles": [
+    "BH4TD56N",
+    "BH4TF56N",
+    "BH4TF56P",
+    "BH4TD56P"
+   ],
+   "surveys": 113,
+   "survey_years": [
+    1929,
+    2026
+   ],
+   "institutions": [
+    "DOC/NOAA/NOS/NGS/RSD -- Remote Sensing Division",
+    "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+    "DOD/USACE -- US Army Corps of Engineers Jacksonville District",
+    "DOD/USACE/JALBTCX -- Joint Airborne Lidar Bathymetry Technical Center of Expertise",
+    "Florida Inland Navigation District"
+   ],
+   "attribution": [
+    "Florida Inland Navigation District：W00566_MB_1m_MLLW_4of6（CC-BY-4.0）"
+   ]
+  },
+  {
+   "name": "NOAA NCEI Coastal Relief Model 2023（BlueTopo の無い所・陸の高さ）",
+   "url": "https://www.ncei.noaa.gov/products/coastal-relief-model",
+   "license": "米国政府の作成したデータ（パブリック・ドメイン）",
+   "vertical": "NAVD88[m]（ハワイ・プエルトリコは各地の平均海面）",
+   "resolution": "1 秒角"
+  },
+  {
+   "name": "OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）",
+   "url": "https://www.openstreetmap.org/copyright",
+   "license": "ODbL 1.0（© OpenStreetMap contributors）"
+  }
+ ],
+ "channels": true,
+ "fairway_depth": 11.7
+}

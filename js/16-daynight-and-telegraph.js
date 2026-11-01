@@ -1,5 +1,8 @@
 function changeTelegraph(dir) {
+    const prev = physics.telegraphState;
     physics.telegraphState = Math.max(-3, Math.min(3, physics.telegraphState + dir));
+    // ベルを鳴らし、機関室の応答を待つ（37-bridge-controls.js）
+    if (typeof onTelegraphOrder === 'function') onTelegraphOrder(prev, physics.telegraphState);
 }
 
 function onWindowResize() {
@@ -30,72 +33,87 @@ function updateWindowGlow(factor) {
     windowGlowMaterials.forEach((mat) => {
         mat.emissiveIntensity = mat.userData.baseEmissiveIntensity * eff;
     });
-    // 同じ係数で窓グローのPointLightも連動（windowGlowMultスライダーで輝度と照明が同時に変わる）
-    windowGlowLights.forEach(pl => {
-        pl.intensity = pl.userData.wgBaseIntensity * eff;
-    });
-
-    // v169: プロムナードライト（丸い照明カバー用の個別小型PointLight）も同じ係数で連動
-    promenadeLights.forEach(pl => {
-        pl.intensity = pl.userData.wgBaseIntensity * eff;
-    });
-
-    // v168: ライトプローブの強度も同じ係数で連動させる。SH係数自体（分布の形）は
-    // buildWindowGlowLights()で焼き込み済みなので、ここではintensity(全係数への
-    // 一律乗数)を書き換えるだけ——毎フレーム呼ばれても軽い処理。
-    if (windowGlowLightProbe) {
-        // wgProbeBaseIntensityは「フル点灯時にどれくらい底上げするか」の基準値。
-        // PointLightのwgBaseIntensity(18.0)とは役割が違う（プローブは面全体への
-        // 弱い底上げ、PointLightは局所的な強いアクセント）ため、別の低めの値にする。
-        windowGlowLightProbe.intensity = 1.2 * eff;
-    }
-
-    // v166: シャドウマップの再計算はintensity更新とは別にローテーション式で間引く
-    // （明るさのフェードは毎フレーム滑らかに、影の再計算だけを間引く）。
-    // wgShadowUpdateInterval フレームごとに1灯だけneedsUpdate=trueを立てて回す。
-    // 8灯 × interval フレームで一巡するので、intervalが大きいほど1灯あたりの
-    // 更新頻度は下がる（見た目には「船の動きに対して影の追従が少し遅れる」形になるが、
-    // 窓明かりの影自体は元々コントラストの弱いディテールなので目立ちにくい）。
-    const interval = (typeof perf !== 'undefined' && perf.wgShadowUpdateInterval) || 1;
-    if (interval <= 1) {
-        // high品質など間引き不要な設定では従来通り毎フレーム全灯更新
-        windowGlowLights.forEach(pl => { if (pl.castShadow) pl.shadow.needsUpdate = true; });
-    } else {
-        // 1フレームにつき1灯だけ更新し、8灯 × interval フレームで全灯が一巡する。
-        // 例：8灯・interval=3フレームなら、24フレームで8灯すべてが1回ずつ更新される
-        // （1灯あたりの実質更新間隔は24フレーム、うち「担当フレーム」は3フレームに1回巡ってくる）。
-        const numLights = windowGlowLights.length;
-        if (numLights > 0 && wgShadowFrameCounter % interval === 0) {
-            const slotToUpdate = Math.floor(wgShadowFrameCounter / interval) % numLights;
-            windowGlowLights.forEach(pl => {
-                if (pl.castShadow && pl.userData.wgShadowSlot === slotToUpdate) {
-                    pl.shadow.needsUpdate = true;
-                }
-            });
-        }
-    }
-    wgShadowFrameCounter++;
+    // 発光パネル（窓・灯具を面光源として扱うもの、26-glow-emitters.js）の明るさも
+    // 同じ係数で連動させる。windowGlowMultスライダーで、窓の輝きと周囲を照らす
+    // 光が同時に変わる。
+    if (typeof setAreaLightGlowFactor === 'function') setAreaLightGlowFactor(eff);
+    // 船内全体をほんのり底上げする環境光プローブ。SH係数（分布の形）は
+    // 組み立て時に焼き込み済みなので、ここでは全体の強さだけを書き換える。
+    if (windowGlowLightProbe) windowGlowLightProbe.intensity = 1.2 * eff;
 }
 
+// ── 太陽・月の位置（天文の式：船のいる緯度・経度と、日付・時刻から）──
+// 地軸の傾き（23.44°）で、太陽の通り道の高さが季節で変わり、緯度が高いほど低くなる
+// （夏の北の海は夜が短く、冬は昼が短い。赤道の近くでは真上を通る）。
+// 時計（physics.dayProgress）は船のいる所の地方時：太陽がほぼ真南（南半球では真北）に来るのが 12 時ごろ
+// （昔の船の時計と同じく、経度が変わっても正午は正午。均時差で ±16 分ずれる）。
+// 「世界」を航海していないとき（外洋）は、北緯 40°・西経 30°（北大西洋）として計算する。
+// 月：黄経は太陽から月齢ぶん東（満ち欠けが画面の月齢とそろうように）、黄緯は白道の傾き（5.1°）で上下する。
+// 以前は緯度・季節に関係なく、毎日同じ通り道（いつも東から昇って最高 67°）だった。
+const SKY_OCEAN_LATLON = { lat: 40, lon: -30 };
+const _SKY_RAD = Math.PI / 180;
+function skyObserverLatLon() {
+    if (window.world && window.world.mode === 'world' && typeof worldShipLatLon === 'function') {
+        const ll = worldShipLatLon();
+        if (Number.isFinite(ll.lat) && Number.isFinite(ll.lon)) return ll;
+    }
+    return SKY_OCEAN_LATLON;
+}
+// 黄道座標（黄経・黄緯）→ 赤道座標（赤経・赤緯）
+function _skyEquatorial(lam, beta, eps) {
+    const sl = Math.sin(lam), cl = Math.cos(lam), sb = Math.sin(beta), cb = Math.cos(beta);
+    return {
+        ra: Math.atan2(sl * Math.cos(eps) * cb - sb * Math.sin(eps), cl * cb),
+        dec: Math.asin(Math.max(-1, Math.min(1, sb * Math.cos(eps) + cb * Math.sin(eps) * sl))),
+    };
+}
+// 赤経・赤緯 → 空の向き（three.js の座標：+x 西・+y 上・+z 北）。lst＝地方恒星時、lat＝緯度（ラジアン）
+function _skyHorizon(q, lst, lat, out) {
+    const H = lst - q.ra;   // 時角（正＝南中を過ぎて西へ）
+    const sd = Math.sin(q.dec), cd = Math.cos(q.dec), sp = Math.sin(lat), cp = Math.cos(lat);
+    const east = -cd * Math.sin(H), north = cp * sd - sp * cd * Math.cos(H), up = sp * sd + cp * cd * Math.cos(H);
+    return out.set(-east, up, north).normalize();
+}
+const _skySunDir = new THREE.Vector3(), _skyMoonDir = new THREE.Vector3();
+const skyFrameNow = { n: 0, lst: 0, lat: 40 * _SKY_RAD, lon: -30, eps: 23.44 * _SKY_RAD };
+window.skyFrameNow = skyFrameNow;
+function skyBodyDirections(dayProgress) {
+    const ll = skyObserverLatLon();
+    const day = (typeof calDayNow === 'function') ? calDayNow() : 0;
+    // 2000 年 1 月 1 日 12 時（世界時）からの日数。世界時＝地方時 − 経度/15 時間
+    const n = CAL_JD0 + day + dayProgress - ll.lon / 360 - 2451545.0;
+    const L = 280.460 + 0.9856474 * n, g = (357.528 + 0.9856003 * n) * _SKY_RAD;
+    const lamS = (L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * _SKY_RAD;
+    const eps = (23.439 - 0.0000004 * n) * _SKY_RAD;       // 地軸の傾き
+    const lst = (280.46061837 + 360.98564736629 * n + ll.lon) * _SKY_RAD;
+    const lat = ll.lat * _SKY_RAD;
+    _skyHorizon(_skyEquatorial(lamS, 0, eps), lst, lat, _skySunDir);
+    const F = (93.272 + 13.229350 * n) * _SKY_RAD;
+    _skyHorizon(_skyEquatorial(lamS + (physics.moonPhase || 0) * 2 * Math.PI, 5.128 * _SKY_RAD * Math.sin(F), eps), lst, lat, _skyMoonDir);
+    // 星空（70-night-sky.js）も同じ時刻・場所で回す：J2000 からの日数・地方恒星時・緯度・地軸の傾き
+    skyFrameNow.n = n; skyFrameNow.lst = lst; skyFrameNow.lat = lat; skyFrameNow.lon = ll.lon; skyFrameNow.eps = eps;
+    return { sun: _skySunDir, moon: _skyMoonDir, lat: ll.lat, lon: ll.lon };
+}
+window.skyBodyDirections = skyBodyDirections;
+// 月明かりの強さ（満月が高く昇った晴れの夜を 1）。
+// 満ち欠け：月の等級 m = −12.73 + 0.026|ψ| + 4×10⁻⁹ψ⁴（ψ＝満月からの角度）。半月で満月の約 1/10、三日月で約 1/50。
+// 高さ：地平線の近くは斜めに当たる上に大気で弱まる。雲が厚いほど暗く
+function skyMoonLight(phase, moonUp, cloud) {
+    const psi = Math.abs(((phase % 1) + 1) % 1 - 0.5) * 360;
+    const ph = Math.pow(10, -0.4 * (0.026 * psi + 4e-9 * Math.pow(psi, 4)));
+    const alt = smoothstep(-0.015, 0.06, moonUp) * (0.35 + 0.65 * Math.min(1, Math.max(0, moonUp) / 0.5));
+    return ph * alt * (1 - 0.8 * Math.max(0, Math.min(1, cloud || 0)));
+}
+window.skyMoonLight = skyMoonLight;
+
 function updateDayNightCycle(dayProgress) {
-    const sunAngle = dayProgress * Math.PI * 2 - Math.PI * 0.5;
-    const tilt = 0.4; 
     const sunDistance = 400;
-
-    const sunX = Math.cos(sunAngle) * sunDistance;
-    const sunY = Math.sin(sunAngle) * sunDistance * Math.cos(tilt);
-    const sunZ = -Math.sin(sunAngle) * sunDistance * Math.sin(tilt);
-
-    const sunPos = new THREE.Vector3(sunX, sunY, sunZ);
-
-    // 月の位置は太陽との位相差（月齢）で決まる。
-    // moonPhase=0→新月(太陽と同方向), 0.5→満月(太陽の反対側)
-    // 月は太陽より「遅れて」公転するので、moonPhaseが増えるほど太陽より後方（西）へ移動する
-    const moonAngle = sunAngle - physics.moonPhase * Math.PI * 2;
-    const moonX = Math.cos(moonAngle) * sunDistance;
-    const moonY = Math.sin(moonAngle) * sunDistance * Math.cos(tilt);
-    const moonZ = -Math.sin(moonAngle) * sunDistance * Math.sin(tilt);
-    const moonPos = new THREE.Vector3(moonX, moonY, moonZ);
+    const bodies = skyBodyDirections(dayProgress);
+    const sunPos = bodies.sun.clone().multiplyScalar(sunDistance);
+    const moonPos = bodies.moon.clone().multiplyScalar(sunDistance);
+    const sunY = sunPos.y;
+    physics.sunElev = bodies.sun.y;      // 太陽の高さ（sin）：航海灯・流れ星・オーロラが夜かどうかに使う
+    physics.moonElev = bodies.moon.y;
 
     let lightIntensity = 0.0;
     let lightColor = new THREE.Color();
@@ -112,7 +130,11 @@ function updateDayNightCycle(dayProgress) {
     updateWindowGlow(lightingNightFactor);
     applyGlbLightIntensities();
 
-    const moonPhaseFactor = Math.sin(physics.moonPhase * Math.PI);
+    // 月明かり（満ち欠け・月の高さ・雲）。夜の明るさ・空・自動露出（30-auto-exposure.js）に使う
+    const moonLight = skyMoonLight(physics.moonPhase, bodies.moon.y, window.weather ? weather.cloud : 0);
+    window.skyMoonLightNow = moonLight;
+    // 薄明：日没後も太陽が地平線の下 12° くらいまでは、空からの光が少し残る
+    const twilight = smoothstep(-0.21, 0.0, sunElevRatio);
 
     let ambientIntensity = 0.0;
     let hemiIntensity = 0.0;
@@ -123,7 +145,8 @@ function updateDayNightCycle(dayProgress) {
         
         if (sunHeightRatio < 0.15) {
             const t = Math.max(0.0, sunHeightRatio / 0.15);
-            lightIntensity = 0.2 + t * 1.0;
+            // 地平線に沈む直前は直射が消えていく（夜の月明かりへなめらかにつながるように）
+            lightIntensity = (0.2 + t * 1.0) * smoothstep(-0.01, 0.04, sunHeightRatio);
             lightColor.setRGB(1.0, 0.4 + t * 0.56, 0.15 + t * 0.7); 
             background.setRGB(0.4 * t + 0.35 * (1-t), 0.55 * t + 0.2 * (1-t), 0.75 * t + 0.15 * (1-t));
             fogColor.copy(background);
@@ -138,64 +161,107 @@ function updateDayNightCycle(dayProgress) {
             hemiIntensity = 0.8;
         }
     } else {
+        // 夜：月明かり（満ち欠けと高さで）＋ 星明かり ＋ 日没直後の薄明。
+        // 以前は半月でも満月の半分ほどの明るさがあり、月が沈んでいても空からの光がかなり残っていて、夜が明るかった
         activeLightPos.copy(moonPos);
-        const moonY = moonPos.y;
-        const moonHeightRatio = moonY / sunDistance;
-        const baseMoonIntensity = 0.25 * moonPhaseFactor;
-        
-        // Moon above horizon: full light; below horizon: fade out quickly
-        const moonAbove = smoothstep(-0.05, 0.08, moonHeightRatio);
-        lightIntensity = baseMoonIntensity * moonAbove;
-        const mc = baseMoonIntensity * 4 * moonAbove;
-        lightColor.setRGB(0.35 * mc, 0.45 * mc, 0.65 * mc);
-        const bgBright = 0.01 + 0.04 * moonPhaseFactor * moonAbove;
-        background.setRGB(bgBright, bgBright * 1.5, bgBright * 3.0);
+        lightIntensity = 0.20 * moonLight;
+        lightColor.setRGB(0.55, 0.66, 0.90);
+        const tw2 = twilight * twilight;
+        const bgBright = 0.004 + 0.03 * moonLight;
+        // 薄明のうちは、日の入り直後の空の色（昼の側の朝夕の色）から夜の色へ
+        background.setRGB(bgBright + (0.35 - bgBright) * tw2, bgBright * 1.5 + (0.2 - bgBright * 1.5) * tw2, bgBright * 3.0 + (0.15 - bgBright * 3.0) * tw2);
         fogColor.copy(background);
-        ambientIntensity = 0.04 + 0.08 * moonPhaseFactor * moonAbove;
-        hemiIntensity = 0.03 + 0.12 * moonPhaseFactor * moonAbove;
+        ambientIntensity = 0.012 + 0.07 * moonLight + 0.15 * tw2;
+        hemiIntensity = 0.012 + 0.10 * moonLight + 0.2 * tw2;
     }
 
     if (!sunLight.userData.currentPos) sunLight.userData.currentPos = activeLightPos.clone();
     sunLight.userData.currentPos.lerp(activeLightPos, 0.03);
     sunLight.position.copy(sunLight.userData.currentPos);
-    sunLight.intensity += (lightIntensity * lightSettings.sunMult - sunLight.intensity) * 0.05;
+    // v170: 天候による減光。時刻で決まる明るさに掛け算することで、
+    // 「曇りの朝」「快晴の夕方」が自然に両立する（どちらか一方が
+    // もう一方を上書きしてしまわない）。
+    const wxMul = window.weatherLightMul || { sun: 1, ambient: 1, hemi: 1, fog: 1, grey: 0, waterDark: 1 };
+    // 曇天・雨・霧では、空と霧の色を灰色へ寄せ、少し暗くする（青空の色のまま
+    // 暗くなるだけだと、どんよりした天気に見えないため）
+    if (wxMul.grey > 0.001) {
+        const g = wxMul.grey;
+        for (const c of [fogColor, background]) {
+            const l = (c.r * 0.3 + c.g * 0.55 + c.b * 0.15) * (1 - g * 0.35);
+            c.setRGB(c.r + (l - c.r) * g, c.g + (l - c.g) * g, c.b + (l * 1.04 - c.b) * g);
+        }
+    }
+    sunLight.intensity += (lightIntensity * lightSettings.sunMult * wxMul.sun - sunLight.intensity) * 0.05;
     sunLight.color.lerp(lightColor, 0.05);
     scene.background.lerp(background, 0.05);
     scene.fog.color.lerp(fogColor, 0.05);
-    const targetFogDensity = (isNight ? 0.00015 : 0.00025) * lightSettings.fogMult;
+    // 荒天ほど視程が落ちる（しぶき・降水・もやで霞む）
+    const targetFogDensity = (isNight ? 0.00015 : 0.00025) * lightSettings.fogMult * wxMul.fog;
+    window.fogClearDensity = isNight ? 0.00015 : 0.00025;   // 晴れの日の霞の濃さ（空の霞の計算で、これより濃い分だけ使う：29-weather-fx.js）
     scene.fog.density += (targetFogDensity - scene.fog.density) * 0.02;
 
-    ambientLight.intensity += (ambientIntensity * lightSettings.ambientMult - ambientLight.intensity) * 0.05;
-    hemiLight.intensity += (hemiIntensity * lightSettings.hemiMult - hemiLight.intensity) * 0.05;
+    ambientLight.intensity += (ambientIntensity * lightSettings.ambientMult * wxMul.ambient - ambientLight.intensity) * 0.05;
+    hemiLight.intensity += (hemiIntensity * lightSettings.hemiMult * wxMul.hemi - hemiLight.intensity) * 0.05;
     if (fillLight) {
-        const targetFill = lightIntensity * 0.3 * lightSettings.fillMult;
+        // 補助光（影を作らない、反対側からの光）は、晴れた昼は弱く：日陰を均一に明るくして、陰影が薄くなっていた
+        const clear = isNight ? 0 : Math.max(0, Math.min(1, wxMul.sun));
+        const targetFill = lightIntensity * 0.3 * lightSettings.fillMult * (1 - 0.7 * clear);
         fillLight.intensity += (targetFill - fillLight.intensity) * 0.05;
     }
 
     if (waterMesh && waterMesh.material.uniforms) {
         waterMesh.material.uniforms.sunDir.value.copy(activeLightPos).sub(camera.position).normalize();
-        waterMesh.material.uniforms.sunColor.value.copy(sunLight.color);
+        // 水面の照り返しの色：昼は太陽の色、夜は月明かりの強さぶん（以前は月が出ていれば満ち欠けによらず明るく、
+        // 月明かりの照り返しが明るすぎた）。日の入り・日の出で急に変わらないよう少しずつ寄せる
+        {
+            const sc = waterMesh.material.uniforms.sunColor.value;
+            if (isNight) _dnWaterSun.setRGB(0.35, 0.45, 0.65).multiplyScalar(0.55 * moonLight);
+            else _dnWaterSun.copy(sunLight.color);
+            sc.lerp(_dnWaterSun, 0.05);
+        }
 
         const u = waterMesh.material.uniforms;
         if (!isNight) {
             const sunH = Math.max(0, sunY / sunDistance);
             const t = Math.min(sunH / 0.15, 1.0);
+            // 外洋の深い水：濃い紺（以前は緑がかった明るい水色で、南の島の浅い海のようだった）。
+            // shallowColor は波の頭・逆光で透ける水の色（少し明るい青緑）。朝夕は青みが抜けて暗く
             u.deepColor.value.setRGB(
-                0.01 + (1 - t) * 0.06,
-                0.06 + t * 0.06,
-                0.18 + t * 0.04
+                0.010 + (1 - t) * 0.012,
+                0.030 + t * 0.006,
+                0.062 + t * 0.016
             );
             u.shallowColor.value.setRGB(
-                0.03 + (1 - t) * 0.12,
-                0.28 * (0.5 + t * 0.5),
-                0.42 * (0.5 + t * 0.5)
+                0.020 + (1 - t) * 0.030,
+                0.085 * (0.6 + t * 0.4),
+                0.110 * (0.6 + t * 0.4)
             );
             u.foamColor.value.setRGB(0.92, 0.97, 1.00);
         } else {
-            const b = 0.005 + 0.03 * moonPhaseFactor;
+            const b = 0.003 + 0.02 * moonLight;
             u.deepColor.value.setRGB(b * 0.5, b * 0.8, b * 2.0);
             u.shallowColor.value.setRGB(b * 1.0, b * 2.0, b * 4.5);
-            u.foamColor.value.setRGB(0.3 + moonPhaseFactor * 0.3, 0.35 + moonPhaseFactor * 0.35, 0.4 + moonPhaseFactor * 0.4);
+            // 夜の泡は月明かりの分だけ（白波が暗い海に明るく浮きすぎないように。月が無ければほとんど見えない）
+            const fm = 0.06 + 0.3 * moonLight;
+            u.foamColor.value.setRGB(fm, fm * 1.12, fm * 1.28);
+        }
+        // 水面に映る空の色：水平線の近くの空（05-sky-dome.js と同じ昼・朝夕・夜の混ぜ方）。以前は昼の空色のままで、
+        // 夕方や夜に、遠くの海（斜めに見るので空がよく映る）だけ明るい青に見えていた
+        if (u.skyReflColor) {
+            const sh = sunY / sunDistance, ss = (a, b, x) => { const k = Math.max(0, Math.min(1, (x - a) / (b - a))); return k * k * (3 - 2 * k); };
+            const dayF = ss(-0.18, 0.18, sh), dawnF = ss(-0.25, 0.0, sh) * (1 - ss(0.0, 0.25, sh));
+            const mb = 0.55 + 0.6 * moonLight;   // 05-sky-dome.js の夜の地平線の色と同じ（月明かりで明るく）
+            const nr = 0.010 * mb, ng = 0.016 * mb, nb = 0.040 * mb;
+            const r0 = nr + (0.42 - nr) * dawnF, g0 = ng + (0.26 - ng) * dawnF, b0 = nb + (0.16 - nb) * dawnF;
+            u.skyReflColor.value.setRGB(r0 + (0.30 - r0) * dayF, g0 + (0.52 - g0) * dayF, b0 + (0.82 - b0) * dayF);
+        }
+        // 曇天・荒天では海の色も暗く沈む
+        const wd = (typeof wxMul.waterDark === 'number') ? wxMul.waterDark : 1;
+        if (wd < 0.999) {
+            if (u.skyReflColor) u.skyReflColor.value.multiplyScalar(wd);
+            u.deepColor.value.multiplyScalar(wd);
+            u.shallowColor.value.multiplyScalar(wd);
+            u.foamColor.value.multiplyScalar(0.55 + 0.45 * wd);
         }
     }
     if (skyMesh && skyMesh.material.uniforms) {
@@ -203,6 +269,89 @@ function updateDayNightCycle(dayProgress) {
         skyMesh.material.uniforms.sunDirection.value.copy(sunPos).normalize();
         skyMesh.material.uniforms.moonDirection.value.copy(moonPos).normalize();
         skyMesh.material.uniforms.moonPhase.value = physics.moonPhase;
+        if (skyMesh.material.uniforms.moonLight) skyMesh.material.uniforms.moonLight.value = moonLight;
     }
 }
+const _dnWaterSun = new THREE.Color();
 
+
+// ════════════════════════════════════════════════════════════════
+//  暦（日付）と月齢
+// ════════════════════════════════════════════════════════════════
+//  日付は 1800 年 1 月 1 日から今日まで選べる。時刻が 24 時を過ぎれば次の日になる。
+//  月齢は日付と時刻から天文の式で出す（平均の朔望月 29.530589 日。2000 年 1 月 6 日 18 時ごろの新月が基準）。
+//  月齢を手で変えたときは、元の日付にいちばん近い、その月齢の日にする。
+//  physics.dateDay0：gameTime の 0 日目が、1800 年 1 月 1 日から数えて何日目か
+const CAL_JD0 = 2378496.5;                  // 1800-01-01 0 時のユリウス日
+const CAL_SYNODIC = 29.530588853;
+const CAL_NEW_MOON_JD = 2451550.26;
+function _calUTC(y, m, d) { const t = new Date(0); t.setUTCFullYear(y, m - 1, d); t.setUTCHours(0, 0, 0, 0); return t.getTime(); }
+const CAL_MS0 = _calUTC(1800, 1, 1);
+function calDayOf(y, m, d) { return Math.round((_calUTC(y, m, d) - CAL_MS0) / 86400000); }
+function calDateOf(n) { const t = new Date(CAL_MS0 + n * 86400000); return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate() }; }
+function calToday() { const t = new Date(); return calDayOf(t.getFullYear(), t.getMonth() + 1, t.getDate()); }
+function calDayNow() {
+    if (!Number.isFinite(physics.dateDay0)) physics.dateDay0 = calToday();
+    return physics.dateDay0 + Math.floor(physics.gameTime / physics.dayDuration);
+}
+function calISO(n) { const q = calDateOf(n); return `${String(q.y).padStart(4, '0')}-${String(q.m).padStart(2, '0')}-${String(q.d).padStart(2, '0')}`; }
+// その日（時刻も）の月齢（0＝新月、0.5＝満月）
+function calMoonPhaseAt(n, frac) {
+    const jd = CAL_JD0 + n + (frac || 0);
+    const p = ((jd - CAL_NEW_MOON_JD) / CAL_SYNODIC) % 1;
+    return p < 0 ? p + 1 : p;
+}
+function calMoonPhase() { return calMoonPhaseAt(calDayNow(), physics.dayProgress || 0); }
+// 日付を決める（時刻はそのまま）。1800 年 1 月 1 日〜今日
+function calSetDay(n) {
+    n = Math.max(0, Math.min(calToday(), Math.round(n)));
+    physics.dateDay0 = n - Math.floor(physics.gameTime / physics.dayDuration);
+    physics.moonPhase = calMoonPhase();
+    calSyncUI(true);
+}
+// 月齢を決める：元の日付にいちばん近い、その月齢の日へ（同じ時刻のまま）
+function calSetMoonPhase(p) {
+    const n = calDayNow(), cur = calMoonPhase();
+    let dp = ((p - cur) % 1 + 1.5) % 1 - 0.5;                    // −0.5〜0.5 周
+    let k = Math.round(dp * CAL_SYNODIC);
+    // 今日より先にはできないので、前の周の同じ月齢へ
+    if (n + k > calToday()) k -= Math.round(CAL_SYNODIC);
+    calSetDay(n + k);
+}
+let _calShown = null;
+function calSyncUI(force) {
+    const n = calDayNow();
+    const el = document.getElementById('date-input');
+    if (el && document.activeElement !== el && (force || _calShown !== n)) { el.max = calISO(calToday()); el.value = calISO(n); }
+    _calShown = n;
+    const ps = document.getElementById('phase-slider'), pn = document.getElementById('phase-num');
+    if (ps && document.activeElement !== ps) ps.value = physics.moonPhase;
+    if (pn && document.activeElement !== pn) pn.value = physics.moonPhase.toFixed(2);
+    const ml = document.getElementById('moon-age');
+    if (ml) {
+        const age = physics.moonPhase * CAL_SYNODIC;
+        const name = physics.moonPhase < 0.03 || physics.moonPhase > 0.97 ? '新月' : Math.abs(physics.moonPhase - 0.5) < 0.03 ? '満月'
+            : Math.abs(physics.moonPhase - 0.25) < 0.04 ? '上弦' : Math.abs(physics.moonPhase - 0.75) < 0.04 ? '下弦' : '';
+        ml.textContent = `月齢 ${age.toFixed(1)}${name ? '（' + name + '）' : ''}`;
+    }
+}
+window.calDayNow = calDayNow; window.calSetDay = calSetDay; window.calSetMoonPhase = calSetMoonPhase;
+window.calISO = calISO; window.calMoonPhase = calMoonPhase; window.calDayOf = calDayOf; window.calSyncUI = calSyncUI;
+
+// ── オーロラ（天候の欄のボタン）：今夜から出す・止める（夜だけ見える） ──
+function auroraToggle(on) {
+    const days = physics.gameTime / physics.dayDuration;
+    if (on === undefined) on = !(window._auroraHold || days >= nextAuroraDay);      // ボタンの表示（auroraSyncUI）と同じ決め方
+    if (on) { nextAuroraDay = days; window._auroraHold = true; }
+    else { window._auroraHold = false; nextAuroraDay = days + 25 + Math.random() * 9; }
+    auroraSyncUI();
+}
+function auroraSyncUI() {
+    const b = document.getElementById('aurora-btn');
+    if (!b) return;
+    const days = physics.gameTime / physics.dayDuration;
+    const on = !!window._auroraHold || days >= nextAuroraDay;
+    const lab = on ? '🌌 オーロラを止める' : '🌌 オーロラを出す（夜に見えます）';
+    if (b.textContent !== lab) b.textContent = lab;
+}
+window.auroraToggle = auroraToggle;

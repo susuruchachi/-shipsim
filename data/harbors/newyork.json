@@ -1,0 +1,85 @@
+{
+ "key": "newyork",
+ "name": "ニューヨーク",
+ "lat0": 40.594917332212844,
+ "lat1": 40.83,
+ "lon0": -74.205,
+ "lon1": -73.90494614926305,
+ "rows": 2615,
+ "cols": 2530,
+ "dLat": 8.993216059187306e-05,
+ "dLon": 0.00011864525533291608,
+ "cell": 10,
+ "scale": 0.1,
+ "kinds": {
+  "0": "sea",
+  "1": "land",
+  "2": "dock water",
+  "3": "pier",
+  "4": "port land"
+ },
+ "img": "webp",
+ "measured": true,
+ "measured_frac": 0.954,
+ "sources": [
+  {
+   "name": "NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)",
+   "url": "https://nauticalcharts.noaa.gov/data/bluetopo.html",
+   "license": "CC0-1.0（一部の元の測量は CC BY 4.0：attribution に提供元）",
+   "crs": "NAD83 / UTM（タイルごと）→ WGS84 の緯度・経度に置き直し",
+   "vertical": "NAVD88[m]",
+   "resolution": [
+    "4m"
+   ],
+   "tiles": [
+    "BH4XC5FL",
+    "BH4XC5FM",
+    "BH4XB5FJ",
+    "BH4XC5FJ",
+    "BH4XD5FJ",
+    "BH4XB5FK",
+    "BH4XC5FK",
+    "BH4XD5FK",
+    "BH4XF5FK",
+    "BH4XD5FL",
+    "BH4XF5FL",
+    "BH4XF5FM",
+    "BH4X95FJ",
+    "BH4XF5FJ",
+    "BH4XB5FL",
+    "BH4XB5FM",
+    "BH4XD5FM"
+   ],
+   "surveys": 468,
+   "survey_years": [
+    1915,
+    2026
+   ],
+   "institutions": [
+    "COWI Consulting, Inc.",
+    "DOC/NOAA/NOS/NGS/RSD -- Remote Sensing Division",
+    "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+    "DOD/USACE -- US Army Corps of Engineers New York District",
+    "DOD/USACE/JALBTCX -- Joint Airborne Lidar Bathymetry Technical Center of Expertise"
+   ],
+   "attribution": [
+    "COWI Consulting, Inc.：E01007_MB_2m_MLLW_interp_1of1（cc-by-4.0）",
+    "COWI Consulting, Inc.：E01007_MB_MLLW_1of1（cc-by-4.0）"
+   ]
+  },
+  {
+   "name": "NOAA NCEI Coastal Relief Model 2023（BlueTopo の無い所・陸の高さ）",
+   "url": "https://www.ncei.noaa.gov/products/coastal-relief-model",
+   "license": "米国政府の作成したデータ（パブリック・ドメイン）",
+   "vertical": "NAVD88[m]（ハワイ・プエルトリコは各地の平均海面）",
+   "resolution": "1 秒角"
+  },
+  {
+   "name": "OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）",
+   "url": "https://www.openstreetmap.org/copyright",
+   "license": "ODbL 1.0（© OpenStreetMap contributors）"
+  }
+ ],
+ "channels": true,
+ "fairway_depth": 11.4
+}

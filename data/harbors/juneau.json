@@ -1,0 +1,65 @@
+{
+ "key": "juneau",
+ "name": "ジュノー",
+ "lat0": 58.2389684097304,
+ "lat1": 58.3164,
+ "lon0": -134.4445,
+ "lon1": -134.29723643079325,
+ "rows": 862,
+ "cols": 862,
+ "dLat": 8.993216059187306e-05,
+ "dLon": 0.00017103782718556063,
+ "cell": 10,
+ "scale": 0.1,
+ "kinds": {
+  "0": "sea",
+  "1": "land",
+  "2": "dock water",
+  "3": "pier",
+  "4": "port land"
+ },
+ "img": "webp",
+ "measured": true,
+ "measured_frac": 0.985,
+ "sources": [
+  {
+   "name": "NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)",
+   "url": "https://nauticalcharts.noaa.gov/data/bluetopo.html",
+   "license": "CC0-1.0（元の測量もすべて CC0-1.0 を確認）",
+   "crs": "NAD83 / UTM（タイルごと）→ WGS84 の緯度・経度に置き直し",
+   "vertical": "NAVD88[m]",
+   "resolution": [
+    "4m"
+   ],
+   "tiles": [
+    "BH2TJ5Q8",
+    "BH2TJ5Q9",
+    "BH2TK5Q8",
+    "BH2TL5Q8",
+    "BH2TK5Q9"
+   ],
+   "surveys": 13,
+   "survey_years": [
+    1936,
+    2019
+   ],
+   "institutions": [
+    "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+    "DOD/USACE -- US Army Corps of Engineers Alaska District"
+   ],
+   "attribution": []
+  },
+  {
+   "name": "NOAA NCEI ETOPO 2022（陸の高さだけ）",
+   "url": "https://www.ncei.noaa.gov/products/etopo-global-relief-model",
+   "license": "米国政府の作成したデータ（パブリック・ドメイン）",
+   "resolution": "1.5 分角"
+  },
+  {
+   "name": "OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）",
+   "url": "https://www.openstreetmap.org/copyright",
+   "license": "ODbL 1.0（© OpenStreetMap contributors）"
+  }
+ ],
+ "channels": true
+}

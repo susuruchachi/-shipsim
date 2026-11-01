@@ -1,0 +1,74 @@
+{
+ "key": "morehead",
+ "name": "モアヘッド・シティ",
+ "lat0": 34.63968886962465,
+ "lat1": 34.7575,
+ "lon0": -76.7441,
+ "lon1": -76.64991908235021,
+ "rows": 1311,
+ "cols": 862,
+ "dLat": 8.993216059187306e-05,
+ "dLon": 0.00010938550249685249,
+ "cell": 10,
+ "scale": 0.1,
+ "kinds": {
+  "0": "sea",
+  "1": "land",
+  "2": "dock water",
+  "3": "pier",
+  "4": "port land"
+ },
+ "img": "webp",
+ "measured": true,
+ "measured_frac": 0.943,
+ "sources": [
+  {
+   "name": "NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)",
+   "url": "https://nauticalcharts.noaa.gov/data/bluetopo.html",
+   "license": "CC0-1.0（元の測量もすべて CC0-1.0 を確認）",
+   "crs": "NAD83 / UTM（タイルごと）→ WGS84 の緯度・経度に置き直し",
+   "vertical": "NAVD88[m]",
+   "resolution": [
+    "4m"
+   ],
+   "tiles": [
+    "BH4VZ5BK",
+    "BH4W25BK",
+    "BH4W45BK",
+    "BH4VZ5BL",
+    "BH4W25BL",
+    "BH4W45BL",
+    "BH4VZ5BM",
+    "BH4W25BM",
+    "BH4W45BM"
+   ],
+   "surveys": 229,
+   "survey_years": [
+    1913,
+    2026
+   ],
+   "institutions": [
+    "DOC/NOAA/NOS/NGS -- National Geodetic Survey",
+    "DOC/NOAA/NOS/NGS/RSD -- Remote Sensing Division",
+    "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+    "DOD/USACE -- US Army Corps of Engineers Wilmington District",
+    "DOD/USACE/JALBTCX -- Joint Airborne Lidar Bathymetry Technical Center of Expertise"
+   ],
+   "attribution": []
+  },
+  {
+   "name": "NOAA NCEI Coastal Relief Model 2023（BlueTopo の無い所・陸の高さ）",
+   "url": "https://www.ncei.noaa.gov/products/coastal-relief-model",
+   "license": "米国政府の作成したデータ（パブリック・ドメイン）",
+   "vertical": "NAVD88[m]（ハワイ・プエルトリコは各地の平均海面）",
+   "resolution": "1 秒角"
+  },
+  {
+   "name": "OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）",
+   "url": "https://www.openstreetmap.org/copyright",
+   "license": "ODbL 1.0（© OpenStreetMap contributors）"
+  }
+ ],
+ "channels": true,
+ "fairway_depth": 11.5
+}

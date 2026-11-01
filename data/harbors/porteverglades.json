@@ -1,0 +1,72 @@
+{
+ "key": "porteverglades",
+ "name": "ポート・エバーグレーズ",
+ "lat0": 26.048268409730397,
+ "lat1": 26.1257,
+ "lon0": -80.1659,
+ "lon1": -80.0620621107708,
+ "rows": 862,
+ "cols": 1038,
+ "dLat": 8.993216059187306e-05,
+ "dLon": 0.00010013296936277926,
+ "cell": 10,
+ "scale": 0.1,
+ "kinds": {
+  "0": "sea",
+  "1": "land",
+  "2": "dock water",
+  "3": "pier",
+  "4": "port land"
+ },
+ "img": "webp",
+ "measured": true,
+ "measured_frac": 0.98,
+ "sources": [
+  {
+   "name": "NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)",
+   "url": "https://nauticalcharts.noaa.gov/data/bluetopo.html",
+   "license": "CC0-1.0（一部の元の測量は CC BY 4.0：attribution に提供元）",
+   "crs": "NAD83 / UTM（タイルごと）→ WGS84 の緯度・経度に置き直し",
+   "vertical": "NAVD88[m]",
+   "resolution": [
+    "4m"
+   ],
+   "tiles": [
+    "BH4TC56C",
+    "BH4TD56C",
+    "BH4TD56D",
+    "BH4TC56D"
+   ],
+   "surveys": 150,
+   "survey_years": [
+    1928,
+    2026
+   ],
+   "institutions": [
+    "DOC/NOAA/NOS/NGS/RSD -- Remote Sensing Division",
+    "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+    "DOC/NOAA/OAR/AOML -- Atlantic Oceanographic and Meteorological Laboratory",
+    "DOD/USACE -- US Army Corps of Engineers Jacksonville District",
+    "DOD/USACE/JALBTCX -- Joint Airborne Lidar Bathymetry Technical Center of Expertise",
+    "Florida Inland Navigation District"
+   ],
+   "attribution": [
+    "Florida Inland Navigation District：W00566_MB_1m_MLLW_5of6（CC-BY-4.0）"
+   ]
+  },
+  {
+   "name": "NOAA NCEI Coastal Relief Model 2023（BlueTopo の無い所・陸の高さ）",
+   "url": "https://www.ncei.noaa.gov/products/coastal-relief-model",
+   "license": "米国政府の作成したデータ（パブリック・ドメイン）",
+   "vertical": "NAVD88[m]（ハワイ・プエルトリコは各地の平均海面）",
+   "resolution": "1 秒角"
+  },
+  {
+   "name": "OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）",
+   "url": "https://www.openstreetmap.org/copyright",
+   "license": "ODbL 1.0（© OpenStreetMap contributors）"
+  }
+ ],
+ "channels": true,
+ "fairway_depth": 13.2
+}

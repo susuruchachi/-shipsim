@@ -1,0 +1,89 @@
+{
+ "key": "losangeles",
+ "name": "ロサンゼルス・ロングビーチ",
+ "lat0": 33.65085418752738,
+ "lat1": 33.7956,
+ "lon0": -118.3243,
+ "lon1": -118.16129889295019,
+ "rows": 1074,
+ "cols": 1006,
+ "dLat": 0.00013489824088780959,
+ "dLon": 0.00016219015626846208,
+ "cell": 15,
+ "scale": 0.1,
+ "kinds": {
+  "0": "sea",
+  "1": "land",
+  "2": "dock water",
+  "3": "pier",
+  "4": "port land"
+ },
+ "img": "webp",
+ "measured": true,
+ "measured_frac": 0.99,
+ "sources": [
+  {
+   "name": "NOAA Office of Coast Survey, BlueTopo (National Bathymetric Source)",
+   "url": "https://nauticalcharts.noaa.gov/data/bluetopo.html",
+   "license": "CC0-1.0（一部の元の測量は CC BY 4.0：attribution に提供元）",
+   "crs": "NAD83 / UTM（タイルごと）→ WGS84 の緯度・経度に置き直し",
+   "vertical": "NAVD88[m]",
+   "resolution": [
+    "2m",
+    "4m"
+   ],
+   "tiles": [
+    "BH46H5B4",
+    "BH46J5B4",
+    "BH46H5B5",
+    "BJ59X7K8",
+    "BJ59Z7K8",
+    "BJ5B47K8",
+    "BJ5B27K6",
+    "BJ59Z7K7",
+    "BJ5B27K7",
+    "BJ5B57K7",
+    "BJ59X7K9",
+    "BJ5B27K9",
+    "BJ5B47K6",
+    "BJ5B57K6",
+    "BJ5B47K7",
+    "BJ5B27K8",
+    "BJ5B57K8",
+    "BJ59Z7K9",
+    "BJ5B47K9",
+    "BJ5B57K9"
+   ],
+   "surveys": 86,
+   "survey_years": [
+    1933,
+    2026
+   ],
+   "institutions": [
+    "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+    "DOD/USACE -- US Army Corps of Engineers Los Angeles District",
+    "DOD/USACE/JALBTCX -- Joint Airborne Lidar Bathymetry Technical Center of Expertise",
+    "Ocean Exploration Trust",
+    "Port of Long Beach"
+   ],
+   "attribution": [
+    "Ocean Exploration Trust：W00430_4m_MLLW_Xof5.upsampled（CC-BY-4.0）",
+    "Ocean Exploration Trust：W00430_MB_32m_MLLW_3of5（CC-BY-4.0）",
+    "Ocean Exploration Trust：W00430_MB_64m_MLLW_4of5（CC-BY-4.0）"
+   ]
+  },
+  {
+   "name": "NOAA NCEI ETOPO 2022（陸の高さだけ）",
+   "url": "https://www.ncei.noaa.gov/products/etopo-global-relief-model",
+   "license": "米国政府の作成したデータ（パブリック・ドメイン）",
+   "resolution": "1.5 分角"
+  },
+  {
+   "name": "OpenStreetMap（陸と水・桟橋・防波堤・港の敷地・建物）",
+   "url": "https://www.openstreetmap.org/copyright",
+   "license": "ODbL 1.0（© OpenStreetMap contributors）"
+  }
+ ],
+ "channels": true,
+ "fairway_depth": 22.6
+}
